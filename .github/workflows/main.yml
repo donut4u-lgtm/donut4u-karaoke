@@ -1,6 +1,8 @@
 name: Build donut4u karaoke APK
 
-'on': [push, workflow_dispatch]
+on:
+push:
+workflow_dispatch:
 
 jobs:
 build:
@@ -22,15 +24,14 @@ steps:
     with:
       gradle-version: '8.10.2'
 
-  - name: Diagnose AndroidManifest.xml
+  - name: Diagnose AndroidManifest XML
+    shell: bash
     run: |
-      echo "===== MANIFEST FILE CONTENT ====="
+      echo "===== MANIFEST CONTENT ====="
       cat -n app/src/main/AndroidManifest.xml
-
-      echo "===== CHECK XML SYNTAX ====="
+      echo "===== XML SYNTAX CHECK ====="
       python3 -c "import xml.etree.ElementTree as ET; ET.parse('app/src/main/AndroidManifest.xml'); print('XML syntax OK')"
-
-      echo "===== FIND ALL MANIFEST FILES ====="
+      echo "===== ALL MANIFEST FILES ====="
       find app -name AndroidManifest.xml -type f -print
 
   - name: Build APK
