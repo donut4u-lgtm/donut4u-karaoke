@@ -4,500 +4,537 @@ package com.donut4u.karaoke;
 import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.media.MediaPlayer;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.style.ForegroundColorSpan;
-import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
+import android.content.Context;
+import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.KeyEvent;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.SeekBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
 
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private LinearLayout root;
+    private EditText searchBox;
+    private WebView searchWebView;
+    private WebView playerWebView;
+    private LinearLayout lyricsContainer;
+    private ScrollView lyricsScroll;
 
-    private MediaPlayer player;
-    private TextView lyricView;
-    private TextView timeView;
-    private SeekBar seekBar;
-    private LinearLayout songCard;
-    private boolean isSeeking = false;
+    private final ArrayList<LyricLine> lyrics = new ArrayList<>();
+    private final ArrayList<TextView> lyricViews = new ArrayList<>();
 
-    private static final int GREEN = Color.rgb(24, 135, 76);
-    private static final int DARK = Color.rgb(24, 32, 28);
-    private static final int GREY = Color.rgb(105, 115, 109);
+    private int activeLyric = -1;
+    private String currentVideoId = "";
+    private boolean playerReady = false;
 
-    private static final String[] WORDS = {
-        "Sa", "bawat", "araw,", "may", "bagong", "simula.",
-        "Awit", "ng", "puso,", "sabay", "sa", "kanta.",
-        "Hawak", "ang", "pangarap,", "tuloy", "lang", "tayo.",
-        "Sa", "bawat", "himig,", "liwanag", "ang", "taglay.",
-        "Sabay", "nating", "awitin,", "hanggang", "dulo", "ng", "araw."
-    };
+    private final int GREEN = Color.rgb(20, 145, 75);
+    private final int DARK = Color.rgb(25, 25, 25);
+    private final int WHITE = Color.WHITE;
+    private final int YELLOW = Color.rgb(255, 220, 50);
 
-    private static final float[] WORD_START = {
-        0.0f, 0.45f, 0.95f, 1.8f, 2.2f, 2.85f,
-        4.2f, 4.75f, 5.0f, 6.0f, 6.6f, 6.85f,
-        8.2f, 8.8f, 9.05f, 10.3f, 10.8f, 11.2f,
-        12.6f, 13.0f, 13.5f, 14.5f, 15.2f, 15.5f,
-        16.9f, 17.5f, 18.1f, 19.2f, 19.9f, 20.4f, 20.6f
-    };
+    private static class LyricLine {
+        long time;
+        String text;
 
-    private static final float[] WORD_END = {
-        0.45f, 0.95f, 1.6f, 2.2f, 2.85f, 4.0f,
-        4.75f, 5.0f, 5.8f, 6.6f, 6.85f, 8.0f,
-        8.8f, 9.05f, 10.1f, 10.8f, 11.2f, 12.4f,
-        13.0f, 13.5f, 14.3f, 15.2f, 15.5f, 16.7f,
-        17.5f, 18.1f, 19.0f, 19.9f, 20.4f, 20.6f, 22.0f
-    };
-
-    private static final int[] WORD_LINE = {
-        0,0,0,0,0,0,
-        1,1,1,1,1,1,
-        2,2,2,2,2,2,
-        3,3,3,3,3,3,
-        4,4,4,4,4,4,4
-    };
-
-    private static final String[] LINES = {
-        "Sa bawat araw, may bagong simula.",
-        "Awit ng puso, sabay sa kanta.",
-        "Hawak ang pangarap, tuloy lang tayo.",
-        "Sa bawat himig, liwanag ang taglay.",
-        "Sabay nating awitin, hanggang dulo ng araw."
-    };
-
-    private final Runnable updateTask = new Runnable() {
-        @Override
-        public void run() {
-            if (player != null) {
-                try {
-                    int position = player.getCurrentPosition();
-
-                    if (!isSeeking) {
-                        seekBar.setProgress(position);
-                    }
-
-                    timeView.setText(
-                        formatTime(position) + " / " +
-                        formatTime(player.getDuration())
-                    );
-
-                    updateLyrics(position / 1000.0f);
-
-                } catch (IllegalStateException ignored) {
-                }
-            }
-
-            handler.postDelayed(this, 60);
+        LyricLine(long time, String text) {
+            this.time = time;
+            this.text = text;
         }
-    };
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        buildScreen();
-
-        handler.post(updateTask);
+        buildLayout();
+        setupSearchWebView();
+        setupPlayerWebView();
+        loadLyrics();
     }
 
-    private void buildScreen() {
-
-        LinearLayout root = new LinearLayout(this);
+    private void buildLayout() {
+        root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(18), dp(20), dp(18));
-        root.setBackgroundColor(Color.rgb(246, 249, 247));
+        root.setBackgroundColor(DARK);
+        root.setPadding(dp(10), dp(10), dp(10), dp(10));
 
-        TextView appTitle = new TextView(this);
-        appTitle.setText("donut4u karaoke");
-        appTitle.setTextSize(28);
-        appTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        appTitle.setTextColor(GREEN);
-        appTitle.setGravity(Gravity.CENTER);
+        TextView title = new TextView(this);
+        title.setText("DONUT4U KARAOKE");
+        title.setTextColor(WHITE);
+        title.setTextSize(25);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, dp(8), 0, dp(12));
+        root.addView(title);
 
-        root.addView(appTitle, matchWrap());
+        LinearLayout searchRow = new LinearLayout(this);
+        searchRow.setOrientation(LinearLayout.HORIZONTAL);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Sing along with moving lyrics");
-        subtitle.setTextSize(15);
-        subtitle.setTextColor(GREY);
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(4), 0, dp(18));
-
-        root.addView(subtitle, matchWrap());
-
-        EditText searchBox = new EditText(this);
+        searchBox = new EditText(this);
         searchBox.setSingleLine(true);
-        searchBox.setTextSize(16);
-        searchBox.setHint("Search song or artist");
-        searchBox.setPadding(dp(14), dp(10), dp(14), dp(10));
+        searchBox.setHint("Search song on YouTube");
+        searchBox.setTextColor(WHITE);
+        searchBox.setHintTextColor(Color.LTGRAY);
+        searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
 
-        root.addView(searchBox, matchWrap());
+        searchRow.addView(searchBox,
+                new LinearLayout.LayoutParams(0, dp(50), 1));
 
-        songCard = new LinearLayout(this);
-        songCard.setOrientation(LinearLayout.VERTICAL);
-        songCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        songCard.setBackgroundColor(Color.WHITE);
+        Button searchButton = new Button(this);
+        searchButton.setText("SEARCH");
+        searchButton.setTextColor(WHITE);
+        searchButton.setBackgroundColor(GREEN);
 
-        LinearLayout.LayoutParams cardParams = matchWrap();
-        cardParams.topMargin = dp(14);
+        searchRow.addView(searchButton,
+                new LinearLayout.LayoutParams(
+                        dp(105), dp(50)));
 
-        root.addView(songCard, cardParams);
+        root.addView(searchRow);
 
-        TextView songTitle = new TextView(this);
-        songTitle.setText("Sa Bawat Araw");
-        songTitle.setTextSize(20);
-        songTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        songTitle.setTextColor(DARK);
+        searchButton.setOnClickListener(v -> searchSongs());
 
-        songCard.addView(songTitle, matchWrap());
-
-        TextView songInfo = new TextView(this);
-        songInfo.setText("Original demo song • 32 seconds");
-        songInfo.setTextSize(13);
-        songInfo.setTextColor(GREY);
-        songInfo.setPadding(0, dp(4), 0, dp(10));
-
-        songCard.addView(songInfo, matchWrap());
-
-        Button playButton = new Button(this);
-        playButton.setText("PLAY DEMO SONG");
-        playButton.setTextColor(Color.WHITE);
-        playButton.setBackgroundTintList(
-            android.content.res.ColorStateList.valueOf(GREEN)
-        );
-
-        songCard.addView(playButton, matchWrap());
-
-        playButton.setOnClickListener(v -> togglePlayback());
-
-        searchBox.addTextChangedListener(new android.text.TextWatcher() {
-            @Override
-            public void beforeTextChanged(
-                CharSequence s, int start, int count, int after
-            ) {}
-
-            @Override
-            public void onTextChanged(
-                CharSequence s, int start, int before, int count
-            ) {
-                String query = s.toString().trim().toLowerCase(Locale.ROOT);
-
-                boolean found =
-                    query.isEmpty()
-                    || "sa bawat araw".contains(query)
-                    || "original demo song".contains(query)
-                    || "donut4u".contains(query);
-
-                songCard.setVisibility(
-                    found ? View.VISIBLE : View.GONE
-                );
+        searchBox.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH ||
+                    (event != null &&
+                            event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                searchSongs();
+                return true;
             }
-
-            @Override
-            public void afterTextChanged(android.text.Editable s) {}
+            return false;
         });
+
+        TextView searchLabel = new TextView(this);
+        searchLabel.setText("SONG SEARCH — tap a video to play");
+        searchLabel.setTextColor(YELLOW);
+        searchLabel.setTextSize(13);
+        searchLabel.setPadding(0, dp(8), 0, dp(4));
+        root.addView(searchLabel);
+
+        searchWebView = new WebView(this);
+        root.addView(searchWebView,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(190)));
+
+        TextView playerLabel = new TextView(this);
+        playerLabel.setText("KARAOKE PLAYER");
+        playerLabel.setTextColor(YELLOW);
+        playerLabel.setTextSize(15);
+        playerLabel.setTypeface(null, Typeface.BOLD);
+        playerLabel.setPadding(0, dp(10), 0, dp(4));
+        root.addView(playerLabel);
+
+        playerWebView = new WebView(this);
+        root.addView(playerWebView,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(220)));
 
         TextView lyricsLabel = new TextView(this);
-        lyricsLabel.setText("KARAOKE LYRICS");
-        lyricsLabel.setTextSize(13);
-        lyricsLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        lyricsLabel.setTextColor(GREEN);
-        lyricsLabel.setPadding(0, dp(24), 0, dp(8));
+        lyricsLabel.setText("SYNCHRONIZED LYRICS");
+        lyricsLabel.setTextColor(YELLOW);
+        lyricsLabel.setTextSize(16);
+        lyricsLabel.setTypeface(null, Typeface.BOLD);
+        lyricsLabel.setGravity(Gravity.CENTER);
+        lyricsLabel.setPadding(0, dp(10), 0, dp(6));
+        root.addView(lyricsLabel);
 
-        root.addView(lyricsLabel, matchWrap());
+        lyricsScroll = new ScrollView(this);
+        lyricsScroll.setFillViewport(true);
+        lyricsScroll.setBackgroundColor(Color.rgb(15, 15, 15));
 
-        lyricView = new TextView(this);
-        lyricView.setText("Press PLAY to start singing");
-        lyricView.setTextSize(25);
-        lyricView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        lyricView.setTextColor(DARK);
-        lyricView.setGravity(Gravity.CENTER);
-        lyricView.setMinHeight(dp(125));
-        lyricView.setPadding(dp(10), dp(12), dp(10), dp(12));
-        lyricView.setBackgroundColor(Color.WHITE);
+        lyricsContainer = new LinearLayout(this);
+        lyricsContainer.setOrientation(LinearLayout.VERTICAL);
+        lyricsContainer.setPadding(dp(8), dp(10), dp(8), dp(10));
 
-        root.addView(lyricView, matchWrap());
+        lyricsScroll.addView(lyricsContainer);
 
-        seekBar = new SeekBar(this);
-        seekBar.setMax(32000);
-
-        root.addView(seekBar, matchWrap());
-
-        seekBar.setOnSeekBarChangeListener(
-            new SeekBar.OnSeekBarChangeListener() {
-
-                @Override
-                public void onProgressChanged(
-                    SeekBar bar, int progress, boolean fromUser
-                ) {
-                    if (fromUser && player != null) {
-                        updateLyrics(progress / 1000.0f);
-
-                        timeView.setText(
-                            formatTime(progress) + " / " +
-                            formatTime(player.getDuration())
-                        );
-                    }
-                }
-
-                @Override
-                public void onStartTrackingTouch(SeekBar bar) {
-                    isSeeking = true;
-                }
-
-                @Override
-                public void onStopTrackingTouch(SeekBar bar) {
-                    if (player != null) {
-                        player.seekTo(bar.getProgress());
-                    }
-
-                    isSeeking = false;
-                }
-            }
-        );
-
-        LinearLayout controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(Gravity.CENTER);
-
-        root.addView(controls, matchWrap());
-
-        Button restartButton = new Button(this);
-        restartButton.setText("RESTART");
-
-        controls.addView(
-            restartButton,
-            new LinearLayout.LayoutParams(0, dp(52), 1)
-        );
-
-        restartButton.setOnClickListener(v -> {
-            if (player == null) {
-                startSong();
-            } else {
-                player.seekTo(0);
-                player.start();
-            }
-        });
-
-        Button pauseButton = new Button(this);
-        pauseButton.setText("PLAY / PAUSE");
-
-        controls.addView(
-            pauseButton,
-            new LinearLayout.LayoutParams(0, dp(52), 1)
-        );
-
-        pauseButton.setOnClickListener(v -> togglePlayback());
-
-        timeView = new TextView(this);
-        timeView.setText("00:00 / 00:32");
-        timeView.setTextSize(13);
-        timeView.setTextColor(GREY);
-        timeView.setGravity(Gravity.CENTER);
-        timeView.setPadding(0, dp(4), 0, dp(10));
-
-        root.addView(timeView, matchWrap());
-
-        TextView note = new TextView(this);
-        note.setText(
-            "Demo only: original synthesized melody. " +
-            "More songs need their own licensed music and timed lyrics."
-        );
-        note.setTextSize(12);
-        note.setTextColor(GREY);
-        note.setGravity(Gravity.CENTER);
-        note.setPadding(dp(4), dp(8), dp(4), 0);
-
-        root.addView(note, matchWrap());
+        root.addView(lyricsScroll,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0, 1));
 
         setContentView(root);
     }
 
-    private void startSong() {
-        try {
-            player = MediaPlayer.create(
-                this,
-                R.raw.donut4u_demo_song
-            );
+    private void setupSearchWebView() {
+        WebSettings settings = searchWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(true);
 
-            if (player == null) {
-                Toast.makeText(
-                    this,
-                    "Could not load demo song.",
-                    Toast.LENGTH_LONG
-                ).show();
-                return;
-            }
+        searchWebView.setWebChromeClient(new WebChromeClient());
 
-            player.setOnCompletionListener(mp -> {
-                updateLyrics(0);
-                lyricView.setText("Song finished! Press PLAY to sing again.");
-            });
+        searchWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, String url) {
 
-            seekBar.setMax(player.getDuration());
-            player.start();
+                String videoId = extractVideoId(url);
 
-        } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "Playback error: " + e.getMessage(),
-                Toast.LENGTH_LONG
-            ).show();
-        }
-    }
-
-    private void togglePlayback() {
-        try {
-            if (player == null) {
-                startSong();
-                return;
-            }
-
-            if (player.isPlaying()) {
-                player.pause();
-            } else {
-                if (player.getCurrentPosition() >= player.getDuration() - 100) {
-                    player.seekTo(0);
+                if (!videoId.isEmpty()) {
+                    playVideo(videoId);
+                    return true;
                 }
 
-                player.start();
+                if (url.contains("youtube.com/results") ||
+                        url.contains("m.youtube.com/results")) {
+                    view.loadUrl(url);
+                    return true;
+                }
+
+                return false;
+            }
+        });
+
+        searchWebView.loadUrl("https://m.youtube.com");
+    }
+
+    private void setupPlayerWebView() {
+        WebSettings settings = playerWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+
+        playerWebView.setWebChromeClient(new WebChromeClient());
+
+        playerWebView.addJavascriptInterface(
+                new PlayerBridge(), "AndroidPlayer");
+    }
+
+    private void searchSongs() {
+        String query = searchBox.getText().toString().trim();
+
+        if (query.isEmpty()) {
+            Toast.makeText(this,
+                    "Enter a song title first.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            InputMethodManager imm =
+                    (InputMethodManager)
+                            getSystemService(Context.INPUT_METHOD_SERVICE);
+
+            if (imm != null) {
+                imm.hideSoftInputFromWindow(
+                        searchBox.getWindowToken(), 0);
+            }
+        } catch (Exception ignored) {
+        }
+
+        String url = "https://m.youtube.com/results?search_query="
+                + android.net.Uri.encode(query);
+
+        searchWebView.loadUrl(url);
+    }
+
+    private String extractVideoId(String url) {
+        if (url == null) return "";
+
+        try {
+            android.net.Uri uri = android.net.Uri.parse(url);
+            String host = uri.getHost();
+
+            if (host == null) return "";
+
+            if (host.equalsIgnoreCase("youtu.be")) {
+                String path = uri.getLastPathSegment();
+                return validVideoId(path) ? path : "";
             }
 
-        } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "Playback error: " + e.getMessage(),
-                Toast.LENGTH_LONG
-            ).show();
+            if (host.contains("youtube.com")) {
+                String id = uri.getQueryParameter("v");
+
+                if (validVideoId(id)) return id;
+
+                String path = uri.getPath();
+
+                if (path != null &&
+                        path.startsWith("/shorts/")) {
+                    String[] parts = path.split("/");
+                    if (parts.length > 2 &&
+                            validVideoId(parts[2])) {
+                        return parts[2];
+                    }
+                }
+
+                if (path != null &&
+                        path.startsWith("/embed/")) {
+                    String[] parts = path.split("/");
+                    if (parts.length > 2 &&
+                            validVideoId(parts[2])) {
+                        return parts[2];
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        return "";
+    }
+
+    private boolean validVideoId(String id) {
+        return id != null && id.matches("[A-Za-z0-9_-]{11}");
+    }
+
+    private void playVideo(String videoId) {
+        if (!validVideoId(videoId)) {
+            Toast.makeText(this,
+                    "Unable to identify this video.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        currentVideoId = videoId;
+        playerReady = false;
+
+        String html =
+                "<!DOCTYPE html><html><head>" +
+                "<meta name='viewport' content='width=device-width," +
+                " initial-scale=1'>" +
+                "<style>html,body{margin:0;padding:0;background:#000;}" +
+                "#player{width:100%;height:100%;}</style>" +
+                "</head><body>" +
+                "<div id='player'></div>" +
+                "<script>" +
+                "var player;" +
+                "function onYouTubeIframeAPIReady(){" +
+                "player=new YT.Player('player',{" +
+                "videoId:'" + videoId + "'," +
+                "playerVars:{playsinline:1,rel:0}," +
+                "events:{" +
+                "onReady:function(e){" +
+                "AndroidPlayer.onReady();" +
+                "setInterval(function(){" +
+                "try{" +
+                "AndroidPlayer.onTime(e.target.getCurrentTime());" +
+                "}catch(err){}" +
+                "},250);" +
+                "}" +
+                "}" +
+                "});" +
+                "}" +
+                "</script>" +
+                "<script src='https://www.youtube.com/iframe_api'></script>" +
+                "</body></html>";
+
+        playerWebView.loadDataWithBaseURL(
+                "https://www.youtube.com",
+                html,
+                "text/html",
+                "UTF-8",
+                null);
+    }
+
+    private class PlayerBridge {
+
+        @JavascriptInterface
+        public void onReady() {
+            runOnUiThread(() -> playerReady = true);
+        }
+
+        @JavascriptInterface
+        public void onTime(double seconds) {
+            runOnUiThread(() -> updateLyrics(seconds));
         }
     }
 
-    private void updateLyrics(float seconds) {
+    private void loadLyrics() {
+        lyrics.clear();
 
-        int active = -1;
+        try {
+            InputStream input =
+                    getAssets().open("lyrics/default.lrc");
 
-        for (int i = 0; i < WORDS.length; i++) {
-            if (seconds >= WORD_START[i] && seconds < WORD_END[i]) {
-                active = i;
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(input, "UTF-8"));
+
+            Pattern pattern = Pattern.compile(
+                    "\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,3}))?\\](.*)");
+
+            String line;
+
+            while ((line = reader.readLine()) != null) {
+                Matcher matcher = pattern.matcher(line);
+
+                while (matcher.find()) {
+                    long minutes =
+                            Long.parseLong(matcher.group(1));
+
+                    long seconds =
+                            Long.parseLong(matcher.group(2));
+
+                    String fraction = matcher.group(3);
+                    long milliseconds = 0;
+
+                    if (fraction != null) {
+                        if (fraction.length() == 1) {
+                            milliseconds =
+                                    Long.parseLong(fraction) * 100;
+                        } else if (fraction.length() == 2) {
+                            milliseconds =
+                                    Long.parseLong(fraction) * 10;
+                        } else {
+                            milliseconds =
+                                    Long.parseLong(fraction);
+                        }
+                    }
+
+                    long time = minutes * 60000
+                            + seconds * 1000
+                            + milliseconds;
+
+                    String text = matcher.group(4).trim();
+
+                    if (!text.isEmpty()) {
+                        lyrics.add(new LyricLine(time, text));
+                    }
+                }
+            }
+
+            reader.close();
+
+            Collections.sort(lyrics,
+                    Comparator.comparingLong(item -> item.time));
+
+        } catch (Exception e) {
+            lyrics.clear();
+        }
+
+        displayLyrics();
+    }
+
+    private void displayLyrics() {
+        lyricsContainer.removeAllViews();
+        lyricViews.clear();
+        activeLyric = -1;
+
+        if (lyrics.isEmpty()) {
+            TextView message = new TextView(this);
+            message.setText(
+                    "No timed lyrics found.\n\n" +
+                    "Add your song's timed lyrics to:\n" +
+                    "assets/lyrics/default.lrc");
+            message.setTextColor(WHITE);
+            message.setTextSize(16);
+            message.setGravity(Gravity.CENTER);
+            message.setPadding(dp(12), dp(25), dp(12), dp(25));
+
+            lyricsContainer.addView(message);
+            return;
+        }
+
+        for (LyricLine lyric : lyrics) {
+            TextView text = new TextView(this);
+            text.setText(lyric.text);
+            text.setTextColor(Color.LTGRAY);
+            text.setTextSize(18);
+            text.setGravity(Gravity.CENTER);
+            text.setPadding(dp(5), dp(12), dp(5), dp(12));
+
+            lyricsContainer.addView(text,
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            lyricViews.add(text);
+        }
+    }
+
+    private void updateLyrics(double seconds) {
+        if (lyrics.isEmpty() || lyricViews.isEmpty()) return;
+
+        long currentTime = (long) (seconds * 1000);
+        int found = -1;
+
+        for (int i = 0; i < lyrics.size(); i++) {
+            if (currentTime >= lyrics.get(i).time) {
+                found = i;
+            } else {
                 break;
             }
         }
 
-        if (active < 0) {
-            if (seconds < WORD_START[0]) {
-                lyricView.setText("Press PLAY to start singing");
-            } else if (seconds >= WORD_END[WORDS.length - 1]) {
-                lyricView.setText("♪ Sing it again! ♪");
-            }
+        if (found == activeLyric) return;
 
-            return;
-        }
+        activeLyric = found;
 
-        int lineIndex = WORD_LINE[active];
-        String line = LINES[lineIndex];
+        for (int i = 0; i < lyricViews.size(); i++) {
+            TextView text = lyricViews.get(i);
 
-        SpannableString styled = new SpannableString(line);
-
-        int charStart = 0;
-        int activeStart = -1;
-        int activeEnd = -1;
-
-        for (int i = 0; i < WORDS.length; i++) {
-
-            if (WORD_LINE[i] != lineIndex) {
-                continue;
-            }
-
-            String word = WORDS[i];
-            int found = line.indexOf(word, charStart);
-
-            if (found < 0) {
-                found = line.indexOf(word);
-            }
-
-            if (found >= 0) {
-
-                if (i == active) {
-                    activeStart = found;
-                    activeEnd = found + word.length();
-                }
-
-                charStart = found + word.length();
+            if (i == activeLyric) {
+                text.setTextColor(YELLOW);
+                text.setTextSize(23);
+                text.setTypeface(null, Typeface.BOLD);
+            } else {
+                text.setTextColor(Color.LTGRAY);
+                text.setTextSize(18);
+                text.setTypeface(null, Typeface.NORMAL);
             }
         }
 
-        if (activeStart >= 0 && activeEnd <= styled.length()) {
+        if (activeLyric >= 0) {
+            final View activeView = lyricViews.get(activeLyric);
 
-            styled.setSpan(
-                new ForegroundColorSpan(GREEN),
-                activeStart,
-                activeEnd,
-                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
+            lyricsScroll.post(() -> {
+                int target = activeView.getTop()
+                        - lyricsScroll.getHeight() / 2
+                        + activeView.getHeight() / 2;
 
-            styled.setSpan(
-                new StyleSpan(Typeface.BOLD),
-                activeStart,
-                activeEnd,
-                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
+                lyricsScroll.smoothScrollTo(0, Math.max(0, target));
+            });
         }
-
-        lyricView.setText(styled);
-    }
-
-    private String formatTime(int millis) {
-        int seconds = Math.max(0, millis / 1000);
-
-        return String.format(
-            Locale.getDefault(),
-            "%02d:%02d",
-            seconds / 60,
-            seconds % 60
-        );
-    }
-
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
     }
 
     private int dp(int value) {
-        return (int) (
-            value * getResources().getDisplayMetrics().density + 0.5f
-        );
+        return (int) (value *
+                getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (searchWebView != null &&
+                searchWebView.canGoBack()) {
+            searchWebView.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 
     @Override
     protected void onDestroy() {
-        handler.removeCallbacks(updateTask);
+        if (searchWebView != null) {
+            searchWebView.destroy();
+        }
 
-        if (player != null) {
-            try {
-                if (player.isPlaying()) {
-                    player.stop();
-                }
-            } catch (Exception ignored) {
-            }
-
-            player.release();
-            player = null;
+        if (playerWebView != null) {
+            playerWebView.destroy();
         }
 
         super.onDestroy();
