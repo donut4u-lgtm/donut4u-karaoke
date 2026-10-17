@@ -1,44 +1,16 @@
 name: Build donut4u karaoke APK
-
-'on':
-push:
-branches:
-- main
-workflow_dispatch:
-
-permissions:
-contents: read
-
+'on': [push, workflow_dispatch]
 jobs:
 build:
 runs-on: ubuntu-latest
-
 steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
-
-  - name: Set up Java 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
-
-  - name: Set up Gradle
-    uses: gradle/actions/setup-gradle@v4
-    with:
-      gradle-version: '8.10.2'
-
-  - name: Check manifest
-    run: |
-      echo "Checking AndroidManifest.xml"
-      cat -n app/src/main/AndroidManifest.xml
-
-  - name: Build APK
-    run: gradle assembleDebug --stacktrace --console=plain
-
-  - name: Upload APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: donut4u-karaoke-debug-apk
-      path: app/build/outputs/apk/debug/app-debug.apk
-      if-no-files-found: error
+- uses: actions/checkout@v4
+- uses: actions/setup-java@v4
+with:
+distribution: temurin
+java-version: '17'
+- uses: gradle/actions/setup-gradle@v4
+with:
+gradle-version: '8.10.2'
+- name: Build APK
+run: gradle assembleDebug --stacktrace --console=plain
