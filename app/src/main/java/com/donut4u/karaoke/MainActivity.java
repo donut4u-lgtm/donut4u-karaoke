@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -120,15 +119,20 @@ public class MainActivity extends Activity {
         searchBox.setHintTextColor(Color.LTGRAY);
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
 
-        searchRow.addView(searchBox,
-                new LinearLayout.LayoutParams(0, dp(50), 1));
+        searchRow.addView(
+                searchBox,
+                new LinearLayout.LayoutParams(0, dp(50), 1)
+        );
 
         Button searchButton = new Button(this);
         searchButton.setText("SEARCH");
         searchButton.setTextColor(WHITE);
         searchButton.setBackgroundColor(GREEN);
-        searchRow.addView(searchButton,
-                new LinearLayout.LayoutParams(dp(105), dp(50)));
+
+        searchRow.addView(
+                searchButton,
+                new LinearLayout.LayoutParams(dp(105), dp(50))
+        );
 
         root.addView(searchRow);
 
@@ -152,9 +156,14 @@ public class MainActivity extends Activity {
         root.addView(searchLabel);
 
         searchWebView = new WebView(this);
-        root.addView(searchWebView,
+
+        root.addView(
+                searchWebView,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(190)));
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(190)
+                )
+        );
 
         TextView playerLabel = new TextView(this);
         playerLabel.setText("KARAOKE PLAYER");
@@ -165,9 +174,14 @@ public class MainActivity extends Activity {
         root.addView(playerLabel);
 
         playerWebView = new WebView(this);
-        root.addView(playerWebView,
+
+        root.addView(
+                playerWebView,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(220)
+                )
+        );
 
         LinearLayout controlsRow = new LinearLayout(this);
         controlsRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -177,31 +191,45 @@ public class MainActivity extends Activity {
         playPauseButton.setText("PLAY / PAUSE");
         playPauseButton.setTextSize(10);
         playPauseButton.setOnClickListener(
-                v -> runPlayerCommand("togglePlayback"));
-        controlsRow.addView(playPauseButton,
-                new LinearLayout.LayoutParams(0, dp(46), 1));
+                v -> runPlayerCommand("togglePlayback")
+        );
+
+        controlsRow.addView(
+                playPauseButton,
+                new LinearLayout.LayoutParams(0, dp(46), 1)
+        );
 
         Button restartButton = new Button(this);
         restartButton.setText("RESTART");
         restartButton.setTextSize(10);
         restartButton.setOnClickListener(
-                v -> runPlayerCommand("restartVideo"));
-        controlsRow.addView(restartButton,
-                new LinearLayout.LayoutParams(0, dp(46), 1));
+                v -> runPlayerCommand("restartVideo")
+        );
+
+        controlsRow.addView(
+                restartButton,
+                new LinearLayout.LayoutParams(0, dp(46), 1)
+        );
 
         Button queueButton = new Button(this);
         queueButton.setText("ADD QUEUE");
         queueButton.setTextSize(10);
         queueButton.setOnClickListener(v -> addCurrentVideoToQueue());
-        controlsRow.addView(queueButton,
-                new LinearLayout.LayoutParams(0, dp(46), 1));
+
+        controlsRow.addView(
+                queueButton,
+                new LinearLayout.LayoutParams(0, dp(46), 1)
+        );
 
         Button nextButton = new Button(this);
         nextButton.setText("NEXT");
         nextButton.setTextSize(10);
         nextButton.setOnClickListener(v -> playNextQueuedVideo());
-        controlsRow.addView(nextButton,
-                new LinearLayout.LayoutParams(0, dp(46), 1));
+
+        controlsRow.addView(
+                nextButton,
+                new LinearLayout.LayoutParams(0, dp(46), 1)
+        );
 
         root.addView(controlsRow);
 
@@ -231,9 +259,14 @@ public class MainActivity extends Activity {
 
         lyricsScroll.addView(lyricsContainer);
 
-        root.addView(lyricsScroll,
+        root.addView(
+                lyricsScroll,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1
+                )
+        );
 
         setContentView(root);
     }
@@ -278,27 +311,34 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
 
         playerWebView.setWebChromeClient(new WebChromeClient());
+
         playerWebView.addJavascriptInterface(
-                new PlayerBridge(), "AndroidPlayer");
+                new PlayerBridge(), "AndroidPlayer"
+        );
     }
 
     private void searchSongs() {
         String query = searchBox.getText().toString().trim();
 
         if (query.isEmpty()) {
-            Toast.makeText(this, "Enter a song title first.",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(
+                    this,
+                    "Enter a song title first.",
+                    Toast.LENGTH_SHORT
+            ).show();
             return;
         }
 
         try {
             InputMethodManager imm =
                     (InputMethodManager) getSystemService(
-                            Context.INPUT_METHOD_SERVICE);
+                            Context.INPUT_METHOD_SERVICE
+                    );
 
             if (imm != null) {
                 imm.hideSoftInputFromWindow(
-                        searchBox.getWindowToken(), 0);
+                        searchBox.getWindowToken(), 0
+                );
             }
         } catch (Exception ignored) {
         }
@@ -320,13 +360,17 @@ public class MainActivity extends Activity {
     }
 
     private String extractVideoId(String url) {
-        if (url == null) return "";
+        if (url == null) {
+            return "";
+        }
 
         try {
             android.net.Uri uri = android.net.Uri.parse(url);
             String host = uri.getHost();
 
-            if (host == null) return "";
+            if (host == null) {
+                return "";
+            }
 
             if (host.equalsIgnoreCase("youtu.be")) {
                 String path = uri.getLastPathSegment();
@@ -336,12 +380,15 @@ public class MainActivity extends Activity {
             if (host.contains("youtube.com")) {
                 String id = uri.getQueryParameter("v");
 
-                if (validVideoId(id)) return id;
+                if (validVideoId(id)) {
+                    return id;
+                }
 
                 String path = uri.getPath();
 
                 if (path != null && path.startsWith("/shorts/")) {
                     String[] parts = path.split("/");
+
                     if (parts.length > 2 && validVideoId(parts[2])) {
                         return parts[2];
                     }
@@ -349,6 +396,7 @@ public class MainActivity extends Activity {
 
                 if (path != null && path.startsWith("/embed/")) {
                     String[] parts = path.split("/");
+
                     if (parts.length > 2 && validVideoId(parts[2])) {
                         return parts[2];
                     }
@@ -366,8 +414,11 @@ public class MainActivity extends Activity {
 
     private void playVideo(String videoId) {
         if (!validVideoId(videoId)) {
-            Toast.makeText(this, "Unable to identify this video.",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(
+                    this,
+                    "Unable to identify this video.",
+                    Toast.LENGTH_SHORT
+            ).show();
             return;
         }
 
@@ -427,10 +478,15 @@ public class MainActivity extends Activity {
 
         playerWebView.loadDataWithBaseURL(
                 "https://www.youtube.com",
-                html, "text/html", "UTF-8", null);
+                html,
+                "text/html",
+                "UTF-8",
+                null
+        );
     }
 
     private class PlayerBridge {
+
         @JavascriptInterface
         public void onReady() {
             runOnUiThread(() -> playerReady = true);
@@ -443,24 +499,39 @@ public class MainActivity extends Activity {
     }
 
     private void runPlayerCommand(String command) {
-        if (!playerReady || playerWebView == null ||
+        if (!playerReady ||
+                playerWebView == null ||
                 currentVideoId.isEmpty()) {
-            Toast.makeText(this, "Choose a karaoke video first.",
-                    Toast.LENGTH_SHORT).show();
+
+            Toast.makeText(
+                    this,
+                    "Choose a karaoke video first.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
             return;
         }
 
         if ("togglePlayback".equals(command)) {
-            playerWebView.evaluateJavascript("togglePlayback();", null);
+            playerWebView.evaluateJavascript(
+                    "togglePlayback();", null
+            );
+
         } else if ("restartVideo".equals(command)) {
-            playerWebView.evaluateJavascript("restartVideo();", null);
+            playerWebView.evaluateJavascript(
+                    "restartVideo();", null
+            );
         }
     }
 
     private void addCurrentVideoToQueue() {
         if (!validVideoId(currentVideoId)) {
-            Toast.makeText(this, "Choose a karaoke video first.",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(
+                    this,
+                    "Choose a karaoke video first.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
             return;
         }
 
@@ -473,14 +544,21 @@ public class MainActivity extends Activity {
         playQueue.add(new QueuedVideo(currentVideoId, title));
         updateQueueStatus();
 
-        Toast.makeText(this, "Added to karaoke queue.",
-                Toast.LENGTH_SHORT).show();
+        Toast.makeText(
+                this,
+                "Added to karaoke queue.",
+                Toast.LENGTH_SHORT
+        ).show();
     }
 
     private void playNextQueuedVideo() {
         if (playQueue.isEmpty()) {
-            Toast.makeText(this, "The karaoke queue is empty.",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(
+                    this,
+                    "The karaoke queue is empty.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
             return;
         }
 
@@ -492,7 +570,9 @@ public class MainActivity extends Activity {
     }
 
     private void updateQueueStatus() {
-        if (queueStatus == null) return;
+        if (queueStatus == null) {
+            return;
+        }
 
         if (playQueue.isEmpty()) {
             queueStatus.setText("Queue is empty");
@@ -500,12 +580,17 @@ public class MainActivity extends Activity {
         }
 
         StringBuilder text =
-                new StringBuilder("UP NEXT (" + playQueue.size() + "): ");
+                new StringBuilder(
+                        "UP NEXT (" + playQueue.size() + "): "
+                );
 
         int count = Math.min(3, playQueue.size());
 
         for (int i = 0; i < count; i++) {
-            if (i > 0) text.append(" • ");
+            if (i > 0) {
+                text.append(" • ");
+            }
+
             text.append(playQueue.get(i).title);
         }
 
@@ -530,19 +615,26 @@ public class MainActivity extends Activity {
                 String encoded = URLEncoder.encode(query, "UTF-8");
 
                 URL url = new URL(
-                        "https://lrclib.net/api/search?q=" + encoded);
+                        "https://lrclib.net/api/search?q=" + encoded
+                );
 
-                connection = (HttpURLConnection) url.openConnection();
+                connection =
+                        (HttpURLConnection) url.openConnection();
+
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(10000);
+
                 connection.setRequestProperty(
-                        "User-Agent", "Donut4U-Karaoke/1.0");
+                        "User-Agent",
+                        "Donut4U-Karaoke/1.0"
+                );
 
                 int responseCode = connection.getResponseCode();
 
                 if (responseCode == HttpURLConnection.HTTP_OK) {
                     InputStream input = connection.getInputStream();
+
                     ByteArrayOutputStream output =
                             new ByteArrayOutputStream();
 
@@ -556,12 +648,15 @@ public class MainActivity extends Activity {
                     input.close();
 
                     String response = new String(
-                            output.toByteArray(), StandardCharsets.UTF_8);
+                            output.toByteArray(),
+                            StandardCharsets.UTF_8
+                    );
 
                     JSONArray results = new JSONArray(response);
 
                     for (int i = 0; i < results.length(); i++) {
                         JSONObject item = results.getJSONObject(i);
+
                         String synced =
                                 item.optString("syncedLyrics", "");
 
@@ -574,7 +669,9 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
+
             } catch (Exception ignored) {
+
             } finally {
                 if (connection != null) {
                     connection.disconnect();
@@ -584,7 +681,9 @@ public class MainActivity extends Activity {
             final ArrayList<LyricLine> result = foundLyrics;
 
             runOnUiThread(() -> {
-                if (requestId != lyricRequestId) return;
+                if (requestId != lyricRequestId) {
+                    return;
+                }
 
                 lyrics.clear();
                 lyrics.addAll(result);
@@ -593,15 +692,20 @@ public class MainActivity extends Activity {
                     displayMessage(
                             "No synchronized lyrics found.\n\n" +
                             "Try searching with the song title and artist.\n\n" +
-                            "Timed lyrics are not available for every song.");
+                            "Timed lyrics are not available for every song."
+                    );
+
                 } else {
                     displayLyrics();
 
-                    Toast.makeText(MainActivity.this,
+                    Toast.makeText(
+                            MainActivity.this,
                             "Synchronized lyrics loaded.",
-                            Toast.LENGTH_SHORT).show();
+                            Toast.LENGTH_SHORT
+                    ).show();
                 }
             });
+
         }).start();
     }
 
@@ -609,14 +713,17 @@ public class MainActivity extends Activity {
         ArrayList<LyricLine> parsed = new ArrayList<>();
 
         Pattern pattern = Pattern.compile(
-                "\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\](.*)");
+                "\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\](.*)"
+        );
 
         String[] lines = lrcText.split("\\r?\\n");
 
         for (String line : lines) {
             Matcher matcher = pattern.matcher(line);
 
-            if (!matcher.matches()) continue;
+            if (!matcher.matches()) {
+                continue;
+            }
 
             try {
                 long minutes = Long.parseLong(matcher.group(1));
@@ -627,15 +734,21 @@ public class MainActivity extends Activity {
 
                 if (fraction != null) {
                     if (fraction.length() == 1) {
-                        milliseconds = Long.parseLong(fraction) * 100;
+                        milliseconds =
+                                Long.parseLong(fraction) * 100;
+
                     } else if (fraction.length() == 2) {
-                        milliseconds = Long.parseLong(fraction) * 10;
+                        milliseconds =
+                                Long.parseLong(fraction) * 10;
+
                     } else {
-                        milliseconds = Long.parseLong(fraction);
+                        milliseconds =
+                                Long.parseLong(fraction);
                     }
                 }
 
-                long time = minutes * 60000 + seconds * 1000
+                long time = minutes * 60000
+                        + seconds * 1000
                         + milliseconds;
 
                 String text = matcher.group(4).trim();
@@ -643,12 +756,15 @@ public class MainActivity extends Activity {
                 if (!text.isEmpty()) {
                     parsed.add(new LyricLine(time, text));
                 }
+
             } catch (Exception ignored) {
             }
         }
 
-        Collections.sort(parsed,
-                Comparator.comparingLong(item -> item.time));
+        Collections.sort(
+                parsed,
+                Comparator.comparingLong(item -> item.time)
+        );
 
         return parsed;
     }
@@ -657,10 +773,15 @@ public class MainActivity extends Activity {
         lyrics.clear();
 
         try {
-            InputStream input = getAssets().open("lyrics/default.lrc");
+            InputStream input =
+                    getAssets().open("lyrics/default.lrc");
 
             BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(input, StandardCharsets.UTF_8));
+                    new InputStreamReader(
+                            input,
+                            StandardCharsets.UTF_8
+                    )
+            );
 
             StringBuilder content = new StringBuilder();
             String line;
@@ -670,7 +791,11 @@ public class MainActivity extends Activity {
             }
 
             reader.close();
-            lyrics.addAll(parseLrcText(content.toString()));
+
+            lyrics.addAll(
+                    parseLrcText(content.toString())
+            );
+
         } catch (Exception ignored) {
             lyrics.clear();
         }
@@ -688,12 +813,17 @@ public class MainActivity extends Activity {
         text.setTextColor(WHITE);
         text.setTextSize(16);
         text.setGravity(Gravity.CENTER);
-        text.setPadding(dp(12), dp(25), dp(12), dp(25));
+        text.setPadding(
+                dp(12), dp(25), dp(12), dp(25)
+        );
 
-        lyricsContainer.addView(text,
+        lyricsContainer.addView(
+                text,
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+        );
     }
 
     private void displayLyrics() {
@@ -704,7 +834,9 @@ public class MainActivity extends Activity {
         if (lyrics.isEmpty()) {
             displayMessage(
                     "No timed lyrics loaded.\n\n" +
-                    "Choose a YouTube karaoke video to search for lyrics.");
+                    "Choose a YouTube karaoke video to search for lyrics."
+            );
+
             return;
         }
 
@@ -714,19 +846,26 @@ public class MainActivity extends Activity {
             text.setTextColor(Color.LTGRAY);
             text.setTextSize(18);
             text.setGravity(Gravity.CENTER);
-            text.setPadding(dp(5), dp(12), dp(5), dp(12));
+            text.setPadding(
+                    dp(5), dp(12), dp(5), dp(12)
+            );
 
-            lyricsContainer.addView(text,
+            lyricsContainer.addView(
+                    text,
                     new LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT));
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+            );
 
             lyricViews.add(text);
         }
     }
 
     private void updateLyrics(double seconds) {
-        if (lyrics.isEmpty() || lyricViews.isEmpty()) return;
+        if (lyrics.isEmpty() || lyricViews.isEmpty()) {
+            return;
+        }
 
         long currentTime = (long) (seconds * 1000);
         int found = -1;
@@ -739,7 +878,9 @@ public class MainActivity extends Activity {
             }
         }
 
-        if (found == activeLyric) return;
+        if (found == activeLyric) {
+            return;
+        }
 
         activeLyric = found;
 
@@ -750,6 +891,7 @@ public class MainActivity extends Activity {
                 text.setTextColor(YELLOW);
                 text.setTextSize(23);
                 text.setTypeface(null, Typeface.BOLD);
+
             } else {
                 text.setTextColor(Color.LTGRAY);
                 text.setTextSize(18);
@@ -758,27 +900,36 @@ public class MainActivity extends Activity {
         }
 
         if (activeLyric >= 0) {
-            final View activeView = lyricViews.get(activeLyric);
+            final View activeView =
+                    lyricViews.get(activeLyric);
 
             lyricsScroll.post(() -> {
                 int target = activeView.getTop()
                         - lyricsScroll.getHeight() / 2
                         + activeView.getHeight() / 2;
 
-                lyricsScroll.smoothScrollTo(0, Math.max(0, target));
+                lyricsScroll.smoothScrollTo(
+                        0,
+                        Math.max(0, target)
+                );
             });
         }
     }
 
     private int dp(int value) {
-        return (int) (value *
-                getResources().getDisplayMetrics().density + 0.5f);
+        return (int) (
+                value * getResources()
+                        .getDisplayMetrics().density + 0.5f
+        );
     }
 
     @Override
     public void onBackPressed() {
-        if (searchWebView != null && searchWebView.canGoBack()) {
+        if (searchWebView != null &&
+                searchWebView.canGoBack()) {
+
             searchWebView.goBack();
+
         } else {
             super.onBackPressed();
         }
