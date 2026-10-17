@@ -3,39 +3,35 @@ name: Build donut4u karaoke APK
 'on': [push, workflow_dispatch]
 
 jobs:
-build:
-runs-on: ubuntu-latest
-steps:
-- uses: actions/checkout@v4
+  build:
+    runs-on: ubuntu-latest
 
-```
-  - uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  - uses: gradle/actions/setup-gradle@v4
-    with:
-      gradle-version: '8.10.2'
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - name: Check Manifest XML
-    run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('app/src/main/AndroidManifest.xml'); print('XML syntax OK')"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
 
-  - name: Show Manifest
-    run: cat -n app/src/main/AndroidManifest.xml
+      - name: Build APK
+        run: gradle assembleDebug --stacktrace --console=plain
 
-  - name: Build APK
-    run: gradle assembleDebug --stacktrace --info --console=plain
+      - name: List APK files
+        if: always()
+        run: find app/build/outputs -type f -print || true
 
-  - name: List APK files
-    if: always()
-    run: find app/build/outputs -type f -print || true
-
-  - name: Upload APK
-    if: success()
-    uses: actions/upload-artifact@v4
-    with:
-      name: donut4u-karaoke-debug-apk
-      path: app/build/outputs/apk/debug/*.apk
-      if-no-files-found: error
-```
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: donut4u-karaoke-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
