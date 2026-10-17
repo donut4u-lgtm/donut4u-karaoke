@@ -25,7 +25,12 @@ jobs:
       - name: Build APK
         run: gradle assembleDebug --stacktrace --console=plain
 
+      - name: List APK files
+        if: always()
+        run: find app/build/outputs -type f -print || true
+
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: donut4u-karaoke-debug-apk
