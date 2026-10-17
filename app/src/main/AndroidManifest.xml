@@ -1,3 +1,4 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -5,10 +6,15 @@
 
     <application
         android:label="Donut4U Karaoke"
-        android:allowBackup="true">
+        android:allowBackup="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
-            android:name="com.donut4u.karaoke.MainActivity"
+            android:name=".OnlineSongActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".MainActivity"
             android:exported="true">
 
             <intent-filter>
