@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -5,12 +6,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.media.AudioAttributes;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -22,6 +22,13 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.exoplayer.ExoPlayer;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -55,7 +62,7 @@ public class MainActivity extends Activity {
     private LinearLayout lyricsContainer;
     private ScrollView lyricsScroll;
 
-    private MediaPlayer mediaPlayer;
+    private ExoPlayer player;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private final ArrayList<LyricLine> lyrics = new ArrayList<>();
@@ -90,25 +97,30 @@ public class MainActivity extends Activity {
     private final Runnable progressRunnable = new Runnable() {
         @Override
         public void run() {
-            if (mediaPlayer != null) {
-                try {
-                    int position = mediaPlayer.getCurrentPosition();
-                    int duration = mediaPlayer.getDuration();
+            if (player != null) {
+                long position = player.getCurrentPosition();
+                long duration = player.getDuration();
 
-                    if (!userSeeking && duration > 0) {
-                        seekBar.setMax(duration);
-                        seekBar.setProgress(position);
-                    }
-
-                    timeLabel.setText(
-                            formatTime(position) + " / " +
-                            formatTime(duration)
-                    );
-
-                    updateLyrics(position);
-
-                } catch (IllegalStateException ignored) {
+                if (duration == C.TIME_UNSET || duration < 0) {
+                    duration = 0;
                 }
+
+                if (!userSeeking) {
+                    seekBar.setMax((int) Math.min(
+                            duration, Integer.MAX_VALUE
+                    ));
+
+                    seekBar.setProgress((int) Math.min(
+                            position, Integer.MAX_VALUE
+                    ));
+                }
+
+                timeLabel.setText(
+                        formatTime(position) + " / " +
+                        formatTime(duration)
+                );
+
+                updateLyrics(position);
             }
 
             handler.postDelayed(this, 250);
@@ -120,10 +132,39 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         buildLayout();
+
+        player = new ExoPlayer.Builder(this).build();
+
+        AudioAttributes attributes = new AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build();
+
+        player.setAudioAttributes(attributes, true);
+
+        player.addListener(new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int state) {
+                if (state == Player.STATE_READY) {
+                    nowPlaying.setText("NOW PLAYING: " + currentTitle);
+                } else if (state == Player.STATE_BUFFERING) {
+                    nowPlaying.setText("Loading: " + currentTitle);
+                } else if (state == Player.STATE_ENDED) {
+                    playNext();
+                }
+            }
+
+            @Override
+            public void onPlayerError(PlaybackException error) {
+                nowPlaying.setText("Audio playback failed.");
+                toast("Check the audio URL, connection and file format.");
+            }
+        });
+
         handler.post(progressRunnable);
 
         showLyricsMessage(
-                "Search for lyrics, then load an authorized audio URL."
+                "Search for synchronized lyrics, then load an authorized audio URL."
         );
     }
 
@@ -140,7 +181,6 @@ public class MainActivity extends Activity {
         heading.setTypeface(null, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
         heading.setPadding(0, dp(8), 0, dp(10));
-
         root.addView(heading);
 
         songBox = new EditText(this);
@@ -148,7 +188,6 @@ public class MainActivity extends Activity {
         songBox.setHint("Song title and artist");
         songBox.setTextColor(WHITE);
         songBox.setHintTextColor(Color.LTGRAY);
-
         root.addView(songBox, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
@@ -182,7 +221,6 @@ public class MainActivity extends Activity {
         urlLabel.setTextColor(YELLOW);
         urlLabel.setTypeface(null, Typeface.BOLD);
         urlLabel.setPadding(0, dp(8), 0, dp(3));
-
         root.addView(urlLabel);
 
         audioUrlBox = new EditText(this);
@@ -191,8 +229,8 @@ public class MainActivity extends Activity {
         audioUrlBox.setTextColor(WHITE);
         audioUrlBox.setHintTextColor(Color.LTGRAY);
         audioUrlBox.setInputType(
-                android.text.InputType.TYPE_CLASS_TEXT |
-                android.text.InputType.TYPE_TEXT_VARIATION_URI
+                InputType.TYPE_CLASS_TEXT |
+                InputType.TYPE_TEXT_VARIATION_URI
         );
 
         root.addView(audioUrlBox, new LinearLayout.LayoutParams(
@@ -208,7 +246,6 @@ public class MainActivity extends Activity {
         nowPlaying.setText("Nothing playing");
         nowPlaying.setTextColor(WHITE);
         nowPlaying.setPadding(0, dp(5), 0, dp(2));
-
         root.addView(nowPlaying);
 
         seekBar = new SeekBar(this);
@@ -228,13 +265,9 @@ public class MainActivity extends Activity {
 
                     @Override
                     public void onStopTrackingTouch(SeekBar bar) {
-                        if (mediaPlayer != null) {
-                            try {
-                                mediaPlayer.seekTo(bar.getProgress());
-                            } catch (IllegalStateException ignored) {
-                            }
+                        if (player != null) {
+                            player.seekTo(bar.getProgress());
                         }
-
                         userSeeking = false;
                     }
                 }
@@ -244,7 +277,6 @@ public class MainActivity extends Activity {
         timeLabel.setText("00:00 / 00:00");
         timeLabel.setTextColor(Color.LTGRAY);
         timeLabel.setGravity(Gravity.CENTER);
-
         root.addView(timeLabel);
 
         LinearLayout controls = new LinearLayout(this);
@@ -275,7 +307,6 @@ public class MainActivity extends Activity {
         queueStatus.setText("Queue is empty");
         queueStatus.setTextColor(Color.LTGRAY);
         queueStatus.setTextSize(12);
-
         root.addView(queueStatus);
 
         TextView lyricHeading = new TextView(this);
@@ -285,7 +316,6 @@ public class MainActivity extends Activity {
         lyricHeading.setTypeface(null, Typeface.BOLD);
         lyricHeading.setGravity(Gravity.CENTER);
         lyricHeading.setPadding(0, dp(7), 0, dp(5));
-
         root.addView(lyricHeading);
 
         lyricsScroll = new ScrollView(this);
@@ -345,11 +375,23 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean isValidAudioUrl(String value) {
+        try {
+            Uri uri = Uri.parse(value);
+            String scheme = uri.getScheme();
+
+            return uri.getHost() != null &&
+                    ("https".equalsIgnoreCase(scheme) ||
+                     "http".equalsIgnoreCase(scheme));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void loadAudioFromBox() {
         String url = audioUrlBox.getText().toString().trim();
 
-        if (!url.startsWith("https://") &&
-                !url.startsWith("http://")) {
+        if (!isValidAudioUrl(url)) {
             toast("Enter a valid authorized audio URL.");
             return;
         }
@@ -364,99 +406,64 @@ public class MainActivity extends Activity {
     }
 
     private void playAudio(QueueItem item) {
-        releasePlayer();
+        if (player == null) {
+            toast("Audio player is not ready.");
+            return;
+        }
+
+        if (!isValidAudioUrl(item.url)) {
+            toast("Invalid audio URL.");
+            return;
+        }
 
         currentTitle = item.title;
         nowPlaying.setText("Loading: " + currentTitle);
 
-        mediaPlayer = new MediaPlayer();
+        lyrics.clear();
+        lyricViews.clear();
+        activeLyric = -1;
+        showLyricsMessage("Loading synchronized lyrics...");
 
-        try {
-            mediaPlayer.setAudioAttributes(
-                    new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(
-                                    AudioAttributes.CONTENT_TYPE_MUSIC
-                            )
-                            .build()
-            );
+        MediaItem mediaItem = MediaItem.fromUri(item.url);
 
-            mediaPlayer.setOnPreparedListener(mp -> {
-                try {
-                    mp.start();
+        player.setMediaItem(mediaItem);
+        player.prepare();
+        player.play();
 
-                    nowPlaying.setText(
-                            "NOW PLAYING: " + currentTitle
-                    );
+        String query = songBox.getText().toString().trim();
 
-                    seekBar.setMax(Math.max(1, mp.getDuration()));
-
-                    String query = songBox.getText().toString().trim();
-
-                    if (!query.isEmpty()) {
-                        searchTimedLyrics(query);
-                    }
-
-                } catch (IllegalStateException e) {
-                    toast("Audio could not start.");
-                }
-            });
-
-            mediaPlayer.setOnCompletionListener(mp -> playNext());
-
-            mediaPlayer.setOnErrorListener((mp, what, extra) -> {
-                nowPlaying.setText("Audio playback failed.");
-                toast("Check the audio URL and file format.");
-                releasePlayer();
-                return true;
-            });
-
-            mediaPlayer.setDataSource(item.url);
-            mediaPlayer.prepareAsync();
-
-        } catch (Exception e) {
-            releasePlayer();
-            nowPlaying.setText("Audio load failed");
-            toast("Could not load the audio URL.");
+        if (!query.isEmpty()) {
+            searchTimedLyrics(query);
         }
     }
 
     private void togglePlayback() {
-        if (mediaPlayer == null) {
+        if (player == null || player.getMediaItemCount() == 0) {
             toast("Load an audio URL first.");
             return;
         }
 
-        try {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.pause();
-            } else {
-                mediaPlayer.start();
-            }
-        } catch (IllegalStateException e) {
-            toast("Audio is not ready yet.");
+        if (player.isPlaying()) {
+            player.pause();
+        } else {
+            player.play();
         }
     }
 
     private void restartPlayback() {
-        if (mediaPlayer == null) {
+        if (player == null || player.getMediaItemCount() == 0) {
             toast("Load audio first.");
             return;
         }
 
-        try {
-            mediaPlayer.seekTo(0);
-            mediaPlayer.start();
-        } catch (IllegalStateException e) {
-            toast("Audio is not ready yet.");
-        }
+        player.seekTo(0);
+        player.play();
     }
 
     private void addToQueue() {
         String url = audioUrlBox.getText().toString().trim();
 
-        if (!url.startsWith("https://") &&
-                !url.startsWith("http://")) {
+        if (!isValidAudioUrl(url)) {
             toast("Enter an authorized audio URL first.");
             return;
         }
@@ -507,7 +514,6 @@ public class MainActivity extends Activity {
             if (i > 0) {
                 text.append(" • ");
             }
-
             text.append(queue.get(i).title);
         }
 
@@ -579,7 +585,6 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
-
             } catch (Exception ignored) {
             } finally {
                 if (connection != null) {
@@ -600,13 +605,12 @@ public class MainActivity extends Activity {
                 if (lyrics.isEmpty()) {
                     showLyricsMessage(
                             "No synchronized lyrics found. " +
-                            "Try song title and artist."
+                            "Try the song title and artist."
                     );
                 } else {
                     displayLyrics();
                 }
             });
-
         }).start();
     }
 
@@ -614,20 +618,20 @@ public class MainActivity extends Activity {
         ArrayList<LyricLine> parsed = new ArrayList<>();
 
         Pattern pattern = Pattern.compile(
-                "\\\\[(\\\\d{1,2}):(\\\\d{2})(?:[.:](\\\\d{1,3}))?\\\\](.*)"
+                "\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\](.*)"
         );
 
-        for (String line : text.split("\\\\r?\\\\n")) {
-            Matcher m = pattern.matcher(line);
+        for (String line : text.split("\\r?\\n")) {
+            Matcher matcher = pattern.matcher(line);
 
-            if (!m.matches()) {
+            if (!matcher.matches()) {
                 continue;
             }
 
             try {
-                long minutes = Long.parseLong(m.group(1));
-                long seconds = Long.parseLong(m.group(2));
-                String fraction = m.group(3);
+                long minutes = Long.parseLong(matcher.group(1));
+                long seconds = Long.parseLong(matcher.group(2));
+                String fraction = matcher.group(3);
                 long milliseconds = 0;
 
                 if (fraction != null) {
@@ -642,7 +646,7 @@ public class MainActivity extends Activity {
                     }
                 }
 
-                String lyric = m.group(4).trim();
+                String lyric = matcher.group(4).trim();
 
                 if (!lyric.isEmpty()) {
                     parsed.add(new LyricLine(
@@ -652,7 +656,6 @@ public class MainActivity extends Activity {
                             lyric
                     ));
                 }
-
             } catch (Exception ignored) {
             }
         }
@@ -774,13 +777,13 @@ public class MainActivity extends Activity {
 
     private void hideKeyboard() {
         try {
-            InputMethodManager imm =
+            InputMethodManager manager =
                     (InputMethodManager) getSystemService(
                             Context.INPUT_METHOD_SERVICE
                     );
 
-            if (imm != null && songBox != null) {
-                imm.hideSoftInputFromWindow(
+            if (manager != null && songBox != null) {
+                manager.hideSoftInputFromWindow(
                         songBox.getWindowToken(), 0
                 );
             }
@@ -789,7 +792,7 @@ public class MainActivity extends Activity {
     }
 
     private String formatTime(long millis) {
-        if (millis < 0) {
+        if (millis < 0 || millis == C.TIME_UNSET) {
             millis = 0;
         }
 
@@ -818,27 +821,16 @@ public class MainActivity extends Activity {
         ).show();
     }
 
-    private void releasePlayer() {
-        if (mediaPlayer != null) {
-            try {
-                mediaPlayer.setOnPreparedListener(null);
-                mediaPlayer.setOnCompletionListener(null);
-                mediaPlayer.setOnErrorListener(null);
-                mediaPlayer.stop();
-                mediaPlayer.reset();
-                mediaPlayer.release();
-            } catch (Exception ignored) {
-            }
-
-            mediaPlayer = null;
-        }
-    }
-
     @Override
     protected void onDestroy() {
         lyricRequestId++;
         handler.removeCallbacks(progressRunnable);
-        releasePlayer();
+
+        if (player != null) {
+            player.release();
+            player = null;
+        }
+
         super.onDestroy();
     }
 }
