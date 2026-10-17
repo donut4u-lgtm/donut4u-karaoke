@@ -10,7 +10,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
-import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
@@ -28,12 +27,19 @@ import android.widget.Toast;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.ByteArrayOutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends Activity {
 
@@ -48,6 +54,7 @@ public class MainActivity extends Activity {
     private final ArrayList<TextView> lyricViews = new ArrayList<>();
 
     private int activeLyric = -1;
+    private int lyricRequestId = 0;
     private String currentVideoId = "";
     private boolean playerReady = false;
 
@@ -110,8 +117,7 @@ public class MainActivity extends Activity {
         searchButton.setBackgroundColor(GREEN);
 
         searchRow.addView(searchButton,
-                new LinearLayout.LayoutParams(
-                        dp(105), dp(50)));
+                new LinearLayout.LayoutParams(dp(105), dp(50)));
 
         root.addView(searchRow);
 
@@ -137,8 +143,7 @@ public class MainActivity extends Activity {
         searchWebView = new WebView(this);
         root.addView(searchWebView,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(190)));
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(190)));
 
         TextView playerLabel = new TextView(this);
         playerLabel.setText("KARAOKE PLAYER");
@@ -151,8 +156,7 @@ public class MainActivity extends Activity {
         playerWebView = new WebView(this);
         root.addView(playerWebView,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(220)));
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
 
         TextView lyricsLabel = new TextView(this);
         lyricsLabel.setText("SYNCHRONIZED LYRICS");
@@ -175,8 +179,7 @@ public class MainActivity extends Activity {
 
         root.addView(lyricsScroll,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        0, 1));
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         setContentView(root);
     }
@@ -221,7 +224,6 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
 
         playerWebView.setWebChromeClient(new WebChromeClient());
-
         playerWebView.addJavascriptInterface(
                 new PlayerBridge(), "AndroidPlayer");
     }
@@ -230,8 +232,7 @@ public class MainActivity extends Activity {
         String query = searchBox.getText().toString().trim();
 
         if (query.isEmpty()) {
-            Toast.makeText(this,
-                    "Enter a song title first.",
+            Toast.makeText(this, "Enter a song title first.",
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -275,20 +276,16 @@ public class MainActivity extends Activity {
 
                 String path = uri.getPath();
 
-                if (path != null &&
-                        path.startsWith("/shorts/")) {
+                if (path != null && path.startsWith("/shorts/")) {
                     String[] parts = path.split("/");
-                    if (parts.length > 2 &&
-                            validVideoId(parts[2])) {
+                    if (parts.length > 2 && validVideoId(parts[2])) {
                         return parts[2];
                     }
                 }
 
-                if (path != null &&
-                        path.startsWith("/embed/")) {
+                if (path != null && path.startsWith("/embed/")) {
                     String[] parts = path.split("/");
-                    if (parts.length > 2 &&
-                            validVideoId(parts[2])) {
+                    if (parts.length > 2 && validVideoId(parts[2])) {
                         return parts[2];
                     }
                 }
@@ -305,14 +302,18 @@ public class MainActivity extends Activity {
 
     private void playVideo(String videoId) {
         if (!validVideoId(videoId)) {
-            Toast.makeText(this,
-                    "Unable to identify this video.",
+            Toast.makeText(this, "Unable to identify this video.",
                     Toast.LENGTH_SHORT).show();
             return;
         }
 
         currentVideoId = videoId;
         playerReady = false;
+
+        String query = searchBox.getText().toString().trim();
+        if (!query.isEmpty()) {
+            searchTimedLyrics(query);
+        }
 
         String html =
                 "<!DOCTYPE html><html><head>" +
@@ -346,14 +347,10 @@ public class MainActivity extends Activity {
 
         playerWebView.loadDataWithBaseURL(
                 "https://www.youtube.com",
-                html,
-                "text/html",
-                "UTF-8",
-                null);
+                html, "text/html", "UTF-8", null);
     }
 
     private class PlayerBridge {
-
         @JavascriptInterface
         public void onReady() {
             runOnUiThread(() -> playerReady = true);
@@ -365,6 +362,143 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void searchTimedLyrics(String query) {
+        final int requestId = ++lyricRequestId;
+
+        lyrics.clear();
+        displayMessage("Searching for synchronized lyrics...");
+
+        new Thread(() -> {
+            ArrayList<LyricLine> foundLyrics = new ArrayList<>();
+
+            HttpURLConnection connection = null;
+
+            try {
+                String encoded = URLEncoder.encode(query, "UTF-8");
+                URL url = new URL(
+                        "https://lrclib.net/api/search?q=" + encoded);
+
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+                connection.setRequestProperty(
+                        "User-Agent",
+                        "Donut4U-Karaoke/1.0");
+
+                int responseCode = connection.getResponseCode();
+
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    InputStream input = connection.getInputStream();
+                    ByteArrayOutputStream output =
+                            new ByteArrayOutputStream();
+
+                    byte[] buffer = new byte[4096];
+                    int count;
+
+                    while ((count = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, count);
+                    }
+
+                    input.close();
+
+                    String response = new String(
+                            output.toByteArray(), StandardCharsets.UTF_8);
+
+                    JSONArray results = new JSONArray(response);
+
+                    for (int i = 0; i < results.length(); i++) {
+                        JSONObject item = results.getJSONObject(i);
+                        String synced = item.optString("syncedLyrics", "");
+
+                        if (synced != null && !synced.trim().isEmpty()) {
+                            foundLyrics = parseLrcText(synced);
+
+                            if (!foundLyrics.isEmpty()) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // A network failure is handled by the message below.
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+
+            final ArrayList<LyricLine> result = foundLyrics;
+
+            runOnUiThread(() -> {
+                if (requestId != lyricRequestId) return;
+
+                lyrics.clear();
+                lyrics.addAll(result);
+
+                if (lyrics.isEmpty()) {
+                    displayMessage(
+                            "No synchronized lyrics found for this search.\n\n"
+                            + "Try searching with the song title and artist.\n\n"
+                            + "Not every song has timed lyrics available.");
+                } else {
+                    displayLyrics();
+                    Toast.makeText(MainActivity.this,
+                            "Synchronized lyrics loaded.",
+                            Toast.LENGTH_SHORT).show();
+                }
+            });
+        }).start();
+    }
+
+    private ArrayList<LyricLine> parseLrcText(String lrcText) {
+        ArrayList<LyricLine> parsed = new ArrayList<>();
+
+        Pattern pattern = Pattern.compile(
+                "\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\](.*)");
+
+        String[] lines = lrcText.split("\\r?\\n");
+
+        for (String line : lines) {
+            Matcher matcher = pattern.matcher(line);
+
+            if (!matcher.matches()) continue;
+
+            try {
+                long minutes = Long.parseLong(matcher.group(1));
+                long seconds = Long.parseLong(matcher.group(2));
+
+                String fraction = matcher.group(3);
+                long milliseconds = 0;
+
+                if (fraction != null) {
+                    if (fraction.length() == 1) {
+                        milliseconds = Long.parseLong(fraction) * 100;
+                    } else if (fraction.length() == 2) {
+                        milliseconds = Long.parseLong(fraction) * 10;
+                    } else {
+                        milliseconds = Long.parseLong(fraction);
+                    }
+                }
+
+                long time = minutes * 60000 + seconds * 1000
+                        + milliseconds;
+
+                String text = matcher.group(4).trim();
+
+                if (!text.isEmpty()) {
+                    parsed.add(new LyricLine(time, text));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        Collections.sort(parsed,
+                Comparator.comparingLong(item -> item.time));
+
+        return parsed;
+    }
+
     private void loadLyrics() {
         lyrics.clear();
 
@@ -373,61 +507,41 @@ public class MainActivity extends Activity {
                     getAssets().open("lyrics/default.lrc");
 
             BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(input, "UTF-8"));
+                    new InputStreamReader(input, StandardCharsets.UTF_8));
 
-            Pattern pattern = Pattern.compile(
-                    "\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,3}))?\\](.*)");
-
+            StringBuilder content = new StringBuilder();
             String line;
 
             while ((line = reader.readLine()) != null) {
-                Matcher matcher = pattern.matcher(line);
-
-                while (matcher.find()) {
-                    long minutes =
-                            Long.parseLong(matcher.group(1));
-
-                    long seconds =
-                            Long.parseLong(matcher.group(2));
-
-                    String fraction = matcher.group(3);
-                    long milliseconds = 0;
-
-                    if (fraction != null) {
-                        if (fraction.length() == 1) {
-                            milliseconds =
-                                    Long.parseLong(fraction) * 100;
-                        } else if (fraction.length() == 2) {
-                            milliseconds =
-                                    Long.parseLong(fraction) * 10;
-                        } else {
-                            milliseconds =
-                                    Long.parseLong(fraction);
-                        }
-                    }
-
-                    long time = minutes * 60000
-                            + seconds * 1000
-                            + milliseconds;
-
-                    String text = matcher.group(4).trim();
-
-                    if (!text.isEmpty()) {
-                        lyrics.add(new LyricLine(time, text));
-                    }
-                }
+                content.append(line).append('\n');
             }
 
             reader.close();
+            lyrics.addAll(parseLrcText(content.toString()));
 
-            Collections.sort(lyrics,
-                    Comparator.comparingLong(item -> item.time));
-
-        } catch (Exception e) {
+        } catch (Exception ignored) {
             lyrics.clear();
         }
 
         displayLyrics();
+    }
+
+    private void displayMessage(String message) {
+        lyricsContainer.removeAllViews();
+        lyricViews.clear();
+        activeLyric = -1;
+
+        TextView text = new TextView(this);
+        text.setText(message);
+        text.setTextColor(WHITE);
+        text.setTextSize(16);
+        text.setGravity(Gravity.CENTER);
+        text.setPadding(dp(12), dp(25), dp(12), dp(25));
+
+        lyricsContainer.addView(text,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     private void displayLyrics() {
@@ -436,17 +550,9 @@ public class MainActivity extends Activity {
         activeLyric = -1;
 
         if (lyrics.isEmpty()) {
-            TextView message = new TextView(this);
-            message.setText(
-                    "No timed lyrics found.\n\n" +
-                    "Add your song's timed lyrics to:\n" +
-                    "assets/lyrics/default.lrc");
-            message.setTextColor(WHITE);
-            message.setTextSize(16);
-            message.setGravity(Gravity.CENTER);
-            message.setPadding(dp(12), dp(25), dp(12), dp(25));
-
-            lyricsContainer.addView(message);
+            displayMessage(
+                    "No timed lyrics found.\n\n"
+                    + "Play a song to search online for synchronized lyrics.");
             return;
         }
 
@@ -519,8 +625,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (searchWebView != null &&
-                searchWebView.canGoBack()) {
+        if (searchWebView != null && searchWebView.canGoBack()) {
             searchWebView.goBack();
         } else {
             super.onBackPressed();
@@ -529,6 +634,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        lyricRequestId++;
+
         if (searchWebView != null) {
             searchWebView.destroy();
         }
