@@ -1,17 +1,22 @@
-
 plugins {
-    id("com.android.application")
+id("com.android.application")
 }
 
 android {
-    namespace = "com.donut4u.karaoke"
-    compileSdk = 35
+namespace = "com.donut4u.karaoke"
+compileSdk = 35
 
-    defaultConfig {
-        applicationId = "com.donut4u.karaoke"
-        minSdk = 23
-        targetSdk = 28
-        versionCode = 1
-        versionName = "1.0"
-    }
+defaultConfig {
+    applicationId = "com.donut4u.karaoke"
+    minSdk = 23
+    targetSdk = 28
+    versionCode = 1
+    versionName = "1.0"
+}
+
+}
+
+dependencies {
+implementation("androidx.media3:media3-exoplayer:1.8.0")
+implementation("androidx.media3:media3-common:1.8.0")
 }
