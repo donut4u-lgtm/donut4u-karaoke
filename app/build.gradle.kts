@@ -1,3 +1,4 @@
+
 plugins {
     id("com.android.application")
 }
@@ -9,7 +10,7 @@ android {
     defaultConfig {
         applicationId = "com.donut4u.karaoke"
         minSdk = 23
-        targetSdk = 35
+        targetSdk = 28
         versionCode = 1
         versionName = "1.0"
     }
