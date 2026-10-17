@@ -1,3 +1,4 @@
+
 name: Build donut4u karaoke APK
 
 'on': [push, workflow_dispatch]
@@ -5,6 +6,7 @@ name: Build donut4u karaoke APK
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,3 +24,10 @@ jobs:
 
       - name: Build APK
         run: gradle assembleDebug --stacktrace --console=plain
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: donut4u-karaoke-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
