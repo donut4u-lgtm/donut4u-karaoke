@@ -1,46 +1,56 @@
-
 name: Build donut4u karaoke APK
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+push:
+branches:
+- main
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+build:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+  - name: Set up Java 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: "17"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
+  - name: Set up Gradle
+    uses: gradle/actions/setup-gradle@v4
+    with:
+      gradle-version: "8.10.2"
 
-      - name: Show manifest file
-        run: |
-          echo "Checking AndroidManifest.xml"
-          ls -l app/src/main/AndroidManifest.xml
-          cat -n app/src/main/AndroidManifest.xml
+  - name: Show manifest file
+    run: |
+      echo "Checking AndroidManifest.xml"
+      ls -l app/src/main/AndroidManifest.xml
+      cat -n app/src/main/AndroidManifest.xml
 
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace --info
+  - name: Build debug APK
+    run: |
+      set +e
+      gradle assembleDebug --stacktrace --console=plain > build-log.txt 2>&1
+      BUILD_STATUS=$?
+      echo "===== IMPORTANT BUILD ERRORS ====="
+      grep -n -i -E -A 8 -B 3 "What went wrong|AndroidManifest.xml|error:|FAILURE: Build failed|SAXParseException|ManifestMerger|Could not|failed" build-log.txt | tail -n 100 || true
+      echo "===== END OF BUILD ERRORS ====="
+      if [ "$BUILD_STATUS" -ne 0 ]; then
+        echo "Build failed. See the filtered errors above."
+        exit "$BUILD_STATUS"
+      fi
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: donut4u-karaoke-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+  - name: Upload APK
+    if: success()
+    uses: actions/upload-artifact@v4
+    with:
+      name: donut4u-karaoke-debug-apk
+      path: app/build/outputs/apk/debug/app-debug.apk
+      if-no-files-found: error
