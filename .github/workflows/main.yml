@@ -35,20 +35,9 @@ steps:
       cat -n app/src/main/AndroidManifest.xml
 
   - name: Build debug APK
-    run: |
-      set +e
-      gradle assembleDebug --stacktrace --console=plain > build-log.txt 2>&1
-      BUILD_STATUS=$?
-      echo "===== IMPORTANT BUILD ERRORS ====="
-      grep -n -i -E -A 8 -B 3 "What went wrong|AndroidManifest.xml|error:|FAILURE: Build failed|SAXParseException|ManifestMerger|Could not|failed" build-log.txt | tail -n 100 || true
-      echo "===== END OF BUILD ERRORS ====="
-      if [ "$BUILD_STATUS" -ne 0 ]; then
-        echo "Build failed. See the filtered errors above."
-        exit "$BUILD_STATUS"
-      fi
+    run: gradle assembleDebug --stacktrace --console=plain
 
   - name: Upload APK
-    if: success()
     uses: actions/upload-artifact@v4
     with:
       name: donut4u-karaoke-debug-apk
