@@ -10,11 +10,11 @@
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
-            android:name=".OnlineSongActivity"
+            android:name="com.donut4u.karaoke.OnlineSongActivity"
             android:exported="false" />
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.donut4u.karaoke.MainActivity"
             android:exported="true">
 
             <intent-filter>
