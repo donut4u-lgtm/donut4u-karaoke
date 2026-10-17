@@ -1,38 +1,50 @@
-
 name: Build donut4u karaoke APK
 
 'on': [push, workflow_dispatch]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+build:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+```
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+  - name: Set up Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
+  - name: Set up Gradle
+    uses: gradle/actions/setup-gradle@v4
+    with:
+      gradle-version: '8.10.2'
 
-      - name: Build APK
-        run: gradle assembleDebug --stacktrace --console=plain
+  - name: Diagnose AndroidManifest.xml
+    run: |
+      echo "===== MANIFEST FILE CONTENT ====="
+      cat -n app/src/main/AndroidManifest.xml
 
-      - name: List APK files
-        if: always()
-        run: find app/build/outputs -type f -print || true
+      echo "===== CHECK XML SYNTAX ====="
+      python3 -c "import xml.etree.ElementTree as ET; ET.parse('app/src/main/AndroidManifest.xml'); print('XML syntax OK')"
 
-      - name: Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: donut4u-karaoke-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+      echo "===== FIND ALL MANIFEST FILES ====="
+      find app -name AndroidManifest.xml -type f -print
+
+  - name: Build APK
+    run: gradle assembleDebug --stacktrace --info --console=plain
+
+  - name: List APK files
+    if: always()
+    run: find app/build/outputs -type f -print || true
+
+  - name: Upload APK
+    if: success()
+    uses: actions/upload-artifact@v4
+    with:
+      name: donut4u-karaoke-debug-apk
+      path: app/build/outputs/apk/debug/*.apk
+      if-no-files-found: error
+```
