@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -43,9 +44,9 @@ import java.util.concurrent.Executors;
 
 public class OnlineSongActivity extends Activity {
 
-    private static final int GREEN = Color.rgb(0, 190, 95);
-    private static final int BG = Color.rgb(15, 18, 20);
-    private static final int PANEL = Color.rgb(30, 35, 38);
+    private static final int GREEN = Color.rgb(0, 220, 105);
+    private static final int BG = Color.rgb(10, 12, 15);
+    private static final int PANEL = Color.rgb(27, 32, 35);
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
@@ -61,11 +62,12 @@ public class OnlineSongActivity extends Activity {
     private LinearLayout resultsContainer;
 
     private View searchScreen;
-    private LinearLayout playbackScreen;
+    private FrameLayout playbackScreen;
     private FrameLayout playerHost;
     private WebView player;
 
     private boolean donationScreenVisible = false;
+    private boolean playbackVisible = false;
 
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor();
@@ -110,14 +112,24 @@ public class OnlineSongActivity extends Activity {
         outer.addView(root);
 
         TextView heading = new TextView(this);
-        heading.setText("Donut4U Karaoke");
+        heading.setText("🎤 DONUT4U KARAOKE STAGE");
         heading.setTextColor(GREEN);
-        heading.setTextSize(26);
+        heading.setTextSize(24);
         heading.setTypeface(null, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
-        heading.setPadding(0, dp(8), 0, dp(20));
+        heading.setPadding(0, dp(8), 0, dp(8));
 
         root.addView(heading, fullWidthWrap());
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("YOUR SONG. YOUR STAGE.");
+        subtitle.setTextColor(MUTED);
+        subtitle.setTextSize(12);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setLetterSpacing(0.12f);
+        subtitle.setPadding(0, 0, 0, dp(20));
+
+        root.addView(subtitle, fullWidthWrap());
 
         searchBox = new EditText(this);
         searchBox.setSingleLine(true);
@@ -125,29 +137,27 @@ public class OnlineSongActivity extends Activity {
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         styleEdit(searchBox);
 
-        root.addView(searchBox, fullWidth(dp(52)));
+        root.addView(searchBox, fullWidth(dp(56)));
 
-        searchButton = makeButton("Search");
+        searchButton = makeButton("FIND MY SONG");
 
         LinearLayout.LayoutParams searchParams =
-                fullWidth(dp(50));
+                fullWidth(dp(52));
         searchParams.topMargin = dp(10);
 
         root.addView(searchButton, searchParams);
-
         searchButton.setOnClickListener(v -> searchVideos());
 
-        // Compact donation section on the main screen.
         LinearLayout donationCard = new LinearLayout(this);
         donationCard.setOrientation(LinearLayout.HORIZONTAL);
         donationCard.setGravity(Gravity.CENTER_VERTICAL);
         donationCard.setPadding(
                 dp(12), dp(8), dp(8), dp(8));
-        donationCard.setBackground(round(PANEL, dp(10)));
+        donationCard.setBackground(round(PANEL, dp(12)));
 
         LinearLayout.LayoutParams donationCardParams =
                 fullWidthWrap();
-        donationCardParams.topMargin = dp(12);
+        donationCardParams.topMargin = dp(14);
 
         root.addView(donationCard, donationCardParams);
 
@@ -193,7 +203,6 @@ public class OnlineSongActivity extends Activity {
                         dp(42));
 
         donateButtonParams.leftMargin = dp(8);
-
         donationCard.addView(
                 donateNowButton, donateButtonParams);
 
@@ -205,7 +214,7 @@ public class OnlineSongActivity extends Activity {
                 "Search for a song to see karaoke videos.");
         status.setTextColor(MUTED);
         status.setTextSize(14);
-        status.setPadding(0, dp(14), 0, dp(12));
+        status.setPadding(0, dp(16), 0, dp(12));
 
         root.addView(status, fullWidthWrap());
 
@@ -229,10 +238,8 @@ public class OnlineSongActivity extends Activity {
         );
     }
 
-    // Separate donation screen displaying the GCash QR image.
     private void showDonationScreen() {
         donationScreenVisible = true;
-
         showSystemBars();
 
         ScrollView outer = new ScrollView(this);
@@ -276,15 +283,13 @@ public class OnlineSongActivity extends Activity {
 
         root.addView(scanHeading, fullWidthWrap());
 
-        // Load the existing JPG from res/drawable/gcash_qr.jpg.
         ImageView qrImage = new ImageView(this);
         qrImage.setImageResource(R.drawable.gcash_qr);
         qrImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
         qrImage.setAdjustViewBounds(true);
         qrImage.setBackgroundColor(Color.WHITE);
         qrImage.setPadding(dp(6), dp(6), dp(6), dp(6));
-        qrImage.setContentDescription(
-                "GCash donation QR code");
+        qrImage.setContentDescription("GCash donation QR code");
 
         LinearLayout.LayoutParams qrParams =
                 new LinearLayout.LayoutParams(
@@ -310,11 +315,9 @@ public class OnlineSongActivity extends Activity {
 
         LinearLayout.LayoutParams backParams =
                 fullWidth(dp(50));
-
         backParams.topMargin = dp(6);
 
         root.addView(backButton, backParams);
-
         backButton.setOnClickListener(
                 v -> returnFromDonation());
 
@@ -342,11 +345,9 @@ public class OnlineSongActivity extends Activity {
 
     private void saveSearchCache(
             String query, ArrayList<Video> videos) {
-
         try {
             SharedPreferences prefs =
-                    getSharedPreferences(
-                            CACHE_NAME, MODE_PRIVATE);
+                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
 
             JSONObject root = new JSONObject();
             JSONArray array = new JSONArray();
@@ -373,8 +374,7 @@ public class OnlineSongActivity extends Activity {
     private ArrayList<Video> loadSearchCache(String query) {
         try {
             SharedPreferences prefs =
-                    getSharedPreferences(
-                            CACHE_NAME, MODE_PRIVATE);
+                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
 
             String saved = prefs.getString(query, null);
 
@@ -450,8 +450,7 @@ public class OnlineSongActivity extends Activity {
         searchButton.setEnabled(false);
         resultsContainer.removeAllViews();
 
-        ArrayList<Video> cached =
-                loadSearchCache(searchQuery);
+        ArrayList<Video> cached = loadSearchCache(searchQuery);
 
         if (cached != null && !cached.isEmpty()) {
             status.setText("Showing saved search results.");
@@ -475,10 +474,8 @@ public class OnlineSongActivity extends Activity {
         String encodedKey;
 
         try {
-            encodedQuery = URLEncoder.encode(
-                    searchQuery, "UTF-8");
-            encodedKey = URLEncoder.encode(
-                    apiKey, "UTF-8");
+            encodedQuery = URLEncoder.encode(searchQuery, "UTF-8");
+            encodedKey = URLEncoder.encode(apiKey, "UTF-8");
 
         } catch (Exception e) {
             searchButton.setEnabled(true);
@@ -519,16 +516,13 @@ public class OnlineSongActivity extends Activity {
                 String response = readAll(stream);
 
                 if (responseCode < 200 || responseCode >= 300) {
-                    JSONObject errorJson =
-                            new JSONObject(response);
-
+                    JSONObject errorJson = new JSONObject(response);
                     JSONObject errorObject =
                             errorJson.optJSONObject("error");
 
                     String message = errorObject == null
                             ? ""
-                            : errorObject.optString(
-                                    "message", "");
+                            : errorObject.optString("message", "");
 
                     throw new Exception(
                             message.isEmpty()
@@ -542,16 +536,13 @@ public class OnlineSongActivity extends Activity {
 
                 if (items != null) {
                     for (int i = 0; i < items.length(); i++) {
-                        JSONObject item =
-                                items.optJSONObject(i);
+                        JSONObject item = items.optJSONObject(i);
 
                         if (item == null) {
                             continue;
                         }
 
-                        JSONObject idObject =
-                                item.optJSONObject("id");
-
+                        JSONObject idObject = item.optJSONObject("id");
                         JSONObject snippet =
                                 item.optJSONObject("snippet");
 
@@ -648,14 +639,12 @@ public class OnlineSongActivity extends Activity {
     private void addVideoResult(Video video) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(
-                dp(14), dp(14), dp(14), dp(14));
-        card.setBackground(round(PANEL, dp(10)));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setBackground(round(PANEL, dp(12)));
         card.setClickable(true);
         card.setFocusable(true);
 
-        LinearLayout.LayoutParams cardParams =
-                fullWidthWrap();
+        LinearLayout.LayoutParams cardParams = fullWidthWrap();
         cardParams.bottomMargin = dp(10);
 
         resultsContainer.addView(card, cardParams);
@@ -663,7 +652,7 @@ public class OnlineSongActivity extends Activity {
         TextView title = new TextView(this);
         title.setText(video.title);
         title.setTextColor(WHITE);
-        title.setTextSize(16);
+        title.setTextSize(17);
         title.setTypeface(null, Typeface.BOLD);
 
         card.addView(title, fullWidthWrap());
@@ -671,63 +660,72 @@ public class OnlineSongActivity extends Activity {
         TextView channel = new TextView(this);
         channel.setText(video.channel);
         channel.setTextColor(MUTED);
-        channel.setTextSize(12);
+        channel.setTextSize(13);
         channel.setPadding(0, dp(7), 0, 0);
 
         card.addView(channel, fullWidthWrap());
 
         TextView tapLabel = new TextView(this);
-        tapLabel.setText("▶  Tap to play");
+        tapLabel.setText("▶  TAP TO PLAY");
         tapLabel.setTextColor(GREEN);
         tapLabel.setTextSize(13);
         tapLabel.setTypeface(null, Typeface.BOLD);
         tapLabel.setPadding(0, dp(12), 0, 0);
 
         card.addView(tapLabel, fullWidthWrap());
-
         card.setOnClickListener(v -> playVideo(video));
     }
 
     private void playVideo(Video video) {
         donationScreenVisible = false;
+        playbackVisible = true;
 
         destroyPlayer();
         hideSystemBars();
 
-        playbackScreen = new LinearLayout(this);
-        playbackScreen.setOrientation(LinearLayout.VERTICAL);
+        playbackScreen = new FrameLayout(this);
         playbackScreen.setBackgroundColor(Color.BLACK);
-
-        TextView title = new TextView(this);
-        title.setText(video.title);
-        title.setTextColor(WHITE);
-        title.setTextSize(15);
-        title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(dp(12), dp(8), dp(12), dp(8));
-        title.setMaxLines(2);
-
-        playbackScreen.addView(title, fullWidthWrap());
 
         playerHost = new FrameLayout(this);
         playerHost.setBackgroundColor(Color.BLACK);
 
-        LinearLayout.LayoutParams videoParams =
-                new LinearLayout.LayoutParams(
+        playbackScreen.addView(
+                playerHost,
+                new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        0,
-                        1f);
+                        ViewGroup.LayoutParams.MATCH_PARENT));
 
-        playbackScreen.addView(playerHost, videoParams);
+        // The title floats over the video instead of taking video height.
+        TextView title = new TextView(this);
+        title.setText(video.title);
+        title.setTextColor(WHITE);
+        title.setTextSize(14);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        title.setPadding(dp(12), dp(8), dp(12), dp(8));
+        title.setMaxLines(2);
+        title.setBackground(
+                round(Color.argb(205, 10, 12, 15), dp(8)));
 
-        Button backButton = makeButton("Back");
+        FrameLayout.LayoutParams titleParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP);
 
-        LinearLayout.LayoutParams backParams =
-                fullWidth(dp(50));
+        titleParams.setMargins(dp(10), dp(10), dp(10), 0);
+        playbackScreen.addView(title, titleParams);
 
-        backParams.setMargins(
-                dp(12), dp(8), dp(12), dp(12));
+        Button backButton = makeButton("‹  BACK TO SONGS");
+        backButton.setTextSize(13);
 
+        FrameLayout.LayoutParams backParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(46),
+                        Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+
+        backParams.setMargins(dp(12), 0, dp(12), dp(12));
         playbackScreen.addView(backButton, backParams);
         backButton.setOnClickListener(v -> returnToResults());
 
@@ -753,26 +751,33 @@ public class OnlineSongActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
+        /*
+         * Fill the portrait screen height with the video.
+         * This enlarges the picture but crops its left and right edges.
+         * YouTube's own controls and the original lyrics remain unchanged.
+         */
         String html =
                 "<!doctype html>"
                 + "<html>"
                 + "<head>"
                 + "<meta name=\"viewport\" "
                 + "content=\"width=device-width, initial-scale=1,"
-                + " maximum-scale=1\">"
+                + " maximum-scale=1, user-scalable=no\">"
                 + "<meta name=\"referrer\" "
                 + "content=\"strict-origin-when-cross-origin\">"
                 + "<style>"
                 + "html,body{margin:0;padding:0;background:#000;"
                 + "width:100%;height:100%;overflow:hidden;}"
-                + "iframe{border:0;width:100%;height:100%;}"
+                + "iframe{position:absolute;top:50%;left:50%;"
+                + "width:177.78vh;height:100vh;"
+                + "transform:translate(-50%,-50%);border:0;}"
                 + "</style>"
                 + "</head>"
                 + "<body>"
                 + "<iframe "
                 + "src=\"https://www.youtube.com/embed/"
                 + video.id
-                + "?playsinline=0&controls=1&rel=0\" "
+                + "?playsinline=1&controls=1&rel=0\" "
                 + "title=\"YouTube karaoke player\" "
                 + "allow=\"accelerometer; autoplay; clipboard-write; "
                 + "encrypted-media; gyroscope; picture-in-picture; "
@@ -795,9 +800,13 @@ public class OnlineSongActivity extends Activity {
         destroyPlayer();
         playbackScreen = null;
         playerHost = null;
+        playbackVisible = false;
 
         showSystemBars();
-        setContentView(searchScreen);
+
+        if (searchScreen != null) {
+            setContentView(searchScreen);
+        }
     }
 
     private void hideSystemBars() {
@@ -864,7 +873,7 @@ public class OnlineSongActivity extends Activity {
     private void styleEdit(EditText edit) {
         edit.setTextColor(WHITE);
         edit.setHintTextColor(MUTED);
-        edit.setTextSize(15);
+        edit.setTextSize(16);
         edit.setPadding(dp(12), 0, dp(12), 0);
         edit.setBackground(round(PANEL, dp(8)));
     }
@@ -876,7 +885,10 @@ public class OnlineSongActivity extends Activity {
         button.setTextSize(15);
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
-        button.setBackground(round(GREEN, dp(8)));
+        button.setMinHeight(dp(48));
+        button.setPadding(dp(12), dp(6), dp(12), dp(6));
+        button.setBackground(round(GREEN, dp(10)));
+        button.setStateListAnimator(null);
         return button;
     }
 
@@ -912,7 +924,7 @@ public class OnlineSongActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (player != null) {
+        if (player != null || playbackVisible) {
             returnToResults();
         } else if (donationScreenVisible) {
             returnFromDonation();
