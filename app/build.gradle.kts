@@ -1,5 +1,7 @@
+
 plugins {
     id("com.android.application")
+    id("com.google.gms.google-services")
 }
 
 val youtubeApiKey = providers.gradleProperty("YOUTUBE_API_KEY")
@@ -34,4 +36,9 @@ android {
 dependencies {
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-common:1.8.0")
+
+    implementation(
+        platform("com.google.firebase:firebase-bom:35.0.2")
+    )
+    implementation("com.google.firebase:firebase-auth")
 }
