@@ -7,7 +7,11 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebChromeClient;
@@ -16,6 +20,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -47,7 +52,10 @@ public class OnlineSongActivity extends Activity {
     private Button searchButton;
     private TextView status;
     private LinearLayout resultsContainer;
-    private LinearLayout playerPanel;
+
+    private View searchScreen;
+    private LinearLayout playbackScreen;
+    private FrameLayout playerHost;
     private WebView player;
 
     private final ExecutorService executor =
@@ -69,92 +77,71 @@ public class OnlineSongActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        buildScreen();
+        buildSearchScreen();
+
+        String initialQuery =
+                getIntent().getStringExtra("search_query");
+
+        if (initialQuery != null && !initialQuery.trim().isEmpty()) {
+            searchBox.setText(initialQuery);
+            searchVideos();
+        }
     }
 
-    private void buildScreen() {
+    private void buildSearchScreen() {
         ScrollView outer = new ScrollView(this);
         outer.setFillViewport(true);
         outer.setBackgroundColor(BG);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(20));
+        root.setPadding(dp(16), dp(20), dp(16), dp(20));
 
         outer.addView(root);
-        setContentView(outer);
 
         TextView heading = new TextView(this);
-        heading.setText("DONUT4U KARAOKE");
+        heading.setText("Donut4U Karaoke");
         heading.setTextColor(GREEN);
-        heading.setTextSize(24);
+        heading.setTextSize(26);
         heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        heading.setPadding(0, dp(8), 0, dp(20));
+
         root.addView(heading, fullWidthWrap());
-
-        TextView subtitle = new TextView(this);
-        subtitle.setText("YOUTUBE KARAOKE CATALOGUE");
-        subtitle.setTextColor(WHITE);
-        subtitle.setTextSize(16);
-        subtitle.setTypeface(null, Typeface.BOLD);
-        subtitle.setPadding(0, dp(6), 0, dp(14));
-        root.addView(subtitle, fullWidthWrap());
-
-        root.addView(
-                label("Search by song title or artist"),
-                fullWidthWrap()
-        );
 
         searchBox = new EditText(this);
         searchBox.setSingleLine(true);
-        searchBox.setHint("Example: My Way karaoke");
+        searchBox.setHint("Song title or artist");
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         styleEdit(searchBox);
-        root.addView(searchBox, fullWidth(dp(50)));
 
-        searchButton = makeButton("SEARCH YOUTUBE KARAOKE");
+        root.addView(searchBox, fullWidth(dp(52)));
+
+        searchButton = makeButton("Search");
+
+        LinearLayout.LayoutParams searchParams =
+                fullWidth(dp(50));
+        searchParams.topMargin = dp(10);
+
+        root.addView(searchButton, searchParams);
+
         searchButton.setOnClickListener(v -> searchVideos());
-        root.addView(searchButton, fullWidth(dp(48)));
 
         status = new TextView(this);
-        status.setText(
-                "Search YouTube for karaoke videos. "
-                + "Choose a result to play it."
-        );
+        status.setText("Search for a song to see karaoke videos.");
         status.setTextColor(MUTED);
-        status.setTextSize(13);
-        status.setPadding(0, dp(12), 0, dp(10));
+        status.setTextSize(14);
+        status.setPadding(0, dp(14), 0, dp(12));
+
         root.addView(status, fullWidthWrap());
-
-        playerPanel = new LinearLayout(this);
-        playerPanel.setOrientation(LinearLayout.VERTICAL);
-        playerPanel.setVisibility(View.GONE);
-        root.addView(playerPanel, fullWidthWrap());
-
-        Button backToResults =
-                makeButton("BACK TO SEARCH RESULTS");
-
-        backToResults.setOnClickListener(v -> {
-            destroyPlayer();
-            playerPanel.setVisibility(View.GONE);
-            resultsContainer.setVisibility(View.VISIBLE);
-            status.setText("Select a YouTube karaoke video.");
-        });
-
-        playerPanel.addView(
-                backToResults,
-                fullWidth(dp(44))
-        );
 
         resultsContainer = new LinearLayout(this);
         resultsContainer.setOrientation(LinearLayout.VERTICAL);
+
         root.addView(resultsContainer, fullWidthWrap());
 
-        Button back = makeButton("BACK TO KARAOKE PLAYER");
-        back.setOnClickListener(v -> finish());
-
-        LinearLayout.LayoutParams backParams = fullWidth(dp(46));
-        backParams.topMargin = dp(18);
-        root.addView(back, backParams);
+        searchScreen = outer;
+        setContentView(searchScreen);
 
         searchBox.setOnEditorActionListener(
                 (view, actionId, event) -> {
@@ -178,35 +165,45 @@ public class OnlineSongActivity extends Activity {
 
         if (apiKey == null || apiKey.trim().isEmpty()) {
             status.setText(
-                    "This app was built without a YouTube API key. "
-                    + "Check the YOUTUBE_API_KEY GitHub secret."
+                    "YouTube API key is missing. Check the "
+                            + "YOUTUBE_API_KEY GitHub secret."
             );
             return;
         }
 
-        Object service = getSystemService(
-                Context.INPUT_METHOD_SERVICE
-        );
+        Object service =
+                getSystemService(Context.INPUT_METHOD_SERVICE);
 
         if (service instanceof InputMethodManager) {
             ((InputMethodManager) service)
                     .hideSoftInputFromWindow(
-                            searchBox.getWindowToken(), 0
-                    );
+                            searchBox.getWindowToken(), 0);
         }
 
         final int generation = ++searchGeneration;
 
-        String searchQuery = query.toLowerCase().contains("karaoke")
-                ? query
-                : query + " karaoke";
+        String searchQuery =
+                query.toLowerCase().contains("karaoke")
+                        ? query
+                        : query + " karaoke";
 
         searchButton.setEnabled(false);
         status.setText("Searching YouTube...");
         resultsContainer.removeAllViews();
-        destroyPlayer();
-        playerPanel.setVisibility(View.GONE);
-        resultsContainer.setVisibility(View.VISIBLE);
+
+        String encodedQuery;
+        String encodedKey;
+
+        try {
+            encodedQuery = URLEncoder.encode(
+                    searchQuery, "UTF-8");
+            encodedKey = URLEncoder.encode(
+                    apiKey, "UTF-8");
+        } catch (Exception e) {
+            searchButton.setEnabled(true);
+            status.setText("Unable to prepare the search.");
+            return;
+        }
 
         executor.execute(() -> {
             ArrayList<Video> videos = new ArrayList<>();
@@ -221,10 +218,8 @@ public class OnlineSongActivity extends Activity {
                         + "&videoEmbeddable=true"
                         + "&maxResults=25"
                         + "&regionCode=PH"
-                        + "&q=" + URLEncoder.encode(
-                                searchQuery, "UTF-8")
-                        + "&key=" + URLEncoder.encode(
-                                apiKey, "UTF-8");
+                        + "&q=" + encodedQuery
+                        + "&key=" + encodedKey;
 
                 connection = (HttpURLConnection)
                         new URL(requestUrl).openConnection();
@@ -237,8 +232,8 @@ public class OnlineSongActivity extends Activity {
 
                 InputStream stream =
                         responseCode >= 200 && responseCode < 300
-                        ? connection.getInputStream()
-                        : connection.getErrorStream();
+                                ? connection.getInputStream()
+                                : connection.getErrorStream();
 
                 String response = readAll(stream);
 
@@ -255,9 +250,9 @@ public class OnlineSongActivity extends Activity {
 
                     throw new Exception(
                             message.isEmpty()
-                            ? "YouTube API error: HTTP "
-                                    + responseCode
-                            : message
+                                    ? "YouTube API error: HTTP "
+                                            + responseCode
+                                    : message
                     );
                 }
 
@@ -272,7 +267,9 @@ public class OnlineSongActivity extends Activity {
                             continue;
                         }
 
-                        JSONObject idObject = item.optJSONObject("id");
+                        JSONObject idObject =
+                                item.optJSONObject("id");
+
                         JSONObject snippet =
                                 item.optJSONObject("snippet");
 
@@ -323,23 +320,20 @@ public class OnlineSongActivity extends Activity {
 
                 if (finalError != null) {
                     status.setText(
-                            "YouTube search failed: " + finalError
-                    );
+                            "YouTube search failed: " + finalError);
                     return;
                 }
 
                 if (found.isEmpty()) {
                     status.setText(
                             "No embeddable videos found. "
-                            + "Try another title or artist."
-                    );
+                                    + "Try another song title or artist.");
                     return;
                 }
 
                 status.setText(
-                        "YOUTUBE RESULTS: " + found.size()
-                        + ". Select a video to play."
-                );
+                        "Found " + found.size()
+                                + " videos. Tap a song to play.");
 
                 for (Video video : found) {
                     addVideoResult(video);
@@ -351,38 +345,88 @@ public class OnlineSongActivity extends Activity {
     private void addVideoResult(Video video) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(10), dp(10), dp(10), dp(10));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
         card.setBackground(round(PANEL, dp(10)));
+        card.setClickable(true);
+        card.setFocusable(true);
 
         LinearLayout.LayoutParams cardParams = fullWidthWrap();
         cardParams.bottomMargin = dp(10);
+
         resultsContainer.addView(card, cardParams);
+
+        TextView title = new TextView(this);
+        title.setText(video.title);
+        title.setTextColor(WHITE);
+        title.setTextSize(16);
+        title.setTypeface(null, Typeface.BOLD);
+
+        card.addView(title, fullWidthWrap());
+
+        TextView channel = new TextView(this);
+        channel.setText(video.channel);
+        channel.setTextColor(MUTED);
+        channel.setTextSize(12);
+        channel.setPadding(0, dp(7), 0, 0);
+
+        card.addView(channel, fullWidthWrap());
+
+        TextView tapLabel = new TextView(this);
+        tapLabel.setText("▶  Tap to play");
+        tapLabel.setTextColor(GREEN);
+        tapLabel.setTextSize(13);
+        tapLabel.setTypeface(null, Typeface.BOLD);
+        tapLabel.setPadding(0, dp(12), 0, 0);
+
+        card.addView(tapLabel, fullWidthWrap());
+
+        card.setOnClickListener(v -> playVideo(video));
+    }
+
+    private void playVideo(Video video) {
+        destroyPlayer();
+        hideSystemBars();
+
+        playbackScreen = new LinearLayout(this);
+        playbackScreen.setOrientation(LinearLayout.VERTICAL);
+        playbackScreen.setBackgroundColor(Color.BLACK);
 
         TextView title = new TextView(this);
         title.setText(video.title);
         title.setTextColor(WHITE);
         title.setTextSize(15);
         title.setTypeface(null, Typeface.BOLD);
-        card.addView(title, fullWidthWrap());
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        title.setPadding(dp(12), dp(8), dp(12), dp(8));
+        title.setMaxLines(2);
 
-        TextView channel = new TextView(this);
-        channel.setText("Channel: " + video.channel);
-        channel.setTextColor(MUTED);
-        channel.setTextSize(12);
-        channel.setPadding(0, dp(5), 0, dp(8));
-        card.addView(channel, fullWidthWrap());
+        playbackScreen.addView(title, fullWidthWrap());
 
-        Button play = makeButton("▶ PLAY YOUTUBE KARAOKE");
-        play.setOnClickListener(v -> playVideo(video));
-        card.addView(play, fullWidth(dp(44)));
-    }
+        playerHost = new FrameLayout(this);
+        playerHost.setBackgroundColor(Color.BLACK);
 
-    private void playVideo(Video video) {
-        destroyPlayer();
+        LinearLayout.LayoutParams videoParams =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                );
 
-        resultsContainer.setVisibility(View.GONE);
-        playerPanel.setVisibility(View.VISIBLE);
-        status.setText("Selected: " + video.title);
+        playbackScreen.addView(playerHost, videoParams);
+
+        Button backButton = makeButton("Back");
+
+        LinearLayout.LayoutParams backParams =
+                fullWidth(dp(50));
+
+        backParams.setMargins(
+                dp(12), dp(8), dp(12), dp(12));
+
+        playbackScreen.addView(backButton, backParams);
+
+        backButton.setOnClickListener(v -> returnToResults());
+
+        setContentView(playbackScreen);
 
         player = new WebView(this);
         player.setBackgroundColor(Color.BLACK);
@@ -398,21 +442,21 @@ public class OnlineSongActivity extends Activity {
         player.setWebChromeClient(new WebChromeClient());
         player.setWebViewClient(new WebViewClient());
 
-        LinearLayout.LayoutParams playerParams =
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(270)
-                );
-
-        playerParams.topMargin = dp(8);
-        playerPanel.addView(player, playerParams);
+        playerHost.addView(
+                player,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                )
+        );
 
         String html =
                 "<!doctype html>"
                 + "<html>"
                 + "<head>"
                 + "<meta name=\"viewport\" "
-                + "content=\"width=device-width, initial-scale=1\">"
+                + "content=\"width=device-width, initial-scale=1,"
+                + " maximum-scale=1\">"
                 + "<meta name=\"referrer\" "
                 + "content=\"strict-origin-when-cross-origin\">"
                 + "<style>"
@@ -425,7 +469,7 @@ public class OnlineSongActivity extends Activity {
                 + "<iframe "
                 + "src=\"https://www.youtube.com/embed/"
                 + video.id
-                + "?playsinline=1&controls=1&rel=0\" "
+                + "?playsinline=0&controls=1&rel=0\" "
                 + "title=\"YouTube karaoke player\" "
                 + "allow=\"accelerometer; autoplay; clipboard-write; "
                 + "encrypted-media; gyroscope; picture-in-picture; "
@@ -436,10 +480,8 @@ public class OnlineSongActivity extends Activity {
                 + "</body>"
                 + "</html>";
 
-        String baseUrl = "https://com.donut4u.karaoke/";
-
         player.loadDataWithBaseURL(
-                baseUrl,
+                "https://com.donut4u.karaoke/",
                 html,
                 "text/html",
                 "UTF-8",
@@ -447,11 +489,52 @@ public class OnlineSongActivity extends Activity {
         );
     }
 
+    private void returnToResults() {
+        destroyPlayer();
+        playbackScreen = null;
+        playerHost = null;
+
+        showSystemBars();
+        setContentView(searchScreen);
+    }
+
+    private void hideSystemBars() {
+        Window window = getWindow();
+
+        window.addFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+    }
+
+    private void showSystemBars() {
+        Window window = getWindow();
+
+        window.clearFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+
+        window.setStatusBarColor(BG);
+        window.setNavigationBarColor(BG);
+    }
+
     private void destroyPlayer() {
         if (player != null) {
             player.stopLoading();
             player.loadUrl("about:blank");
-            playerPanel.removeView(player);
+
+            if (playerHost != null) {
+                playerHost.removeView(player);
+            }
+
             player.destroy();
             player = null;
         }
@@ -478,20 +561,10 @@ public class OnlineSongActivity extends Activity {
         return result.toString();
     }
 
-    private TextView label(String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextColor(WHITE);
-        view.setTextSize(13);
-        view.setTypeface(null, Typeface.BOLD);
-        view.setPadding(0, dp(5), 0, dp(5));
-        return view;
-    }
-
     private void styleEdit(EditText edit) {
         edit.setTextColor(WHITE);
         edit.setHintTextColor(MUTED);
-        edit.setTextSize(14);
+        edit.setTextSize(15);
         edit.setPadding(dp(12), 0, dp(12), 0);
         edit.setBackground(round(PANEL, dp(8)));
     }
@@ -500,7 +573,7 @@ public class OnlineSongActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.BLACK);
-        button.setTextSize(12);
+        button.setTextSize(15);
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
         button.setBackground(round(GREEN, dp(8)));
@@ -542,11 +615,22 @@ public class OnlineSongActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (player != null) {
+            returnToResults();
+        } else {
+            super.onBackPressed();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         closing = true;
         searchGeneration++;
+
         destroyPlayer();
         executor.shutdownNow();
+
         super.onDestroy();
     }
 }
