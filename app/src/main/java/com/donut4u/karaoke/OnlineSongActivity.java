@@ -43,7 +43,6 @@ public class OnlineSongActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
-    private EditText apiKeyBox;
     private EditText searchBox;
     private Button searchButton;
     private TextView status;
@@ -61,7 +60,6 @@ public class OnlineSongActivity extends Activity {
         String id;
         String title;
         String channel;
-        String thumbnail;
     }
 
     @Override
@@ -100,30 +98,6 @@ public class OnlineSongActivity extends Activity {
         subtitle.setTypeface(null, Typeface.BOLD);
         subtitle.setPadding(0, dp(6), 0, dp(14));
         root.addView(subtitle, fullWidthWrap());
-
-        root.addView(label("YouTube Data API key"), fullWidthWrap());
-
-        apiKeyBox = new EditText(this);
-        apiKeyBox.setSingleLine(true);
-        apiKeyBox.setHint("Enter your YouTube API key");
-        styleEdit(apiKeyBox);
-
-        apiKeyBox.setText(
-                getPreferences(MODE_PRIVATE)
-                        .getString("youtube_api_key", "")
-        );
-
-        root.addView(apiKeyBox, fullWidth(dp(48)));
-
-        TextView apiHelp = new TextView(this);
-        apiHelp.setText(
-                "Enable YouTube Data API v3 in Google Cloud Console. "
-                + "The key is saved on this device when you search."
-        );
-        apiHelp.setTextColor(MUTED);
-        apiHelp.setTextSize(12);
-        apiHelp.setPadding(0, dp(5), 0, dp(12));
-        root.addView(apiHelp, fullWidthWrap());
 
         root.addView(
                 label("Search by song title or artist"),
@@ -195,22 +169,22 @@ public class OnlineSongActivity extends Activity {
 
     private void searchVideos() {
         String query = searchBox.getText().toString().trim();
-        String apiKey = apiKeyBox.getText().toString().trim();
+
+        // The key is supplied at build time through app/build.gradle.kts.
+        String apiKey = BuildConfig.YOUTUBE_API_KEY;
 
         if (query.isEmpty()) {
             toast("Enter a song title or artist.");
             return;
         }
 
-        if (apiKey.isEmpty()) {
-            toast("Enter your YouTube Data API key.");
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            status.setText(
+                    "This app was built without a YouTube API key. "
+                    + "Check the YOUTUBE_API_KEY GitHub secret."
+            );
             return;
         }
-
-        getPreferences(MODE_PRIVATE)
-                .edit()
-                .putString("youtube_api_key", apiKey)
-                .apply();
 
         Object service = getSystemService(
                 Context.INPUT_METHOD_SERVICE
@@ -322,22 +296,6 @@ public class OnlineSongActivity extends Activity {
                         video.channel = snippet.optString(
                                 "channelTitle", "YouTube channel");
 
-                        JSONObject thumbnails =
-                                snippet.optJSONObject("thumbnails");
-
-                        JSONObject thumbnail = thumbnails == null
-                                ? null
-                                : thumbnails.optJSONObject("medium");
-
-                        if (thumbnail == null && thumbnails != null) {
-                            thumbnail =
-                                    thumbnails.optJSONObject("default");
-                        }
-
-                        video.thumbnail = thumbnail == null
-                                ? ""
-                                : thumbnail.optString("url", "");
-
                         videos.add(video);
                     }
                 }
@@ -421,11 +379,6 @@ public class OnlineSongActivity extends Activity {
         card.addView(play, fullWidth(dp(44)));
     }
 
-    /*
-     * YouTube embedded playback configuration.
-     * Use a valid HTTPS base URL identifying this app,
-     * rather than using youtube.com as the HTML base URL.
-     */
     private void playVideo(Video video) {
         destroyPlayer();
 
@@ -474,8 +427,7 @@ public class OnlineSongActivity extends Activity {
                 + "<iframe "
                 + "src=\"https://www.youtube.com/embed/"
                 + video.id
-                + "?playsinline=1&controls=1&rel=0"
-                + "&origin=https%3A%2F%2Fcom.donut4u.karaoke\" "
+                + "?playsinline=1&controls=1&rel=0\" "
                 + "title=\"YouTube karaoke player\" "
                 + "allow=\"accelerometer; autoplay; clipboard-write; "
                 + "encrypted-media; gyroscope; picture-in-picture; "
@@ -486,7 +438,7 @@ public class OnlineSongActivity extends Activity {
                 + "</body>"
                 + "</html>";
 
-        String baseUrl = "https://com.donut4u.karaoke/";
+        String baseUrl = "https://www.youtube.com/";
 
         player.loadDataWithBaseURL(
                 baseUrl,
