@@ -9,6 +9,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
@@ -24,6 +25,7 @@ public class AuthActivity extends Activity {
     private static final int GREEN = Color.rgb(0, 210, 105);
     private static final int BG = Color.rgb(16, 19, 21);
     private static final int PANEL = Color.rgb(35, 39, 42);
+    private static final int MUTED = Color.rgb(185, 194, 189);
 
     private FirebaseAuth auth;
     private EditText emailField;
@@ -46,7 +48,10 @@ public class AuthActivity extends Activity {
         if (user != null && user.isEmailVerified()) {
             openKaraoke();
         } else if (user != null) {
-            showVerification(user, "Please verify your email to continue.");
+            showVerification(
+                    user,
+                    "Please verify your email to continue."
+            );
         } else {
             showLoginForm();
         }
@@ -56,56 +61,87 @@ public class AuthActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(BG);
+        scroll.setClipToPadding(false);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(22), dp(28), dp(22), dp(28));
+        root.setPadding(dp(24), dp(30), dp(24), dp(28));
 
         scroll.addView(root);
 
-        addText(root, "Donut4U Karaoke", GREEN, 27, true);
-        addText(root,
-                createMode ? "Create your account" : "Sign in",
-                Color.WHITE, 21, true);
+        View logo = new View(this);
+        logo.setBackground(roundDrawable(GREEN, dp(18)));
 
-        addText(root,
-                "Email verification is required before karaoke access.",
-                Color.LTGRAY, 14, false);
+        LinearLayout.LayoutParams logoParams =
+                new LinearLayout.LayoutParams(dp(6), dp(6));
+        logoParams.bottomMargin = dp(8);
+        root.addView(logo, logoParams);
+
+        addText(root, "Donut4U Karaoke", GREEN, 27, true);
+
+        TextView subtitle = addText(
+                root,
+                createMode ? "Create your account" : "Welcome back",
+                Color.WHITE,
+                22,
+                true
+        );
+        subtitle.setPadding(0, dp(12), 0, dp(8));
+
+        addText(
+                root,
+                createMode
+                        ? "Create an account to start singing."
+                        : "Sign in to continue to karaoke.",
+                MUTED,
+                14,
+                false
+        );
+
+        addLabel(root, "EMAIL ADDRESS");
 
         emailField = new EditText(this);
         emailField.setSingleLine(true);
-        emailField.setHint("Email address");
+        emailField.setHint("you@example.com");
         emailField.setInputType(
                 InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
         );
+        emailField.setAutofillHints("emailAddress");
         styleField(emailField);
 
-        LinearLayout.LayoutParams emailParams = fullWidth(54);
-        emailParams.topMargin = dp(18);
+        LinearLayout.LayoutParams emailParams = fullWidth(dp(58));
+        emailParams.topMargin = dp(8);
+        emailParams.bottomMargin = dp(24);
         root.addView(emailField, emailParams);
+
+        addLabel(root, "PASSWORD");
 
         passwordField = new EditText(this);
         passwordField.setSingleLine(true);
-        passwordField.setHint("Password (minimum 6 characters)");
+        passwordField.setHint("At least 6 characters");
         passwordField.setInputType(
                 InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_VARIATION_PASSWORD
         );
+        passwordField.setAutofillHints("password");
         styleField(passwordField);
 
-        LinearLayout.LayoutParams passwordParams = fullWidth(54);
-        passwordParams.topMargin = dp(10);
+        LinearLayout.LayoutParams passwordParams = fullWidth(dp(58));
+        passwordParams.topMargin = dp(8);
+        passwordParams.bottomMargin = dp(12);
         root.addView(passwordField, passwordParams);
 
-        message = addText(root, "", Color.LTGRAY, 13, false);
+        message = addText(root, "", MUTED, 13, false);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(dp(4), dp(6), dp(4), dp(6));
 
         Button primary = makeButton(
                 createMode ? "CREATE ACCOUNT" : "SIGN IN"
         );
 
-        LinearLayout.LayoutParams primaryParams = fullWidth(52);
+        LinearLayout.LayoutParams primaryParams = fullWidth(dp(54));
         primaryParams.topMargin = dp(16);
         root.addView(primary, primaryParams);
 
@@ -123,8 +159,8 @@ public class AuthActivity extends Activity {
                         : "CREATE NEW ACCOUNT"
         );
 
-        LinearLayout.LayoutParams switchParams = fullWidth(48);
-        switchParams.topMargin = dp(8);
+        LinearLayout.LayoutParams switchParams = fullWidth(dp(50));
+        switchParams.topMargin = dp(12);
         root.addView(switchButton, switchParams);
 
         switchButton.setOnClickListener(v -> {
@@ -132,15 +168,37 @@ public class AuthActivity extends Activity {
             showLoginForm();
         });
 
-        Button resetButton = makeButton("RESET PASSWORD");
+        Button resetButton = makeButton("FORGOT PASSWORD?");
 
-        LinearLayout.LayoutParams resetParams = fullWidth(48);
+        LinearLayout.LayoutParams resetParams = fullWidth(dp(48));
         resetParams.topMargin = dp(8);
         root.addView(resetButton, resetParams);
 
         resetButton.setOnClickListener(v -> resetPassword());
 
+        addText(
+                root,
+                "Email verification is required before karaoke access.",
+                MUTED,
+                12,
+                false
+        );
+
         setContentView(scroll);
+    }
+
+    private void addLabel(LinearLayout root, String label) {
+        TextView view = new TextView(this);
+        view.setText(label);
+        view.setTextColor(GREEN);
+        view.setTextSize(12);
+        view.setTypeface(null, Typeface.BOLD);
+        view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+
+        LinearLayout.LayoutParams params = fullWidth(
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        root.addView(view, params);
     }
 
     private void createAccount() {
@@ -155,7 +213,6 @@ public class AuthActivity extends Activity {
 
         auth.createUserWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
-
                     if (!task.isSuccessful()) {
                         setMessage(errorMessage(task.getException()));
                         return;
@@ -164,13 +221,14 @@ public class AuthActivity extends Activity {
                     FirebaseUser user = auth.getCurrentUser();
 
                     if (user == null) {
-                        setMessage("Account created. Please sign in again.");
+                        setMessage(
+                                "Account created. Please sign in again."
+                        );
                         return;
                     }
 
                     user.sendEmailVerification()
                             .addOnCompleteListener(this, sendTask -> {
-
                                 if (sendTask.isSuccessful()) {
                                     showVerification(
                                             user,
@@ -198,7 +256,6 @@ public class AuthActivity extends Activity {
 
         auth.signInWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
-
                     if (!task.isSuccessful()) {
                         setMessage(errorMessage(task.getException()));
                         return;
@@ -226,7 +283,9 @@ public class AuthActivity extends Activity {
         }
 
         if (password.length() < 6) {
-            setMessage("Password must contain at least 6 characters.");
+            setMessage(
+                    "Password must contain at least 6 characters."
+            );
             return false;
         }
 
@@ -244,7 +303,7 @@ public class AuthActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(22), dp(28), dp(22), dp(28));
+        root.setPadding(dp(24), dp(32), dp(24), dp(28));
 
         scroll.addView(root);
 
@@ -254,44 +313,52 @@ public class AuthActivity extends Activity {
         addText(
                 root,
                 "Tap the verification link sent to:",
-                Color.LTGRAY, 14, false
+                MUTED,
+                14,
+                false
         );
 
         addText(
                 root,
                 user.getEmail() == null ? "" : user.getEmail(),
-                GREEN, 16, true
+                GREEN,
+                16,
+                true
         );
 
         addText(
                 root,
-                "After opening the link in your email, return here and tap "
-                        + "I VERIFIED MY EMAIL. Check your spam folder if needed.",
-                Color.LTGRAY, 14, false
+                "After opening the link in your email, return here and tap I VERIFIED MY EMAIL. Check your spam folder if needed.",
+                MUTED,
+                14,
+                false
         );
 
-        message = addText(root, initialMessage, Color.LTGRAY, 14, false);
+        message = addText(
+                root,
+                initialMessage,
+                MUTED,
+                14,
+                false
+        );
 
         Button checkButton = makeButton("I VERIFIED MY EMAIL");
-
-        LinearLayout.LayoutParams checkParams = fullWidth(52);
-        checkParams.topMargin = dp(16);
+        LinearLayout.LayoutParams checkParams = fullWidth(dp(54));
+        checkParams.topMargin = dp(20);
         root.addView(checkButton, checkParams);
-
         checkButton.setOnClickListener(v -> checkVerification());
 
         Button resendButton = makeButton("RESEND EMAIL");
-
-        LinearLayout.LayoutParams resendParams = fullWidth(48);
-        resendParams.topMargin = dp(8);
+        LinearLayout.LayoutParams resendParams = fullWidth(dp(50));
+        resendParams.topMargin = dp(12);
         root.addView(resendButton, resendParams);
-
         resendButton.setOnClickListener(v -> resendVerification());
 
-        Button signOutButton = makeButton("SIGN OUT / USE ANOTHER EMAIL");
-
-        LinearLayout.LayoutParams signOutParams = fullWidth(48);
-        signOutParams.topMargin = dp(8);
+        Button signOutButton = makeButton(
+                "SIGN OUT / USE ANOTHER EMAIL"
+        );
+        LinearLayout.LayoutParams signOutParams = fullWidth(dp(50));
+        signOutParams.topMargin = dp(12);
         root.addView(signOutButton, signOutParams);
 
         signOutButton.setOnClickListener(v -> {
@@ -314,23 +381,17 @@ public class AuthActivity extends Activity {
         setMessage("Checking email verification...");
 
         user.reload().addOnCompleteListener(this, task -> {
-
             FirebaseUser refreshedUser = auth.getCurrentUser();
 
             if (task.isSuccessful()
                     && refreshedUser != null
                     && refreshedUser.isEmailVerified()) {
-
                 openKaraoke();
-
             } else if (!task.isSuccessful()) {
-
                 setMessage(
                         "Could not check verification. Check your internet and try again."
                 );
-
             } else {
-
                 setMessage(
                         "Email is not verified yet. Open the email link, then try again."
                 );
@@ -350,7 +411,6 @@ public class AuthActivity extends Activity {
 
         user.sendEmailVerification()
                 .addOnCompleteListener(this, task -> {
-
                     if (task.isSuccessful()) {
                         setMessage(
                                 "Email sent. Check your inbox and spam folder."
@@ -371,7 +431,6 @@ public class AuthActivity extends Activity {
 
         auth.sendPasswordResetEmail(email)
                 .addOnCompleteListener(this, task -> {
-
                     if (task.isSuccessful()) {
                         setMessage(
                                 "If the account exists, a password-reset email has been sent."
@@ -408,7 +467,7 @@ public class AuthActivity extends Activity {
         view.setTextColor(color);
         view.setTextSize(size);
         view.setGravity(Gravity.CENTER);
-        view.setPadding(dp(4), dp(6), dp(4), dp(6));
+        view.setPadding(dp(4), dp(8), dp(4), dp(8));
 
         if (bold) {
             view.setTypeface(null, Typeface.BOLD);
@@ -420,10 +479,17 @@ public class AuthActivity extends Activity {
 
     private void styleField(EditText field) {
         field.setTextColor(Color.WHITE);
-        field.setHintTextColor(Color.LTGRAY);
-        field.setTextSize(15);
-        field.setPadding(dp(12), 0, dp(12), 0);
-        field.setBackground(roundDrawable(PANEL, dp(8)));
+        field.setHintTextColor(MUTED);
+        field.setTextSize(16);
+        field.setSingleLine(true);
+        field.setPadding(dp(16), 0, dp(16), 0);
+        field.setBackground(roundDrawable(PANEL, dp(10)));
+        field.setMinHeight(dp(58));
+        field.setSelectAllOnFocus(false);
+
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            field.setTextCursorDrawable(null);
+        }
     }
 
     private Button makeButton(String label) {
@@ -433,7 +499,10 @@ public class AuthActivity extends Activity {
         button.setTextSize(13);
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
-        button.setBackground(roundDrawable(GREEN, dp(8)));
+        button.setMinHeight(dp(48));
+        button.setPadding(dp(12), dp(8), dp(12), dp(8));
+        button.setBackground(roundDrawable(GREEN, dp(10)));
+        button.setStateListAnimator(null);
         return button;
     }
 
