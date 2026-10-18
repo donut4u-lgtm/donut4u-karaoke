@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "382543270450",
+    "project_id": "donut4u-karaoke-39967",
+    "storage_bucket": "donut4u-karaoke-39967.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:382543270450:android:7a4debc142e4e81714e22b",
+        "android_client_info": {
+          "package_name": "com.donut4u.karaoke"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBklr5ZBlgqxzKIU8db7jtvBKHg7Ki-S4s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
