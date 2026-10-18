@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -22,6 +21,7 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -64,6 +64,8 @@ public class OnlineSongActivity extends Activity {
     private LinearLayout playbackScreen;
     private FrameLayout playerHost;
     private WebView player;
+
+    private boolean donationScreenVisible = false;
 
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor();
@@ -135,8 +137,72 @@ public class OnlineSongActivity extends Activity {
 
         searchButton.setOnClickListener(v -> searchVideos());
 
+        // Compact donation section on the main screen.
+        LinearLayout donationCard = new LinearLayout(this);
+        donationCard.setOrientation(LinearLayout.HORIZONTAL);
+        donationCard.setGravity(Gravity.CENTER_VERTICAL);
+        donationCard.setPadding(
+                dp(12), dp(8), dp(8), dp(8));
+        donationCard.setBackground(round(PANEL, dp(10)));
+
+        LinearLayout.LayoutParams donationCardParams =
+                fullWidthWrap();
+        donationCardParams.topMargin = dp(12);
+
+        root.addView(donationCard, donationCardParams);
+
+        LinearLayout donationTextContainer =
+                new LinearLayout(this);
+        donationTextContainer.setOrientation(
+                LinearLayout.VERTICAL);
+
+        LinearLayout.LayoutParams donationTextParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f);
+
+        donationCard.addView(
+                donationTextContainer, donationTextParams);
+
+        TextView donationTitle = new TextView(this);
+        donationTitle.setText("SUPPORT DONUT4U KARAOKE");
+        donationTitle.setTextColor(GREEN);
+        donationTitle.setTextSize(12);
+        donationTitle.setTypeface(null, Typeface.BOLD);
+
+        donationTextContainer.addView(
+                donationTitle, fullWidthWrap());
+
+        TextView donationSubtitle = new TextView(this);
+        donationSubtitle.setText("Help keep it running and growing!");
+        donationSubtitle.setTextColor(MUTED);
+        donationSubtitle.setTextSize(10);
+        donationSubtitle.setPadding(0, dp(3), 0, 0);
+
+        donationTextContainer.addView(
+                donationSubtitle, fullWidthWrap());
+
+        Button donateNowButton = makeButton("DONATE NOW");
+        donateNowButton.setTextSize(11);
+        donateNowButton.setPadding(dp(8), 0, dp(8), 0);
+
+        LinearLayout.LayoutParams donateButtonParams =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(42));
+
+        donateButtonParams.leftMargin = dp(8);
+
+        donationCard.addView(
+                donateNowButton, donateButtonParams);
+
+        donateNowButton.setOnClickListener(
+                v -> showDonationScreen());
+
         status = new TextView(this);
-        status.setText("Search for a song to see karaoke videos.");
+        status.setText(
+                "Search for a song to see karaoke videos.");
         status.setTextColor(MUTED);
         status.setTextSize(14);
         status.setPadding(0, dp(14), 0, dp(12));
@@ -144,7 +210,8 @@ public class OnlineSongActivity extends Activity {
         root.addView(status, fullWidthWrap());
 
         resultsContainer = new LinearLayout(this);
-        resultsContainer.setOrientation(LinearLayout.VERTICAL);
+        resultsContainer.setOrientation(
+                LinearLayout.VERTICAL);
 
         root.addView(resultsContainer, fullWidthWrap());
 
@@ -162,6 +229,107 @@ public class OnlineSongActivity extends Activity {
         );
     }
 
+    // Separate donation screen displaying the GCash QR image.
+    private void showDonationScreen() {
+        donationScreenVisible = true;
+
+        showSystemBars();
+
+        ScrollView outer = new ScrollView(this);
+        outer.setFillViewport(true);
+        outer.setBackgroundColor(BG);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setPadding(dp(20), dp(20), dp(20), dp(20));
+
+        outer.addView(root);
+
+        TextView heading = new TextView(this);
+        heading.setText("SUPPORT DONUT4U KARAOKE");
+        heading.setTextColor(GREEN);
+        heading.setTextSize(22);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        heading.setPadding(0, dp(8), 0, dp(16));
+
+        root.addView(heading, fullWidthWrap());
+
+        TextView message = new TextView(this);
+        message.setText(
+                "Help keep Donut4U Karaoke running and growing!");
+        message.setTextColor(WHITE);
+        message.setTextSize(15);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, 0, 0, dp(18));
+
+        root.addView(message, fullWidthWrap());
+
+        TextView scanHeading = new TextView(this);
+        scanHeading.setText("SCAN TO DONATE VIA GCASH");
+        scanHeading.setTextColor(GREEN);
+        scanHeading.setTextSize(17);
+        scanHeading.setTypeface(null, Typeface.BOLD);
+        scanHeading.setGravity(Gravity.CENTER);
+        scanHeading.setPadding(0, dp(8), 0, dp(12));
+
+        root.addView(scanHeading, fullWidthWrap());
+
+        // Load the existing JPG from res/drawable/gcash_qr.jpg.
+        ImageView qrImage = new ImageView(this);
+        qrImage.setImageResource(R.drawable.gcash_qr);
+        qrImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        qrImage.setAdjustViewBounds(true);
+        qrImage.setBackgroundColor(Color.WHITE);
+        qrImage.setPadding(dp(6), dp(6), dp(6), dp(6));
+        qrImage.setContentDescription(
+                "GCash donation QR code");
+
+        LinearLayout.LayoutParams qrParams =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(300));
+
+        qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+        qrParams.bottomMargin = dp(18);
+
+        root.addView(qrImage, qrParams);
+
+        TextView instruction = new TextView(this);
+        instruction.setText(
+                "Open GCash on another phone and scan the QR code.");
+        instruction.setTextColor(MUTED);
+        instruction.setTextSize(13);
+        instruction.setGravity(Gravity.CENTER);
+        instruction.setPadding(0, 0, 0, dp(18));
+
+        root.addView(instruction, fullWidthWrap());
+
+        Button backButton = makeButton("BACK TO KARAOKE");
+
+        LinearLayout.LayoutParams backParams =
+                fullWidth(dp(50));
+
+        backParams.topMargin = dp(6);
+
+        root.addView(backButton, backParams);
+
+        backButton.setOnClickListener(
+                v -> returnFromDonation());
+
+        setContentView(outer);
+    }
+
+    private void returnFromDonation() {
+        donationScreenVisible = false;
+        showSystemBars();
+
+        if (searchScreen != null) {
+            setContentView(searchScreen);
+        }
+    }
+
     private String normalizedQuery(String query) {
         String result = query.trim().toLowerCase();
 
@@ -177,7 +345,8 @@ public class OnlineSongActivity extends Activity {
 
         try {
             SharedPreferences prefs =
-                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
+                    getSharedPreferences(
+                            CACHE_NAME, MODE_PRIVATE);
 
             JSONObject root = new JSONObject();
             JSONArray array = new JSONArray();
@@ -204,7 +373,8 @@ public class OnlineSongActivity extends Activity {
     private ArrayList<Video> loadSearchCache(String query) {
         try {
             SharedPreferences prefs =
-                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
+                    getSharedPreferences(
+                            CACHE_NAME, MODE_PRIVATE);
 
             String saved = prefs.getString(query, null);
 
@@ -280,7 +450,8 @@ public class OnlineSongActivity extends Activity {
         searchButton.setEnabled(false);
         resultsContainer.removeAllViews();
 
-        ArrayList<Video> cached = loadSearchCache(searchQuery);
+        ArrayList<Video> cached =
+                loadSearchCache(searchQuery);
 
         if (cached != null && !cached.isEmpty()) {
             status.setText("Showing saved search results.");
@@ -306,7 +477,8 @@ public class OnlineSongActivity extends Activity {
         try {
             encodedQuery = URLEncoder.encode(
                     searchQuery, "UTF-8");
-            encodedKey = URLEncoder.encode(apiKey, "UTF-8");
+            encodedKey = URLEncoder.encode(
+                    apiKey, "UTF-8");
 
         } catch (Exception e) {
             searchButton.setEnabled(true);
@@ -355,7 +527,8 @@ public class OnlineSongActivity extends Activity {
 
                     String message = errorObject == null
                             ? ""
-                            : errorObject.optString("message", "");
+                            : errorObject.optString(
+                                    "message", "");
 
                     throw new Exception(
                             message.isEmpty()
@@ -369,7 +542,8 @@ public class OnlineSongActivity extends Activity {
 
                 if (items != null) {
                     for (int i = 0; i < items.length(); i++) {
-                        JSONObject item = items.optJSONObject(i);
+                        JSONObject item =
+                                items.optJSONObject(i);
 
                         if (item == null) {
                             continue;
@@ -474,12 +648,14 @@ public class OnlineSongActivity extends Activity {
     private void addVideoResult(Video video) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setPadding(
+                dp(14), dp(14), dp(14), dp(14));
         card.setBackground(round(PANEL, dp(10)));
         card.setClickable(true);
         card.setFocusable(true);
 
-        LinearLayout.LayoutParams cardParams = fullWidthWrap();
+        LinearLayout.LayoutParams cardParams =
+                fullWidthWrap();
         cardParams.bottomMargin = dp(10);
 
         resultsContainer.addView(card, cardParams);
@@ -513,6 +689,8 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void playVideo(Video video) {
+        donationScreenVisible = false;
+
         destroyPlayer();
         hideSystemBars();
 
@@ -736,6 +914,8 @@ public class OnlineSongActivity extends Activity {
     public void onBackPressed() {
         if (player != null) {
             returnToResults();
+        } else if (donationScreenVisible) {
+            returnFromDonation();
         } else {
             super.onBackPressed();
         }
