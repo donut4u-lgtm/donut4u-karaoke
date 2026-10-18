@@ -22,7 +22,14 @@ jobs:
           gradle-version: '8.10.2'
 
       - name: Build APK
-        run: gradle assembleDebug --stacktrace --console=plain
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          if [ -z "$YOUTUBE_API_KEY" ]; then
+            echo "Missing YOUTUBE_API_KEY repository secret"
+            exit 1
+          fi
+          gradle assembleDebug --stacktrace --console=plain
 
       - name: List APK files
         if: always()
