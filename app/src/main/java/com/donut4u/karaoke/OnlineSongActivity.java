@@ -117,8 +117,8 @@ public class OnlineSongActivity extends Activity {
 
         TextView apiHelp = new TextView(this);
         apiHelp.setText(
-                "Enable YouTube Data API v3 in Google Cloud Console. " +
-                "Your API key is saved in this app on this device."
+                "Enable YouTube Data API v3 in Google Cloud Console. "
+                + "The key is saved on this device when you search."
         );
         apiHelp.setTextColor(MUTED);
         apiHelp.setTextSize(12);
@@ -143,8 +143,8 @@ public class OnlineSongActivity extends Activity {
 
         status = new TextView(this);
         status.setText(
-                "Search YouTube for karaoke videos. " +
-                "Choose a result to play it."
+                "Search YouTube for karaoke videos. "
+                + "Choose a result to play it."
         );
         status.setTextColor(MUTED);
         status.setTextSize(13);
@@ -178,9 +178,7 @@ public class OnlineSongActivity extends Activity {
         Button back = makeButton("BACK TO KARAOKE PLAYER");
         back.setOnClickListener(v -> finish());
 
-        LinearLayout.LayoutParams backParams =
-                fullWidth(dp(46));
-
+        LinearLayout.LayoutParams backParams = fullWidth(dp(46));
         backParams.topMargin = dp(18);
         root.addView(back, backParams);
 
@@ -214,11 +212,16 @@ public class OnlineSongActivity extends Activity {
                 .putString("youtube_api_key", apiKey)
                 .apply();
 
-        ((InputMethodManager) getSystemService(
+        Object service = getSystemService(
                 Context.INPUT_METHOD_SERVICE
-        )).hideSoftInputFromWindow(
-                searchBox.getWindowToken(), 0
         );
+
+        if (service instanceof InputMethodManager) {
+            ((InputMethodManager) service)
+                    .hideSoftInputFromWindow(
+                            searchBox.getWindowToken(), 0
+                    );
+        }
 
         final int generation = ++searchGeneration;
 
@@ -276,8 +279,7 @@ public class OnlineSongActivity extends Activity {
 
                     String message = errorObject == null
                             ? ""
-                            : errorObject.optString(
-                                    "message", "");
+                            : errorObject.optString("message", "");
 
                     throw new Exception(
                             message.isEmpty()
@@ -298,9 +300,7 @@ public class OnlineSongActivity extends Activity {
                             continue;
                         }
 
-                        JSONObject idObject =
-                                item.optJSONObject("id");
-
+                        JSONObject idObject = item.optJSONObject("id");
                         JSONObject snippet =
                                 item.optJSONObject("snippet");
 
@@ -374,8 +374,8 @@ public class OnlineSongActivity extends Activity {
 
                 if (found.isEmpty()) {
                     status.setText(
-                            "No embeddable videos found. " +
-                            "Try another title or artist."
+                            "No embeddable videos found. "
+                            + "Try another title or artist."
                     );
                     return;
                 }
@@ -421,12 +421,16 @@ public class OnlineSongActivity extends Activity {
         card.addView(play, fullWidth(dp(44)));
     }
 
+    /*
+     * YouTube embedded playback configuration.
+     * Use a valid HTTPS base URL identifying this app,
+     * rather than using youtube.com as the HTML base URL.
+     */
     private void playVideo(Video video) {
         destroyPlayer();
 
         resultsContainer.setVisibility(View.GONE);
         playerPanel.setVisibility(View.VISIBLE);
-
         status.setText("Selected: " + video.title);
 
         player = new WebView(this);
@@ -436,6 +440,9 @@ public class OnlineSongActivity extends Activity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setSupportZoom(false);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
 
         player.setWebChromeClient(new WebChromeClient());
         player.setWebViewClient(new WebViewClient());
@@ -443,41 +450,56 @@ public class OnlineSongActivity extends Activity {
         LinearLayout.LayoutParams playerParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(230)
+                        dp(270)
                 );
 
         playerParams.topMargin = dp(8);
         playerPanel.addView(player, playerParams);
 
         String html =
-                "<!doctype html><html><head>"
+                "<!doctype html>"
+                + "<html>"
+                + "<head>"
                 + "<meta name=\"viewport\" "
                 + "content=\"width=device-width, initial-scale=1\">"
-                + "</head><body style=\"margin:0;background:#000\">"
-                + "<iframe width=\"100%\" height=\"230\" "
+                + "<meta name=\"referrer\" "
+                + "content=\"strict-origin-when-cross-origin\">"
+                + "<style>"
+                + "html,body{margin:0;padding:0;background:#000;"
+                + "width:100%;height:100%;overflow:hidden;}"
+                + "iframe{border:0;width:100%;height:100%;}"
+                + "</style>"
+                + "</head>"
+                + "<body>"
+                + "<iframe "
                 + "src=\"https://www.youtube.com/embed/"
                 + video.id
-                + "?playsinline=1&controls=1&rel=0\" "
+                + "?playsinline=1&controls=1&rel=0"
+                + "&origin=https%3A%2F%2Fcom.donut4u.karaoke\" "
                 + "title=\"YouTube karaoke player\" "
-                + "frameborder=\"0\" "
                 + "allow=\"accelerometer; autoplay; clipboard-write; "
                 + "encrypted-media; gyroscope; picture-in-picture; "
                 + "web-share\" "
                 + "referrerpolicy=\"strict-origin-when-cross-origin\" "
-                + "allowfullscreen></iframe>"
-                + "</body></html>";
+                + "allowfullscreen>"
+                + "</iframe>"
+                + "</body>"
+                + "</html>";
+
+        String baseUrl = "https://com.donut4u.karaoke/";
 
         player.loadDataWithBaseURL(
-                "https://www.youtube.com",
+                baseUrl,
                 html,
                 "text/html",
                 "UTF-8",
-                null
+                baseUrl
         );
     }
 
     private void destroyPlayer() {
         if (player != null) {
+            player.stopLoading();
             player.loadUrl("about:blank");
             playerPanel.removeView(player);
             player.destroy();
