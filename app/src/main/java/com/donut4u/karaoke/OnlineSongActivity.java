@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -25,11 +24,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class OnlineSongActivity extends Activity {
 
@@ -37,6 +40,17 @@ public class OnlineSongActivity extends Activity {
     private static final int DARK = Color.rgb(22, 22, 22);
     private static final int WHITE = Color.WHITE;
     private static final int YELLOW = Color.rgb(255, 220, 50);
+
+    /*
+     * UltraStar-Deluxe community song repository.
+     * Songs use UltraStar text files containing metadata,
+     * backing-track references and timed lyric information.
+     */
+    private static final String CATALOG_TREE =
+            "https://api.github.com/repos/UltraStar-Deluxe/songs-stream/git/trees/main?recursive=1";
+
+    private static final String RAW_BASE =
+            "https://raw.githubusercontent.com/UltraStar-Deluxe/songs-stream/main/";
 
     private EditText searchBox;
     private LinearLayout resultsContainer;
@@ -47,6 +61,16 @@ public class OnlineSongActivity extends Activity {
             Executors.newSingleThreadExecutor();
 
     private volatile boolean closing = false;
+    private int searchGeneration = 0;
+
+    private static class KaraokeSong {
+        String title;
+        String artist;
+        String audioUrl;
+        String coverUrl;
+        String lyricsLrc;
+        String sourcePath;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -70,51 +94,57 @@ public class OnlineSongActivity extends Activity {
         root.addView(heading);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("SEARCH FREE-LICENSED AUDIO");
+        subtitle.setText("KARAOKE SONGBOOK");
         subtitle.setTextColor(YELLOW);
-        subtitle.setTextSize(17);
+        subtitle.setTextSize(18);
         subtitle.setTypeface(null, Typeface.BOLD);
         subtitle.setGravity(Gravity.CENTER);
         root.addView(subtitle);
 
         TextView explanation = new TextView(this);
         explanation.setText(
-                "Search audio available from Internet Archive. " +
-                "Only results with a recognized public-domain or " +
-                "Creative Commons BY licence and a playable audio file " +
-                "are offered. Popular commercial karaoke tracks may " +
-                "not be available."
+                "Search karaoke song packages by title or artist. " +
+                "Songs need a playable backing track and timed lyrics. " +
+                "This community catalog is not a complete commercial song library."
         );
         explanation.setTextColor(Color.LTGRAY);
-        explanation.setTextSize(13);
+        explanation.setTextSize(12);
         explanation.setGravity(Gravity.CENTER);
-        explanation.setPadding(0, dp(8), 0, dp(8));
+        explanation.setPadding(0, dp(7), 0, dp(8));
         root.addView(explanation);
 
         searchBox = new EditText(this);
         searchBox.setSingleLine(true);
-        searchBox.setHint("Song title or artist");
+        searchBox.setHint("Search karaoke song or artist");
         searchBox.setTextColor(WHITE);
         searchBox.setHintTextColor(Color.LTGRAY);
         root.addView(searchBox, fullWidth(dp(50)));
 
-        searchButton = makeButton("SEARCH AUDIO");
+        searchButton = makeButton("SEARCH KARAOKE SONGS");
         searchButton.setOnClickListener(v -> searchSongs());
         root.addView(searchButton, fullWidth(dp(48)));
 
         progressBar = new ProgressBar(this);
         progressBar.setIndeterminate(true);
         progressBar.setVisibility(View.GONE);
+
         root.addView(progressBar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(34)
+        ));
 
         ScrollView scroll = new ScrollView(this);
+
         resultsContainer = new LinearLayout(this);
         resultsContainer.setOrientation(LinearLayout.VERTICAL);
+
         scroll.addView(resultsContainer);
 
         root.addView(scroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1
+        ));
 
         Button back = makeButton("BACK TO KARAOKE PLAYER");
         back.setOnClickListener(v -> finish());
@@ -122,302 +152,503 @@ public class OnlineSongActivity extends Activity {
 
         setContentView(root);
 
-        addMessage("Enter a song title or artist, then tap SEARCH AUDIO.");
-    }
-
-    private LinearLayout.LayoutParams fullWidth(int height) {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, height);
-    }
-
-    private Button makeButton(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextColor(WHITE);
-        button.setTextSize(12);
-        button.setBackgroundColor(GREEN);
-        return button;
+        addMessage(
+                "Enter a song title or artist to search the karaoke songbook."
+        );
     }
 
     private void searchSongs() {
         String query = searchBox.getText().toString().trim();
 
         if (query.isEmpty()) {
-            Toast.makeText(this, "Enter a song title or artist.",
-                    Toast.LENGTH_SHORT).show();
+            toast("Enter a song title or artist.");
             return;
         }
+
+        final int generation = ++searchGeneration;
+        final String[] terms = normalizedTerms(query);
 
         searchButton.setEnabled(false);
         progressBar.setVisibility(View.VISIBLE);
         resultsContainer.removeAllViews();
-        addMessage("Searching audio catalogue...");
+
+        addMessage("Searching the karaoke songbook...");
 
         executor.execute(() -> {
-            JSONArray documents = new JSONArray();
+            ArrayList<KaraokeSong> matches = new ArrayList<>();
             String error = null;
+
             HttpURLConnection connection = null;
 
             try {
-                String clean = query
-                        .replace("\\", " ")
-                        .replace("\"", " ")
-                        .replace(":", " ")
-                        .replace("(", " ")
-                        .replace(")", " ");
+                connection = openConnection(CATALOG_TREE);
 
-                String expression = "mediatype:audio AND (title:(\""
-                        + clean + "\") OR creator:(\"" + clean + "\"))";
+                JSONObject treeJson = new JSONObject(
+                        readAll(connection.getInputStream())
+                );
 
-                String api = "https://archive.org/advancedsearch.php?q="
-                        + URLEncoder.encode(expression, "UTF-8")
-                        + "&fl[]=identifier&fl[]=title&fl[]=creator"
-                        + "&rows=20&page=1&output=json";
+                JSONArray tree = treeJson.optJSONArray("tree");
 
-                connection = (HttpURLConnection)
-                        new URL(api).openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(12000);
-                connection.setReadTimeout(15000);
-                connection.setRequestProperty(
-                        "User-Agent", "Donut4U-Karaoke/1.0");
-
-                int status = connection.getResponseCode();
-                if (status != HttpURLConnection.HTTP_OK) {
-                    throw new Exception("HTTP " + status);
+                if (tree == null) {
+                    throw new Exception("The songbook index was not returned.");
                 }
 
-                JSONObject response = new JSONObject(
-                        readAll(connection.getInputStream()));
+                ArrayList<String> candidatePaths = new ArrayList<>();
 
-                JSONObject responseObject =
-                        response.optJSONObject("response");
+                for (int i = 0; i < tree.length(); i++) {
+                    if (closing || generation != searchGeneration) {
+                        return;
+                    }
 
-                if (responseObject != null) {
-                    JSONArray docs = responseObject.optJSONArray("docs");
-                    if (docs != null) documents = docs;
+                    JSONObject entry = tree.optJSONObject(i);
+
+                    if (entry == null) {
+                        continue;
+                    }
+
+                    if (!"blob".equals(entry.optString("type"))) {
+                        continue;
+                    }
+
+                    String path = entry.optString("path", "");
+                    String lowerPath = path.toLowerCase(Locale.ROOT);
+
+                    if (!lowerPath.endsWith(".txt")) {
+                        continue;
+                    }
+
+                    if (lowerPath.endsWith("readme.txt")
+                            || lowerPath.contains("/license")) {
+                        continue;
+                    }
+
+                    if (matchesAllTerms(lowerPath, terms)) {
+                        candidatePaths.add(path);
+                    }
                 }
+
+                /*
+                 * Avoid downloading hundreds of files for a single
+                 * search. The catalog search can be expanded later
+                 * with a dedicated cached index.
+                 */
+                int checked = 0;
+
+                for (String path : candidatePaths) {
+                    if (closing || generation != searchGeneration) {
+                        return;
+                    }
+
+                    if (checked >= 40) {
+                        break;
+                    }
+
+                    checked++;
+
+                    try {
+                        KaraokeSong song = fetchSong(path);
+
+                        if (song != null
+                                && matchesAllTerms(
+                                (song.artist + " " + song.title)
+                                        .toLowerCase(Locale.ROOT),
+                                terms)) {
+                            matches.add(song);
+                        }
+                    } catch (Exception ignored) {
+                        // Ignore an invalid individual song package.
+                    }
+                }
+
+                Collections.sort(
+                        matches,
+                        Comparator.comparing(
+                                song -> (song.artist + " " + song.title)
+                                        .toLowerCase(Locale.ROOT)
+                        )
+                );
+
             } catch (Exception e) {
                 error = e.getMessage();
+
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
 
-            final JSONArray found = documents;
             final String searchError = error;
+            final ArrayList<KaraokeSong> found = matches;
 
             runOnUiThread(() -> {
-                if (closing || isFinishing()) return;
+                if (closing || isFinishing()
+                        || generation != searchGeneration) {
+                    return;
+                }
 
                 resultsContainer.removeAllViews();
 
                 if (searchError != null) {
                     addMessage(
-                            "Search failed. Check your internet connection.");
+                            "Could not load the songbook. " +
+                            "Check your internet connection and try again."
+                    );
                     finishSearch();
                     return;
                 }
 
-                if (found.length() == 0) {
+                if (found.isEmpty()) {
                     addMessage(
-                            "No results found. Try a shorter title or artist.");
+                            "No matching karaoke song was found. " +
+                            "Try a shorter title or artist."
+                    );
                     finishSearch();
                     return;
                 }
 
-                addMessage("Checking licences and playable files...");
+                addMessage("KARAOKE SONGS FOUND: " + found.size());
 
-                for (int i = 0; i < found.length(); i++) {
-                    JSONObject doc = found.optJSONObject(i);
-                    if (doc == null) continue;
-
-                    String identifier =
-                            doc.optString("identifier", "");
-                    String title = doc.optString("title", identifier);
-                    String creator = doc.optString("creator", "");
-
-                    if (!identifier.isEmpty()) {
-                        checkItem(identifier, title, creator);
-                    }
+                for (KaraokeSong song : found) {
+                    addSongResult(song);
                 }
+
+                finishSearch();
             });
         });
     }
 
-    private void checkItem(
-            String identifier, String title, String creator) {
+    private KaraokeSong fetchSong(String path) throws Exception {
+        String encodedPath = Uri.encode(path, "/");
 
-        executor.execute(() -> {
-            HttpURLConnection connection = null;
-            String audioUrl = null;
-            String licence = "";
+        HttpURLConnection connection = null;
 
-            try {
-                URL metadataUrl = new URL(
-                        "https://archive.org/metadata/"
-                                + Uri.encode(identifier));
+        try {
+            connection = openConnection(RAW_BASE + encodedPath);
 
-                connection = (HttpURLConnection)
-                        metadataUrl.openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(10000);
-                connection.setReadTimeout(12000);
-                connection.setRequestProperty(
-                        "User-Agent", "Donut4U-Karaoke/1.0");
+            String source = readAll(connection.getInputStream());
 
-                if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                    JSONObject metadataResponse = new JSONObject(
-                            readAll(connection.getInputStream()));
+            String title = header(source, "TITLE");
+            String artist = header(source, "ARTIST");
+            String audio = header(source, "MP3");
 
-                    JSONObject metadata =
-                            metadataResponse.optJSONObject("metadata");
-
-                    if (metadata != null) {
-                        licence = metadata.optString("licenseurl", "");
-                    }
-
-                    if (isAllowedLicence(licence)) {
-                        JSONArray files =
-                                metadataResponse.optJSONArray("files");
-
-                        if (files != null) {
-                            for (int i = 0; i < files.length(); i++) {
-                                JSONObject file = files.optJSONObject(i);
-                                if (file == null) continue;
-
-                                String name = file.optString("name", "");
-                                String format = file.optString("format", "");
-
-                                if (isPlayableAudio(name, format)) {
-                                    audioUrl = "https://archive.org/download/"
-                                            + Uri.encode(identifier) + "/"
-                                            + Uri.encode(name);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            } finally {
-                if (connection != null) connection.disconnect();
+            if (title.isEmpty()
+                    || artist.isEmpty()
+                    || !isHttpUrl(audio)) {
+                return null;
             }
 
-            final String playableUrl = audioUrl;
-            final String actualLicence = licence;
+            String lyrics = convertUltraStarToLrc(source);
 
-            runOnUiThread(() -> {
-                if (closing || isFinishing()) return;
+            /*
+             * A song without timed lyrics is not presented as
+             * a synchronized karaoke result.
+             */
+            if (lyrics.isEmpty()) {
+                return null;
+            }
 
-                if (playableUrl != null
-                        && isAllowedLicence(actualLicence)) {
-                    addSongResult(title, creator,
-                            actualLicence, playableUrl);
+            KaraokeSong song = new KaraokeSong();
+
+            song.title = title;
+            song.artist = artist;
+            song.audioUrl = audio;
+            song.coverUrl = header(source, "COVER");
+            song.lyricsLrc = lyrics;
+            song.sourcePath = path;
+
+            return song;
+
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private String convertUltraStarToLrc(String source) {
+        double bpm = parseNumber(header(source, "BPM"), 0);
+        double gap = parseNumber(header(source, "GAP"), 0);
+
+        if (bpm <= 0) {
+            return "";
+        }
+
+        StringBuilder result = new StringBuilder();
+        StringBuilder lyricLine = new StringBuilder();
+
+        long lineStartBeat = -1;
+
+        for (String rawLine : source.split("\\r?\\n")) {
+            String line = rawLine.trim();
+
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+
+            if (line.startsWith("-")) {
+                appendLrcLine(
+                        result,
+                        lyricLine,
+                        lineStartBeat,
+                        bpm,
+                        gap
+                );
+
+                lyricLine.setLength(0);
+                lineStartBeat = -1;
+                continue;
+            }
+
+            if (line.startsWith("E")) {
+                appendLrcLine(
+                        result,
+                        lyricLine,
+                        lineStartBeat,
+                        bpm,
+                        gap
+                );
+                break;
+            }
+
+            if (line.startsWith(":")
+                    || line.startsWith("F")
+                    || line.startsWith("R")
+                    || line.startsWith("G")) {
+
+                String note = line.substring(1).trim();
+
+                Matcher matcher = Pattern.compile(
+                        "^(\\d+)\\s+\\d+\\s+-?\\d+\\s+(.*)$"
+                ).matcher(note);
+
+                if (!matcher.matches()) {
+                    continue;
                 }
 
-                finishSearchIfIdle();
-            });
-        });
+                try {
+                    long beat = Long.parseLong(matcher.group(1));
+                    String words = matcher.group(2);
+
+                    if (lineStartBeat < 0) {
+                        lineStartBeat = beat;
+                    }
+
+                    lyricLine.append(words.replace("~", ""));
+
+                } catch (Exception ignored) {
+                    // Ignore malformed lyric lines.
+                }
+            }
+        }
+
+        appendLrcLine(
+                result,
+                lyricLine,
+                lineStartBeat,
+                bpm,
+                gap
+        );
+
+        return result.toString();
     }
 
-    private boolean isAllowedLicence(String licence) {
-        if (licence == null) return false;
+    private void appendLrcLine(
+            StringBuilder result,
+            StringBuilder lyricLine,
+            long startBeat,
+            double bpm,
+            double gap) {
 
-        String value = licence.toLowerCase(Locale.ROOT);
+        String text = lyricLine.toString().trim();
 
-        return value.contains("creativecommons.org/licenses/by/")
-                || value.contains("creativecommons.org/publicdomain/");
+        if (text.isEmpty() || startBeat < 0) {
+            return;
+        }
+
+        long millis = Math.max(
+                0,
+                Math.round(gap + startBeat * 60000.0 / bpm)
+        );
+
+        long minutes = millis / 60000;
+        long seconds = (millis % 60000) / 1000;
+        long centiseconds = (millis % 1000) / 10;
+
+        result.append(
+                String.format(
+                        Locale.ROOT,
+                        "[%02d:%02d.%02d]",
+                        minutes,
+                        seconds,
+                        centiseconds
+                )
+        );
+
+        result.append(text).append('\n');
     }
 
-    private boolean isPlayableAudio(String name, String format) {
-        String lowerName = name.toLowerCase(Locale.ROOT);
-        String lowerFormat = format.toLowerCase(Locale.ROOT);
+    private double parseNumber(String value, double fallback) {
+        if (value == null || value.trim().isEmpty()) {
+            return fallback;
+        }
 
-        boolean extension = lowerName.endsWith(".mp3")
-                || lowerName.endsWith(".wav")
-                || lowerName.endsWith(".m4a")
-                || lowerName.endsWith(".aac")
-                || lowerName.endsWith(".ogg")
-                || lowerName.endsWith(".opus");
-
-        boolean audioFormat = lowerFormat.contains("mp3")
-                || lowerFormat.contains("mpeg")
-                || lowerFormat.contains("wave")
-                || lowerFormat.contains("wav")
-                || lowerFormat.contains("aac")
-                || lowerFormat.contains("ogg")
-                || lowerFormat.contains("audio");
-
-        return extension && audioFormat
-                && !lowerName.contains("sample")
-                && !lowerName.endsWith("_thumb.mp3");
+        try {
+            return Double.parseDouble(
+                    value.trim().replace(',', '.')
+            );
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
-    private void addSongResult(
-            String title, String creator,
-            String licence, String audioUrl) {
+    private String header(String source, String key) {
+        Pattern pattern = Pattern.compile(
+                "(?im)^#" + Pattern.quote(key) + ":(.*)$"
+        );
 
-        String cleanTitle = title == null || title.trim().isEmpty()
-                ? "Untitled audio" : title.trim();
+        Matcher matcher = pattern.matcher(source);
 
-        Button play = makeButton("▶ PLAY: " + cleanTitle);
+        return matcher.find()
+                ? matcher.group(1).trim()
+                : "";
+    }
+
+    private String[] normalizedTerms(String query) {
+        String cleaned = query.toLowerCase(Locale.ROOT)
+                .replace("karaoke", " ")
+                .replace("instrumental", " ")
+                .replace("minus one", " ")
+                .replace("videoke", " ");
+
+        String[] split = cleaned.split("[^a-z0-9]+");
+
+        ArrayList<String> terms = new ArrayList<>();
+
+        for (String term : split) {
+            if (term.length() > 1) {
+                terms.add(term);
+            }
+        }
+
+        return terms.toArray(new String[0]);
+    }
+
+    private boolean matchesAllTerms(
+            String value,
+            String[] terms) {
+
+        if (terms.length == 0) {
+            return true;
+        }
+
+        for (String term : terms) {
+            if (!value.contains(term)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean isHttpUrl(String value) {
+        try {
+            Uri uri = Uri.parse(value);
+
+            String scheme = uri.getScheme();
+
+            return uri.getHost() != null
+                    && ("https".equalsIgnoreCase(scheme)
+                    || "http".equalsIgnoreCase(scheme));
+
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void addSongResult(KaraokeSong song) {
+        Button play = makeButton("▶  " + song.title);
+
         play.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         play.setPadding(dp(8), 0, dp(8), 0);
 
         LinearLayout.LayoutParams buttonParams =
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT);
-        buttonParams.bottomMargin = dp(3);
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+
+        buttonParams.bottomMargin = dp(2);
+
         resultsContainer.addView(play, buttonParams);
 
-        String credit = creator == null || creator.trim().isEmpty()
-                ? "Creator not listed" : creator.trim();
-
         TextView details = new TextView(this);
-        details.setText(credit + "\nLicence: " + licence);
+
+        details.setText(
+                song.artist + "\n" +
+                "Karaoke song • Timed lyrics"
+        );
+
         details.setTextColor(Color.LTGRAY);
-        details.setTextSize(11);
-        details.setPadding(dp(8), 0, dp(8), dp(10));
+        details.setTextSize(12);
+        details.setPadding(
+                dp(8),
+                0,
+                dp(8),
+                dp(10)
+        );
+
         resultsContainer.addView(details);
 
         play.setOnClickListener(v -> {
             Intent result = new Intent();
-            result.putExtra("audio_url", audioUrl);
-            result.putExtra("song_title", cleanTitle);
+
+            result.putExtra("audio_url", song.audioUrl);
+            result.putExtra(
+                    "song_title",
+                    song.title + " — " + song.artist
+            );
+            result.putExtra("lyrics_lrc", song.lyricsLrc);
+
             setResult(RESULT_OK, result);
             finish();
         });
     }
 
-    private void addMessage(String message) {
-        TextView text = new TextView(this);
-        text.setText(message);
-        text.setTextColor(WHITE);
-        text.setTextSize(14);
-        text.setGravity(Gravity.CENTER);
-        text.setPadding(dp(10), dp(18), dp(10), dp(18));
+    private HttpURLConnection openConnection(String url)
+            throws Exception {
 
-        resultsContainer.addView(text, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
-    }
+        HttpURLConnection connection =
+                (HttpURLConnection) new URL(url).openConnection();
 
-    private void finishSearchIfIdle() {
-        // Keep the search button available after result checks.
-        // The user can perform another search at any time.
-        finishSearch();
-    }
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(12000);
+        connection.setReadTimeout(18000);
 
-    private void finishSearch() {
-        searchButton.setEnabled(true);
-        progressBar.setVisibility(View.GONE);
+        connection.setRequestProperty(
+                "User-Agent",
+                "Donut4U-Karaoke/1.0"
+        );
+
+        connection.setRequestProperty(
+                "Accept",
+                "application/vnd.github+json, text/plain, */*"
+        );
+
+        int status = connection.getResponseCode();
+
+        if (status < 200 || status >= 300) {
+            connection.disconnect();
+            throw new Exception("HTTP " + status);
+        }
+
+        return connection;
     }
 
     private String readAll(InputStream input) throws Exception {
-        try (InputStream in = input;
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-
+        try (
+                InputStream in = input;
+                ByteArrayOutputStream out = new ByteArrayOutputStream()
+        ) {
             byte[] buffer = new byte[8192];
             int count;
 
@@ -425,19 +656,82 @@ public class OnlineSongActivity extends Activity {
                 out.write(buffer, 0, count);
             }
 
-            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+            return new String(
+                    out.toByteArray(),
+                    StandardCharsets.UTF_8
+            );
         }
     }
 
+    private void addMessage(String message) {
+        TextView text = new TextView(this);
+
+        text.setText(message);
+        text.setTextColor(WHITE);
+        text.setTextSize(14);
+        text.setGravity(Gravity.CENTER);
+
+        text.setPadding(
+                dp(10),
+                dp(18),
+                dp(10),
+                dp(18)
+        );
+
+        resultsContainer.addView(
+                text,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+        );
+    }
+
+    private void finishSearch() {
+        searchButton.setEnabled(true);
+        progressBar.setVisibility(View.GONE);
+    }
+
+    private LinearLayout.LayoutParams fullWidth(int height) {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                height
+        );
+    }
+
+    private Button makeButton(String label) {
+        Button button = new Button(this);
+
+        button.setText(label);
+        button.setTextColor(WHITE);
+        button.setTextSize(12);
+        button.setBackgroundColor(GREEN);
+
+        return button;
+    }
+
     private int dp(int value) {
-        return (int) (value
-                * getResources().getDisplayMetrics().density + 0.5f);
+        return (int) (
+                value * getResources()
+                        .getDisplayMetrics().density + 0.5f
+        );
+    }
+
+    private void toast(String message) {
+        Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_SHORT
+        ).show();
     }
 
     @Override
     protected void onDestroy() {
         closing = true;
+        searchGeneration++;
+
         executor.shutdownNow();
+
         super.onDestroy();
     }
 }
