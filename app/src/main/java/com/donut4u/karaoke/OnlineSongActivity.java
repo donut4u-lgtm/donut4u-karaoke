@@ -3,6 +3,7 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -48,6 +49,12 @@ public class OnlineSongActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
+    private static final String CACHE_NAME =
+            "donut4u_song_search_cache";
+
+    private static final long CACHE_DURATION =
+            24L * 60L * 60L * 1000L;
+
     private EditText searchBox;
     private Button searchButton;
     private TextView status;
@@ -82,7 +89,8 @@ public class OnlineSongActivity extends Activity {
         String initialQuery =
                 getIntent().getStringExtra("search_query");
 
-        if (initialQuery != null && !initialQuery.trim().isEmpty()) {
+        if (initialQuery != null
+                && !initialQuery.trim().isEmpty()) {
             searchBox.setText(initialQuery);
             searchVideos();
         }
@@ -154,20 +162,106 @@ public class OnlineSongActivity extends Activity {
         );
     }
 
+    private String normalizedQuery(String query) {
+        String result = query.trim().toLowerCase();
+
+        if (!result.contains("karaoke")) {
+            result += " karaoke";
+        }
+
+        return result;
+    }
+
+    private void saveSearchCache(
+            String query, ArrayList<Video> videos) {
+
+        try {
+            SharedPreferences prefs =
+                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
+
+            JSONObject root = new JSONObject();
+            JSONArray array = new JSONArray();
+
+            for (Video video : videos) {
+                JSONObject item = new JSONObject();
+                item.put("id", video.id);
+                item.put("title", video.title);
+                item.put("channel", video.channel);
+                array.put(item);
+            }
+
+            root.put("time", System.currentTimeMillis());
+            root.put("videos", array);
+
+            prefs.edit()
+                    .putString(query, root.toString())
+                    .apply();
+
+        } catch (Exception ignored) {
+        }
+    }
+
+    private ArrayList<Video> loadSearchCache(String query) {
+        try {
+            SharedPreferences prefs =
+                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
+
+            String saved = prefs.getString(query, null);
+
+            if (saved == null) {
+                return null;
+            }
+
+            JSONObject root = new JSONObject(saved);
+            long savedTime = root.optLong("time", 0);
+            long now = System.currentTimeMillis();
+
+            if (savedTime <= 0
+                    || now < savedTime
+                    || now - savedTime > CACHE_DURATION) {
+                prefs.edit().remove(query).apply();
+                return null;
+            }
+
+            JSONArray array = root.optJSONArray("videos");
+
+            if (array == null || array.length() == 0) {
+                return null;
+            }
+
+            ArrayList<Video> videos = new ArrayList<>();
+
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject item = array.optJSONObject(i);
+
+                if (item == null) {
+                    continue;
+                }
+
+                Video video = new Video();
+                video.id = item.optString("id", "");
+                video.title = item.optString(
+                        "title", "YouTube karaoke video");
+                video.channel = item.optString(
+                        "channel", "YouTube channel");
+
+                if (!video.id.isEmpty()) {
+                    videos.add(video);
+                }
+            }
+
+            return videos.isEmpty() ? null : videos;
+
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void searchVideos() {
         String query = searchBox.getText().toString().trim();
-        String apiKey = BuildConfig.YOUTUBE_API_KEY;
 
         if (query.isEmpty()) {
             toast("Enter a song title or artist.");
-            return;
-        }
-
-        if (apiKey == null || apiKey.trim().isEmpty()) {
-            status.setText(
-                    "YouTube API key is missing. Check the "
-                            + "YOUTUBE_API_KEY GitHub secret."
-            );
             return;
         }
 
@@ -181,15 +275,30 @@ public class OnlineSongActivity extends Activity {
         }
 
         final int generation = ++searchGeneration;
-
-        String searchQuery =
-                query.toLowerCase().contains("karaoke")
-                        ? query
-                        : query + " karaoke";
+        final String searchQuery = normalizedQuery(query);
 
         searchButton.setEnabled(false);
-        status.setText("Searching YouTube...");
         resultsContainer.removeAllViews();
+
+        ArrayList<Video> cached = loadSearchCache(searchQuery);
+
+        if (cached != null && !cached.isEmpty()) {
+            status.setText("Showing saved search results.");
+            displayVideos(cached, generation, true);
+            return;
+        }
+
+        String apiKey = BuildConfig.YOUTUBE_API_KEY;
+
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            searchButton.setEnabled(true);
+            status.setText(
+                    "YouTube API key is missing. Check the "
+                            + "YOUTUBE_API_KEY GitHub secret.");
+            return;
+        }
+
+        status.setText("Searching YouTube...");
 
         String encodedQuery;
         String encodedKey;
@@ -197,8 +306,8 @@ public class OnlineSongActivity extends Activity {
         try {
             encodedQuery = URLEncoder.encode(
                     searchQuery, "UTF-8");
-            encodedKey = URLEncoder.encode(
-                    apiKey, "UTF-8");
+            encodedKey = URLEncoder.encode(apiKey, "UTF-8");
+
         } catch (Exception e) {
             searchButton.setEnabled(true);
             status.setText("Unable to prepare the search.");
@@ -252,8 +361,7 @@ public class OnlineSongActivity extends Activity {
                             message.isEmpty()
                                     ? "YouTube API error: HTTP "
                                             + responseCode
-                                    : message
-                    );
+                                    : message);
                 }
 
                 JSONObject json = new JSONObject(response);
@@ -295,6 +403,10 @@ public class OnlineSongActivity extends Activity {
                     }
                 }
 
+                if (!videos.isEmpty()) {
+                    saveSearchCache(searchQuery, videos);
+                }
+
             } catch (Exception e) {
                 error = e.getMessage() == null
                         ? "Unable to search YouTube."
@@ -316,7 +428,6 @@ public class OnlineSongActivity extends Activity {
                 }
 
                 searchButton.setEnabled(true);
-                resultsContainer.removeAllViews();
 
                 if (finalError != null) {
                     status.setText(
@@ -328,18 +439,36 @@ public class OnlineSongActivity extends Activity {
                     status.setText(
                             "No embeddable videos found. "
                                     + "Try another song title or artist.");
+                    resultsContainer.removeAllViews();
                     return;
                 }
 
-                status.setText(
-                        "Found " + found.size()
-                                + " videos. Tap a song to play.");
-
-                for (Video video : found) {
-                    addVideoResult(video);
-                }
+                displayVideos(found, generation, false);
             });
         });
+    }
+
+    private void displayVideos(
+            ArrayList<Video> videos,
+            int generation,
+            boolean fromCache) {
+
+        if (closing || isFinishing()
+                || generation != searchGeneration) {
+            return;
+        }
+
+        searchButton.setEnabled(true);
+        resultsContainer.removeAllViews();
+
+        status.setText(
+                "Found " + videos.size() + " videos. "
+                        + (fromCache ? "Saved results. " : "")
+                        + "Tap a song to play.");
+
+        for (Video video : videos) {
+            addVideoResult(video);
+        }
     }
 
     private void addVideoResult(Video video) {
@@ -409,8 +538,7 @@ public class OnlineSongActivity extends Activity {
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         0,
-                        1f
-                );
+                        1f);
 
         playbackScreen.addView(playerHost, videoParams);
 
@@ -423,7 +551,6 @@ public class OnlineSongActivity extends Activity {
                 dp(12), dp(8), dp(12), dp(12));
 
         playbackScreen.addView(backButton, backParams);
-
         backButton.setOnClickListener(v -> returnToResults());
 
         setContentView(playbackScreen);
@@ -446,9 +573,7 @@ public class OnlineSongActivity extends Activity {
                 player,
                 new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                )
-        );
+                        ViewGroup.LayoutParams.MATCH_PARENT));
 
         String html =
                 "<!doctype html>"
@@ -485,8 +610,7 @@ public class OnlineSongActivity extends Activity {
                 html,
                 "text/html",
                 "UTF-8",
-                null
-        );
+                null);
     }
 
     private void returnToResults() {
@@ -508,8 +632,7 @@ public class OnlineSongActivity extends Activity {
                 View.SYSTEM_UI_FLAG_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-        );
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
 
     private void showSystemBars() {
@@ -519,8 +642,7 @@ public class OnlineSongActivity extends Activity {
                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
         window.getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-        );
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
 
         window.setStatusBarColor(BG);
         window.setNavigationBarColor(BG);
@@ -590,28 +712,24 @@ public class OnlineSongActivity extends Activity {
     private LinearLayout.LayoutParams fullWidth(int height) {
         return new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                height
-        );
+                height);
     }
 
     private LinearLayout.LayoutParams fullWidthWrap() {
         return new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
+                LinearLayout.LayoutParams.WRAP_CONTENT);
     }
 
     private int dp(int value) {
         return (int) (
                 value * getResources()
-                        .getDisplayMetrics().density + 0.5f
-        );
+                        .getDisplayMetrics().density + 0.5f);
     }
 
     private void toast(String message) {
         Toast.makeText(
-                this, message, Toast.LENGTH_LONG
-        ).show();
+                this, message, Toast.LENGTH_LONG).show();
     }
 
     @Override
