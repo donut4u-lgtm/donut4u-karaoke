@@ -169,8 +169,6 @@ public class OnlineSongActivity extends Activity {
 
     private void searchVideos() {
         String query = searchBox.getText().toString().trim();
-
-        // The key is supplied at build time through app/build.gradle.kts.
         String apiKey = BuildConfig.YOUTUBE_API_KEY;
 
         if (query.isEmpty()) {
@@ -438,14 +436,14 @@ public class OnlineSongActivity extends Activity {
                 + "</body>"
                 + "</html>";
 
-        String baseUrl = "https://www.youtube.com/";
+        String baseUrl = "https://com.donut4u.karaoke/";
 
         player.loadDataWithBaseURL(
                 baseUrl,
                 html,
                 "text/html",
                 "UTF-8",
-                baseUrl
+                null
         );
     }
 
