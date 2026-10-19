@@ -1,4 +1,3 @@
-
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
@@ -42,4 +41,7 @@ dependencies {
     )
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-database")
+
+    // Google AdMob SDK
+    implementation("com.google.android.gms:play-services-ads:25.5.0")
 }
