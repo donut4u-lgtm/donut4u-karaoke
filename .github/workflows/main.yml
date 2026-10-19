@@ -3,31 +3,48 @@ name: Create Donut4U Signing Key
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   create-key:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check required passwords
+        env:
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+        run: |
+          if [ "${#STORE_PASSWORD}" -lt 6 ]; then
+            echo "ERROR: DONUT4U_KEYSTORE_PASSWORD must be at least 6 characters."
+            exit 1
+          fi
+
+          if [ "${#KEY_PASSWORD}" -lt 6 ]; then
+            echo "ERROR: DONUT4U_KEY_PASSWORD must be at least 6 characters."
+            exit 1
+          fi
+
       - name: Generate signing key
+        env:
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
         run: |
           keytool -genkeypair \
-            -v \
-            -keystore donut4u-release.jks \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
             -alias donut4u \
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -storepass "${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}" \
-            -keypass "${{ secrets.DONUT4U_KEY_PASSWORD }}" \
+            -storepass "$STORE_PASSWORD" \
+            -keypass "$KEY_PASSWORD" \
             -dname "CN=Donut4U Karaoke, OU=Android, O=Donut4U, L=Calamba, ST=Laguna, C=PH"
 
-      - name: Encode signing key
-        run: |
-          base64 -w 0 donut4u-release.jks > donut4u-release-base64.txt
+          echo "Signing key generated successfully."
 
-      - name: Upload encoded signing key
-        uses: actions/upload-artifact@v4
-        with:
-          name: donut4u-signing-key-setup
-          path: donut4u-release-base64.txt
-          retention-days: 1
+      - name: Stop before exposing key
+        run: |
+          echo "Key generated in temporary runner storage."
+          echo "It has not been saved as a repository secret."
+          echo "Do not use this key for a release until secure storage is configured."
