@@ -1,3 +1,4 @@
+
 name: Create and Save Donut4U Signing Key
 
 on:
@@ -26,9 +27,9 @@ jobs:
           KEY_PASS: ${{ secrets.DONUT4U_KEY_PASSWORD }}
           ENCRYPT_PASS: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
         run: |
-          set -e
+          set -euo pipefail
           if [ -z "$STORE_PASS" ] || [ -z "$KEY_PASS" ] || [ -z "$ENCRYPT_PASS" ]; then
-            echo "ERROR: Configure all three required GitHub Actions secrets."
+            echo "ERROR: Configure all three required GitHub secrets."
             exit 1
           fi
           if [ "${#ENCRYPT_PASS}" -lt 20 ]; then
@@ -45,10 +46,11 @@ jobs:
           set -euo pipefail
 
           mkdir -p signing
-          test ! -e signing/donut4u-release.jks.enc || {
-            echo "ERROR: Encrypted signing key already exists. Refusing to overwrite it."
+
+          if [ -e signing/donut4u-release.jks.enc ]; then
+            echo "ERROR: Signing key already exists. Refusing to overwrite."
             exit 1
-          }
+          fi
 
           keytool -genkeypair \
             -keystore "$RUNNER_TEMP/donut4u-release.jks" \
@@ -60,7 +62,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Donut4U Karaoke, OU=Mobile, O=Donut4U, L=Manila, ST=Metro Manila, C=PH"
 
-          openssl enc -aes-256-cbc -salt -pbkdf2 \
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
             -in "$RUNNER_TEMP/donut4u-release.jks" \
             -out signing/donut4u-release.jks.enc \
             -pass env:ENCRYPT_PASS
