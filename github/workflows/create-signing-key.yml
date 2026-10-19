@@ -1,0 +1,46 @@
+name: Create Donut4U Signing Key
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-key:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check passwords
+        env:
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+        run: |
+          if [ "${#STORE_PASSWORD}" -lt 6 ]; then
+            echo "ERROR: Set DONUT4U_KEYSTORE_PASSWORD in repository secrets."
+            exit 1
+          fi
+
+          if [ "${#KEY_PASSWORD}" -lt 6 ]; then
+            echo "ERROR: Set DONUT4U_KEY_PASSWORD in repository secrets."
+            exit 1
+          fi
+
+      - name: Generate signing key
+        env:
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+        run: |
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -alias donut4u \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "$STORE_PASSWORD" \
+            -keypass "$KEY_PASSWORD" \
+            -dname "CN=Donut4U Karaoke, OU=Android, O=Donut4U, L=Calamba, ST=Laguna, C=PH"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -storepass "$STORE_PASSWORD"
+
+          echo "GREEN: Signing key generated."
+          echo "NOTE: Key is temporary and is not yet saved for future releases."
