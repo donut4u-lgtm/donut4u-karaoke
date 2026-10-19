@@ -1,44 +1,33 @@
-name: Build donut4u karaoke APK
+name: Create Donut4U Signing Key
 
-'on': [push, workflow_dispatch]
+on:
+  workflow_dispatch:
 
 jobs:
-  build:
+  create-key:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
-
-      - name: Build APK
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      - name: Generate signing key
         run: |
-          if [ -z "$YOUTUBE_API_KEY" ]; then
-            echo "Missing YOUTUBE_API_KEY repository secret"
-            exit 1
-          fi
-          gradle assembleDebug --stacktrace --console=plain
+          keytool -genkeypair \
+            -v \
+            -keystore donut4u-release.jks \
+            -alias donut4u \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}" \
+            -keypass "${{ secrets.DONUT4U_KEY_PASSWORD }}" \
+            -dname "CN=Donut4U Karaoke, OU=Android, O=Donut4U, L=Calamba, ST=Laguna, C=PH"
 
-      - name: List APK files
-        if: always()
-        run: find app/build/outputs -type f -print || true
+      - name: Encode signing key
+        run: |
+          base64 -w 0 donut4u-release.jks > donut4u-release-base64.txt
 
-      - name: Upload APK
-        if: success()
+      - name: Upload encoded signing key
         uses: actions/upload-artifact@v4
         with:
-          name: donut4u-karaoke-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          name: donut4u-signing-key-setup
+          path: donut4u-release-base64.txt
+          retention-days: 1
