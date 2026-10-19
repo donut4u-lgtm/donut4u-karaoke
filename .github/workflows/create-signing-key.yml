@@ -15,88 +15,69 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Check required secrets
         env:
-          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
-          ENC_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
-        shell: bash
+          STORE_PASS: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+          ENCRYPT_PASS: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
         run: |
-          set -euo pipefail
-
-          if [ "${#STORE_PASSWORD}" -lt 6 ]; then
-            echo "ERROR: DONUT4U_KEYSTORE_PASSWORD is missing or too short."
+          set -e
+          if [ -z "$STORE_PASS" ] || [ -z "$KEY_PASS" ] || [ -z "$ENCRYPT_PASS" ]; then
+            echo "ERROR: Configure all three required GitHub Actions secrets."
+            exit 1
+          fi
+          if [ "${#ENCRYPT_PASS}" -lt 20 ]; then
+            echo "ERROR: Encryption password must be at least 20 characters."
             exit 1
           fi
 
-          if [ "${#KEY_PASSWORD}" -lt 6 ]; then
-            echo "ERROR: DONUT4U_KEY_PASSWORD is missing or too short."
-            exit 1
-          fi
-
-          if [ "${#ENC_PASSWORD}" -lt 20 ]; then
-            echo "ERROR: DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD must be at least 20 characters."
-            exit 1
-          fi
-
-      - name: Generate and encrypt signing key
+      - name: Create and encrypt signing key
         env:
-          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
-          ENC_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
-        shell: bash
+          STORE_PASS: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+          ENCRYPT_PASS: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
         run: |
           set -euo pipefail
 
           mkdir -p signing
-
-          if [ -s signing/donut4u-release.jks.enc ]; then
-            echo "ERROR: An encrypted signing key already exists."
-            echo "Refusing to replace the existing signing identity."
+          test ! -e signing/donut4u-release.jks.enc || {
+            echo "ERROR: Encrypted signing key already exists. Refusing to overwrite it."
             exit 1
-          fi
+          }
 
           keytool -genkeypair \
             -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
             -alias donut4u \
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -storepass "$STORE_PASSWORD" \
-            -keypass "$KEY_PASSWORD" \
-            -dname "CN=Donut4U Karaoke, OU=Android, O=Donut4U, L=Naga, ST=Bicol, C=PH"
+            -dname "CN=Donut4U Karaoke, OU=Mobile, O=Donut4U, L=Manila, ST=Metro Manila, C=PH"
+
+          openssl enc -aes-256-cbc -salt -pbkdf2 \
+            -in "$RUNNER_TEMP/donut4u-release.jks" \
+            -out signing/donut4u-release.jks.enc \
+            -pass env:ENCRYPT_PASS
 
           keytool -list \
             -keystore "$RUNNER_TEMP/donut4u-release.jks" \
-            -storepass "$STORE_PASSWORD" \
+            -storepass "$STORE_PASS" \
             -alias donut4u
 
-          openssl enc -aes-256-cbc -salt \
-            -pbkdf2 -iter 200000 \
-            -pass env:ENC_PASSWORD \
-            -in "$RUNNER_TEMP/donut4u-release.jks" \
-            -out signing/donut4u-release.jks.enc
+          rm -f "$RUNNER_TEMP/donut4u-release.jks"
 
-          test -s signing/donut4u-release.jks.enc
-
-      - name: Save encrypted key to GitHub
-        shell: bash
+      - name: Commit encrypted signing key
         run: |
           set -euo pipefail
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add signing/donut4u-release.jks.enc
-
-          if git diff --cached --quiet; then
-            echo "ERROR: No encrypted signing key was staged."
-            exit 1
-          fi
-
-          git commit -m "Save encrypted Donut4U signing key"
+          git commit -m "Add encrypted Donut4U release signing key"
           git push origin HEAD:main
-
-      - name: Remove temporary signing key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/donut4u-release.jks"
