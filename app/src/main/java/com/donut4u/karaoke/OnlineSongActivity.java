@@ -695,7 +695,6 @@ public class OnlineSongActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // The title floats over the video instead of taking video height.
         TextView title = new TextView(this);
         title.setText(video.title);
         title.setTextColor(WHITE);
@@ -752,9 +751,9 @@ public class OnlineSongActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
         /*
-         * Fill the portrait screen height with the video.
-         * This enlarges the picture but crops its left and right edges.
-         * YouTube's own controls and the original lyrics remain unchanged.
+         * Show the complete YouTube video without the previous zoom.
+         * This preserves the original video aspect ratio and its lyrics.
+         * Portrait playback may show black space around the video.
          */
         String html =
                 "<!doctype html>"
@@ -768,9 +767,8 @@ public class OnlineSongActivity extends Activity {
                 + "<style>"
                 + "html,body{margin:0;padding:0;background:#000;"
                 + "width:100%;height:100%;overflow:hidden;}"
-                + "iframe{position:absolute;top:50%;left:50%;"
-                + "width:177.78vh;height:100vh;"
-                + "transform:translate(-50%,-50%);border:0;}"
+                + "iframe{position:absolute;top:0;left:0;"
+                + "width:100%;height:100%;border:0;}"
                 + "</style>"
                 + "</head>"
                 + "<body>"
