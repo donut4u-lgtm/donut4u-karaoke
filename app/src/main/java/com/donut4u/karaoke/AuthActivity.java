@@ -48,9 +48,9 @@ public class AuthActivity extends Activity {
     private static final String DEVICE_ID_KEY =
             "installation_id";
 
-    // Google's official TEST banner ID.
+    // 🔴 REAL ADMOB BANNER ID — NOT THE TEST ID
     private static final String TEST_BANNER_ID =
-            "ca-app-pub-3940256099942544/6300978111";
+            "ca-app-pub-5625332026157890/7288125709";
 
     private FirebaseAuth auth;
     private EditText emailField;
@@ -177,7 +177,7 @@ public class AuthActivity extends Activity {
         passwordParams.bottomMargin = dp(12);
         root.addView(passwordField, passwordParams);
 
-        // 🟢 ADDED: Separate banner area on Sign In and Create Account.
+        // 🟢 Banner area for Sign In and Create Account.
         TextView adLabel = new TextView(this);
         adLabel.setText("ADVERTISEMENT");
         adLabel.setTextColor(MUTED);
