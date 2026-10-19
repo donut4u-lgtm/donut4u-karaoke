@@ -27,10 +27,9 @@ public class MainActivity extends Activity {
     private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
 
-    // Google's official TEST banner ID.
-    // Replace with your own banner ID only after testing.
+    // 🔴 REAL ADMOB BANNER ID
     private static final String TEST_BANNER_ID =
-            "ca-app-pub-3940256099942544/6300978111";
+            "ca-app-pub-5625332026157890/7288125709";
 
     private AdView adView;
 
