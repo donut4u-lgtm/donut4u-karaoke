@@ -59,6 +59,9 @@ public class AuthActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
+        // 🟢 INSERTED CODE: read the selected account mode.
+        createMode = getIntent().getBooleanExtra("create_mode", false);
+
         auth = FirebaseAuth.getInstance();
 
         FirebaseUser user = auth.getCurrentUser();
