@@ -8,6 +8,7 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -70,6 +71,9 @@ public class OnlineSongActivity extends Activity {
 
     private static final String CACHE_NAME =
             "donut4u_song_search_cache";
+
+    private static final String FACEBOOK_URL =
+            "https://www.facebook.com/share/17zkgf3o8j/";
 
     private static final long CACHE_DURATION =
             24L * 60L * 60L * 1000L;
@@ -293,12 +297,7 @@ public class OnlineSongActivity extends Activity {
         signOutParams.topMargin = dp(10);
         root.addView(signOutButton, signOutParams);
 
-        signOutButton.setOnClickListener(v -> {
-            if (auth != null) {
-                auth.signOut();
-            }
-            openAuthentication();
-        });
+        signOutButton.setOnClickListener(v -> signOutAndSwitchAccount());
 
         setContentView(root);
     }
@@ -352,6 +351,61 @@ public class OnlineSongActivity extends Activity {
 
         startActivity(intent);
         finish();
+    }
+
+    /*
+     * Signs out of the current Firebase account and returns
+     * to AuthActivity so another account can be used.
+     *
+     * The installation ID is intentionally preserved because
+     * it identifies this phone, not the signed-in account.
+     */
+    private void signOutAndSwitchAccount() {
+        if (auth == null) {
+            auth = FirebaseAuth.getInstance();
+        }
+
+        sessionValid = false;
+        signingOutForSessionChange = true;
+
+        if (sessionRef != null && sessionListener != null) {
+            sessionRef.removeEventListener(sessionListener);
+            sessionListener = null;
+        }
+
+        destroyPlayer();
+
+        auth.signOut();
+
+        Intent intent = new Intent(
+                OnlineSongActivity.this,
+                AuthActivity.class
+        );
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+        );
+
+        startActivity(intent);
+        finish();
+    }
+
+    /*
+     * Opens the confirmed Facebook Questions & Suggestions link.
+     */
+    private void openFacebookFeedback() {
+        try {
+            Intent intent = new Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse(FACEBOOK_URL)
+            );
+
+            startActivity(intent);
+
+        } catch (Exception e) {
+            toast("Unable to open Facebook. Please try again.");
+        }
     }
 
     private void buildSearchScreen() {
@@ -462,6 +516,38 @@ public class OnlineSongActivity extends Activity {
 
         donateNowButton.setOnClickListener(
                 v -> showDonationScreen());
+
+        /*
+         * NEW FEATURE 1:
+         * Log out and switch to another account on this phone.
+         */
+        Button switchAccountButton =
+                makeButton("LOG OUT / SWITCH ACCOUNT");
+
+        LinearLayout.LayoutParams switchAccountParams =
+                fullWidth(dp(50));
+        switchAccountParams.topMargin = dp(12);
+
+        root.addView(switchAccountButton, switchAccountParams);
+
+        switchAccountButton.setOnClickListener(
+                v -> signOutAndSwitchAccount());
+
+        /*
+         * NEW FEATURE 2:
+         * Open the user's Facebook Questions & Suggestions link.
+         */
+        Button feedbackButton =
+                makeButton("💬 QUESTIONS & SUGGESTIONS");
+
+        LinearLayout.LayoutParams feedbackParams =
+                fullWidth(dp(50));
+        feedbackParams.topMargin = dp(10);
+
+        root.addView(feedbackButton, feedbackParams);
+
+        feedbackButton.setOnClickListener(
+                v -> openFacebookFeedback());
 
         status = new TextView(this);
         status.setText(
