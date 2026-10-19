@@ -9,6 +9,11 @@ val youtubeApiKey = providers.gradleProperty("YOUTUBE_API_KEY")
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+val keystorePath = System.getenv("DONUT4U_KEYSTORE_PATH") ?: ""
+val keystorePassword = System.getenv("DONUT4U_KEYSTORE_PASSWORD") ?: ""
+val keyAliasValue = System.getenv("DONUT4U_KEY_ALIAS") ?: ""
+val keyPasswordValue = System.getenv("DONUT4U_KEY_PASSWORD") ?: ""
+
 android {
     namespace = "com.donut4u.karaoke"
     compileSdk = 35
@@ -29,6 +34,24 @@ android {
             "YOUTUBE_API_KEY",
             "\"${youtubeApiKey}\""
         )
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keystorePath.isNotBlank()) {
+                storeFile = file(keystorePath)
+            }
+            storePassword = keystorePassword
+            keyAlias = keyAliasValue
+            keyPassword = keyPasswordValue
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
     }
 }
 
