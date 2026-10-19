@@ -3,6 +3,7 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -28,6 +29,14 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -49,6 +58,15 @@ public class OnlineSongActivity extends Activity {
     private static final int PANEL = Color.rgb(27, 32, 35);
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
+
+    private static final String DATABASE_URL =
+            "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
+    private static final String DEVICE_PREFS =
+            "donut4u_device_session";
+
+    private static final String DEVICE_ID_KEY =
+            "installation_id";
 
     private static final String CACHE_NAME =
             "donut4u_song_search_cache";
@@ -75,6 +93,14 @@ public class OnlineSongActivity extends Activity {
     private volatile boolean closing = false;
     private int searchGeneration = 0;
 
+    private FirebaseAuth auth;
+    private DatabaseReference sessionRef;
+    private ValueEventListener sessionListener;
+
+    private String installationId = "";
+    private boolean sessionValid = false;
+    private boolean signingOutForSessionChange = false;
+
     private static class Video {
         String id;
         String title;
@@ -88,16 +114,259 @@ public class OnlineSongActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        buildSearchScreen();
+        auth = FirebaseAuth.getInstance();
 
-        String initialQuery =
-                getIntent().getStringExtra("search_query");
+        FirebaseUser user = auth.getCurrentUser();
 
-        if (initialQuery != null
-                && !initialQuery.trim().isEmpty()) {
-            searchBox.setText(initialQuery);
-            searchVideos();
+        if (user == null || !user.isEmailVerified()) {
+            openAuthentication();
+            return;
         }
+
+        installationId = getInstallationId();
+
+        showSessionLoadingScreen();
+        listenForActiveSession(user);
+    }
+
+    private String getInstallationId() {
+        SharedPreferences prefs = getSharedPreferences(
+                DEVICE_PREFS,
+                MODE_PRIVATE
+        );
+
+        String id = prefs.getString(DEVICE_ID_KEY, null);
+
+        if (id == null || id.trim().isEmpty()) {
+            /*
+             * AuthActivity normally creates this ID before opening
+             * OnlineSongActivity. Generate one only as a fallback.
+             */
+            id = java.util.UUID.randomUUID().toString();
+
+            prefs.edit()
+                    .putString(DEVICE_ID_KEY, id)
+                    .apply();
+        }
+
+        return id;
+    }
+
+    private void showSessionLoadingScreen() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(24), dp(24), dp(24), dp(24));
+        root.setBackgroundColor(BG);
+
+        TextView heading = new TextView(this);
+        heading.setText("DONUT4U KARAOKE");
+        heading.setTextColor(GREEN);
+        heading.setTextSize(24);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+
+        root.addView(heading, fullWidthWrap());
+
+        TextView message = new TextView(this);
+        message.setText("Checking your active phone session...");
+        message.setTextColor(WHITE);
+        message.setTextSize(15);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, dp(16), 0, dp(16));
+
+        root.addView(message, fullWidthWrap());
+
+        setContentView(root);
+    }
+
+    private void listenForActiveSession(FirebaseUser user) {
+        sessionRef = FirebaseDatabase.getInstance(DATABASE_URL)
+                .getReference("activeSessions")
+                .child(user.getUid());
+
+        sessionListener = new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snapshot) {
+                if (closing || isFinishing()) {
+                    return;
+                }
+
+                String activeId = snapshot.child("sessionId")
+                        .getValue(String.class);
+
+                if (activeId == null || activeId.trim().isEmpty()) {
+                    handleSessionLost(
+                            "Your active session could not be found. Please sign in again."
+                    );
+                    return;
+                }
+
+                if (!installationId.equals(activeId)) {
+                    handleSessionLost(
+                            "Your account was signed in on another phone. Please sign in again to continue."
+                    );
+                    return;
+                }
+
+                /*
+                 * This phone owns the session. On the first successful
+                 * check, build the normal karaoke screen.
+                 *
+                 * The same listener stays active and checks future
+                 * changes when another phone signs in.
+                 */
+                if (!sessionValid) {
+                    sessionValid = true;
+                    buildSearchScreen();
+
+                    String initialQuery =
+                            getIntent().getStringExtra("search_query");
+
+                    if (initialQuery != null
+                            && !initialQuery.trim().isEmpty()) {
+                        searchBox.setText(initialQuery);
+                        searchVideos();
+                    }
+                }
+            }
+
+            @Override
+            public void onCancelled(DatabaseError error) {
+                if (closing || isFinishing()) {
+                    return;
+                }
+
+                if (!sessionValid) {
+                    showSessionError(
+                            "Could not verify your active session. Check your internet connection and Firebase Realtime Database rules, then retry."
+                    );
+                } else {
+                    toast(
+                            "The live session check was interrupted. Check your internet connection."
+                    );
+                }
+            }
+        };
+
+        sessionRef.addValueEventListener(sessionListener);
+    }
+
+    private void showSessionError(String messageText) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(24), dp(24), dp(24), dp(24));
+        root.setBackgroundColor(BG);
+
+        TextView heading = new TextView(this);
+        heading.setText("SESSION CHECK FAILED");
+        heading.setTextColor(GREEN);
+        heading.setTextSize(21);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+
+        root.addView(heading, fullWidthWrap());
+
+        TextView message = new TextView(this);
+        message.setText(messageText);
+        message.setTextColor(WHITE);
+        message.setTextSize(14);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, dp(16), 0, dp(16));
+
+        root.addView(message, fullWidthWrap());
+
+        Button retryButton = makeButton("RETRY SESSION CHECK");
+        LinearLayout.LayoutParams retryParams = fullWidth(dp(50));
+        retryParams.topMargin = dp(8);
+        root.addView(retryButton, retryParams);
+
+        retryButton.setOnClickListener(v -> {
+            FirebaseUser user = auth.getCurrentUser();
+
+            if (user == null || !user.isEmailVerified()) {
+                openAuthentication();
+                return;
+            }
+
+            if (sessionRef != null && sessionListener != null) {
+                sessionRef.removeEventListener(sessionListener);
+            }
+
+            sessionValid = false;
+            showSessionLoadingScreen();
+            listenForActiveSession(user);
+        });
+
+        Button signOutButton = makeButton("SIGN OUT");
+        LinearLayout.LayoutParams signOutParams = fullWidth(dp(50));
+        signOutParams.topMargin = dp(10);
+        root.addView(signOutButton, signOutParams);
+
+        signOutButton.setOnClickListener(v -> {
+            if (auth != null) {
+                auth.signOut();
+            }
+            openAuthentication();
+        });
+
+        setContentView(root);
+    }
+
+    private void handleSessionLost(String messageText) {
+        if (signingOutForSessionChange || closing) {
+            return;
+        }
+
+        signingOutForSessionChange = true;
+        sessionValid = false;
+
+        /*
+         * Stop playback immediately. Do not delete the Firebase
+         * session record because it now belongs to the other phone.
+         */
+        destroyPlayer();
+
+        if (sessionRef != null && sessionListener != null) {
+            sessionRef.removeEventListener(sessionListener);
+            sessionListener = null;
+        }
+
+        if (auth != null) {
+            auth.signOut();
+        }
+
+        Toast.makeText(
+                getApplicationContext(),
+                messageText,
+                Toast.LENGTH_LONG
+        ).show();
+
+        Intent intent = new Intent(
+                OnlineSongActivity.this,
+                AuthActivity.class
+        );
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+        );
+
+        startActivity(intent);
+        finish();
+    }
+
+    private void openAuthentication() {
+        Intent intent = new Intent(this, AuthActivity.class);
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+        );
+
+        startActivity(intent);
+        finish();
     }
 
     private void buildSearchScreen() {
@@ -239,6 +508,10 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void showDonationScreen() {
+        if (!sessionValid || closing) {
+            return;
+        }
+
         donationScreenVisible = true;
         showSystemBars();
 
@@ -428,6 +701,10 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void searchVideos() {
+        if (!sessionValid || closing) {
+            return;
+        }
+
         String query = searchBox.getText().toString().trim();
 
         if (query.isEmpty()) {
@@ -588,6 +865,7 @@ public class OnlineSongActivity extends Activity {
 
             runOnUiThread(() -> {
                 if (closing || isFinishing()
+                        || !sessionValid
                         || generation != searchGeneration) {
                     return;
                 }
@@ -619,6 +897,7 @@ public class OnlineSongActivity extends Activity {
             boolean fromCache) {
 
         if (closing || isFinishing()
+                || !sessionValid
                 || generation != searchGeneration) {
             return;
         }
@@ -677,6 +956,10 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void playVideo(Video video) {
+        if (!sessionValid || closing) {
+            return;
+        }
+
         donationScreenVisible = false;
         playbackVisible = true;
 
@@ -751,8 +1034,7 @@ public class OnlineSongActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
         /*
-         * Show the complete YouTube video without the previous zoom.
-         * This preserves the original video aspect ratio and its lyrics.
+         * Show the complete YouTube video without zoom or cropping.
          * Portrait playback may show black space around the video.
          */
         String html =
@@ -935,6 +1217,11 @@ public class OnlineSongActivity extends Activity {
     protected void onDestroy() {
         closing = true;
         searchGeneration++;
+
+        if (sessionRef != null && sessionListener != null) {
+            sessionRef.removeEventListener(sessionListener);
+            sessionListener = null;
+        }
 
         destroyPlayer();
         executor.shutdownNow();
