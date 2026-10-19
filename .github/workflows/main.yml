@@ -1,21 +1,35 @@
+
 name: Create Donut4U Signing Key
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   create-key:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Check required passwords
         env:
           STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+          ENCRYPT_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           if [ "${#STORE_PASSWORD}" -lt 6 ]; then
             echo "ERROR: DONUT4U_KEYSTORE_PASSWORD must be at least 6 characters."
             exit 1
@@ -26,11 +40,27 @@ jobs:
             exit 1
           fi
 
-      - name: Generate signing key
+          if [ "${#ENCRYPT_PASSWORD}" -lt 20 ]; then
+            echo "ERROR: DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD must be at least 20 characters."
+            exit 1
+          fi
+
+      - name: Generate and encrypt signing key
         env:
           STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+          ENCRYPT_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
+        shell: bash
         run: |
+          set -euo pipefail
+
+          mkdir -p signing
+
+          if [ -e signing/donut4u-release.jks.enc ]; then
+            echo "ERROR: Signing key file already exists. Refusing to overwrite it."
+            exit 1
+          fi
+
           keytool -genkeypair \
             -keystore "$RUNNER_TEMP/donut4u-release.jks" \
             -alias donut4u \
@@ -41,10 +71,32 @@ jobs:
             -keypass "$KEY_PASSWORD" \
             -dname "CN=Donut4U Karaoke, OU=Android, O=Donut4U, L=Calamba, ST=Laguna, C=PH"
 
-          echo "Signing key generated successfully."
+          keytool -list \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -storepass "$STORE_PASSWORD" \
+            -alias donut4u
 
-      - name: Stop before exposing key
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+            -in "$RUNNER_TEMP/donut4u-release.jks" \
+            -out signing/donut4u-release.jks.enc \
+            -pass env:ENCRYPT_PASSWORD
+
+          test -s signing/donut4u-release.jks.enc
+
+          rm -f "$RUNNER_TEMP/donut4u-release.jks"
+
+          echo "Encrypted signing key created successfully."
+
+      - name: Save encrypted key to repository
+        shell: bash
         run: |
-          echo "Key generated in temporary runner storage."
-          echo "It has not been saved as a repository secret."
-          echo "Do not use this key for a release until secure storage is configured."
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add signing/donut4u-release.jks.enc
+          git commit -m "Add encrypted Donut4U release signing key"
+          git push origin HEAD:main
+
+          echo "Encrypted signing key saved to main."
