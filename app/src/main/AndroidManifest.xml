@@ -1,5 +1,6 @@
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -8,6 +9,11 @@
         android:icon="@drawable/donut4u_icon"
         android:roundIcon="@drawable/donut4u_icon"
         android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <!-- Google AdMob App ID -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-5625332026157890~7539407143" />
 
         <activity
             android:name=".AuthActivity"
@@ -20,10 +26,12 @@
         <activity
             android:name=".MainActivity"
             android:exported="true">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
         </activity>
 
     </application>
