@@ -1,3 +1,4 @@
+
 name: Build Donut4U Signed Release APK
 
 on:
@@ -90,7 +91,6 @@ jobs:
           fi
 
           "$APKSIGNER" verify --verbose --print-certs "$APK"
-
           echo "APK signature verified."
 
       - name: Upload signed APK
