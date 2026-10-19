@@ -5,6 +5,8 @@
     <application
         android:allowBackup="true"
         android:label="Donut4U Karaoke"
+        android:icon="@drawable/donut4u_icon"
+        android:roundIcon="@drawable/donut4u_icon"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
