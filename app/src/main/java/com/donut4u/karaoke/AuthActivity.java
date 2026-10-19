@@ -18,6 +18,11 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.MobileAds;
+
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.DatabaseReference;
@@ -43,14 +48,20 @@ public class AuthActivity extends Activity {
     private static final String DEVICE_ID_KEY =
             "installation_id";
 
+    // Google's official TEST banner ID.
+    private static final String TEST_BANNER_ID =
+            "ca-app-pub-3940256099942544/6300978111";
+
     private FirebaseAuth auth;
     private EditText emailField;
     private EditText passwordField;
     private TextView message;
+    private AdView adView;
 
     private boolean createMode = false;
     private boolean openingKaraoke = false;
     private boolean claimingSession = false;
+    private boolean adsInitialized = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,10 +70,17 @@ public class AuthActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        // 🟢 INSERTED CODE: read the selected account mode.
         createMode = getIntent().getBooleanExtra("create_mode", false);
 
         auth = FirebaseAuth.getInstance();
+
+        // Initialize Google Mobile Ads.
+        MobileAds.initialize(this, initializationStatus -> {
+            runOnUiThread(() -> {
+                adsInitialized = true;
+                loadBannerIfReady();
+            });
+        });
 
         FirebaseUser user = auth.getCurrentUser();
 
@@ -81,6 +99,8 @@ public class AuthActivity extends Activity {
     private void showLoginForm() {
         openingKaraoke = false;
         claimingSession = false;
+
+        destroyAdView();
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -157,6 +177,41 @@ public class AuthActivity extends Activity {
         passwordParams.bottomMargin = dp(12);
         root.addView(passwordField, passwordParams);
 
+        // 🟢 ADDED: Separate banner area on Sign In and Create Account.
+        TextView adLabel = new TextView(this);
+        adLabel.setText("ADVERTISEMENT");
+        adLabel.setTextColor(MUTED);
+        adLabel.setTextSize(11);
+        adLabel.setGravity(Gravity.CENTER);
+        adLabel.setPadding(0, dp(8), 0, dp(8));
+        root.addView(adLabel, fullWidthWrap());
+
+        LinearLayout adContainer = new LinearLayout(this);
+        adContainer.setOrientation(LinearLayout.VERTICAL);
+        adContainer.setGravity(Gravity.CENTER);
+        adContainer.setBackground(
+                roundDrawable(PANEL, dp(10))
+        );
+        adContainer.setPadding(dp(4), dp(10), dp(4), dp(10));
+
+        LinearLayout.LayoutParams adContainerParams = fullWidthWrap();
+        adContainerParams.bottomMargin = dp(12);
+        root.addView(adContainer, adContainerParams);
+
+        adView = new AdView(this);
+        adView.setAdUnitId(TEST_BANNER_ID);
+        adView.setAdSize(AdSize.BANNER);
+
+        adContainer.addView(
+                adView,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+        );
+
+        loadBannerIfReady();
+
         message = addText(root, "", MUTED, 13, false);
         message.setGravity(Gravity.CENTER);
         message.setPadding(dp(4), dp(6), dp(4), dp(6));
@@ -209,6 +264,19 @@ public class AuthActivity extends Activity {
         );
 
         setContentView(scroll);
+    }
+
+    private void loadBannerIfReady() {
+        if (adsInitialized && adView != null && !isFinishing()) {
+            adView.loadAd(new AdRequest.Builder().build());
+        }
+    }
+
+    private void destroyAdView() {
+        if (adView != null) {
+            adView.destroy();
+            adView = null;
+        }
     }
 
     private void addLabel(LinearLayout root, String label) {
@@ -388,6 +456,8 @@ public class AuthActivity extends Activity {
             FirebaseUser user,
             String initialMessage
     ) {
+        destroyAdView();
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(BG);
@@ -637,5 +707,29 @@ public class AuthActivity extends Activity {
         }
 
         return error.getMessage();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (adView != null) {
+            adView.resume();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        if (adView != null) {
+            adView.pause();
+        }
+
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        destroyAdView();
+        super.onDestroy();
     }
 }
