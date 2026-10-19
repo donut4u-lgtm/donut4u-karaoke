@@ -3,6 +3,7 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -19,6 +20,12 @@ import android.widget.TextView;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
 public class AuthActivity extends Activity {
 
@@ -27,12 +34,23 @@ public class AuthActivity extends Activity {
     private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
 
+    private static final String DATABASE_URL =
+            "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
+    private static final String DEVICE_PREFS =
+            "donut4u_device_session";
+
+    private static final String DEVICE_ID_KEY =
+            "installation_id";
+
     private FirebaseAuth auth;
     private EditText emailField;
     private EditText passwordField;
     private TextView message;
+
     private boolean createMode = false;
     private boolean openingKaraoke = false;
+    private boolean claimingSession = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -46,7 +64,7 @@ public class AuthActivity extends Activity {
         FirebaseUser user = auth.getCurrentUser();
 
         if (user != null && user.isEmailVerified()) {
-            openKaraoke();
+            claimActiveSession(user);
         } else if (user != null) {
             showVerification(
                     user,
@@ -58,6 +76,9 @@ public class AuthActivity extends Activity {
     }
 
     private void showLoginForm() {
+        openingKaraoke = false;
+        claimingSession = false;
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(BG);
@@ -266,7 +287,7 @@ public class AuthActivity extends Activity {
                     if (user == null) {
                         setMessage("Could not load your account.");
                     } else if (user.isEmailVerified()) {
-                        openKaraoke();
+                        claimActiveSession(user);
                     } else {
                         showVerification(
                                 user,
@@ -290,6 +311,74 @@ public class AuthActivity extends Activity {
         }
 
         return true;
+    }
+
+    /*
+     * Each app installation gets a persistent ID.
+     * A successful sign-in writes this ID to Firebase.
+     * OnlineSongActivity must monitor this record and sign out
+     * when the stored ID no longer matches this installation.
+     */
+    private String getInstallationId() {
+        SharedPreferences prefs = getSharedPreferences(
+                DEVICE_PREFS,
+                MODE_PRIVATE
+        );
+
+        String id = prefs.getString(DEVICE_ID_KEY, null);
+
+        if (id == null || id.trim().isEmpty()) {
+            id = UUID.randomUUID().toString();
+
+            prefs.edit()
+                    .putString(DEVICE_ID_KEY, id)
+                    .apply();
+        }
+
+        return id;
+    }
+
+    private void claimActiveSession(FirebaseUser user) {
+        if (claimingSession || openingKaraoke || isFinishing()) {
+            return;
+        }
+
+        if (user == null || !user.isEmailVerified()) {
+            showLoginForm();
+            return;
+        }
+
+        claimingSession = true;
+        setMessage("Activating this phone...");
+
+        String installationId = getInstallationId();
+
+        DatabaseReference sessionRef =
+                FirebaseDatabase.getInstance(DATABASE_URL)
+                        .getReference("activeSessions")
+                        .child(user.getUid());
+
+        Map<String, Object> session = new HashMap<>();
+        session.put("sessionId", installationId);
+        session.put("updatedAt", System.currentTimeMillis());
+
+        sessionRef.setValue(session)
+                .addOnCompleteListener(this, task -> {
+                    claimingSession = false;
+
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+
+                    if (task.isSuccessful()) {
+                        openKaraoke();
+                    } else {
+                        setMessage(
+                                "Could not activate this phone. Check your internet connection and Firebase Realtime Database rules, then try again. "
+                                        + errorMessage(task.getException())
+                        );
+                    }
+                });
     }
 
     private void showVerification(
@@ -386,7 +475,7 @@ public class AuthActivity extends Activity {
             if (task.isSuccessful()
                     && refreshedUser != null
                     && refreshedUser.isEmailVerified()) {
-                openKaraoke();
+                claimActiveSession(refreshedUser);
             } else if (!task.isSuccessful()) {
                 setMessage(
                         "Could not check verification. Check your internet and try again."
