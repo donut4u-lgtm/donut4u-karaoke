@@ -138,10 +138,6 @@ public class OnlineSongActivity extends Activity {
         String id = prefs.getString(DEVICE_ID_KEY, null);
 
         if (id == null || id.trim().isEmpty()) {
-            /*
-             * AuthActivity normally creates this ID before opening
-             * OnlineSongActivity. Generate one only as a fallback.
-             */
             id = java.util.UUID.randomUUID().toString();
 
             prefs.edit()
@@ -209,13 +205,6 @@ public class OnlineSongActivity extends Activity {
                     return;
                 }
 
-                /*
-                 * This phone owns the session. On the first successful
-                 * check, build the normal karaoke screen.
-                 *
-                 * The same listener stays active and checks future
-                 * changes when another phone signs in.
-                 */
                 if (!sessionValid) {
                     sessionValid = true;
                     buildSearchScreen();
@@ -322,10 +311,6 @@ public class OnlineSongActivity extends Activity {
         signingOutForSessionChange = true;
         sessionValid = false;
 
-        /*
-         * Stop playback immediately. Do not delete the Firebase
-         * session record because it now belongs to the other phone.
-         */
         destroyPlayer();
 
         if (sessionRef != null && sessionListener != null) {
@@ -1033,10 +1018,6 @@ public class OnlineSongActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
-        /*
-         * Show the complete YouTube video without zoom or cropping.
-         * Portrait playback may show black space around the video.
-         */
         String html =
                 "<!doctype html>"
                 + "<html>"
@@ -1205,12 +1186,40 @@ public class OnlineSongActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (player != null || playbackVisible) {
+            // While playing, return to the song list.
             returnToResults();
-        } else if (donationScreenVisible) {
-            returnFromDonation();
-        } else {
-            super.onBackPressed();
+            return;
         }
+
+        if (donationScreenVisible) {
+            // Return from the donation screen to karaoke.
+            returnFromDonation();
+            return;
+        }
+
+        // On the search/list screen, hide the keyboard first.
+        if (searchBox != null) {
+            Object service = getSystemService(
+                    Context.INPUT_METHOD_SERVICE
+            );
+
+            if (service instanceof InputMethodManager
+                    && searchBox.hasFocus()) {
+                InputMethodManager keyboard =
+                        (InputMethodManager) service;
+
+                if (keyboard.isAcceptingText()) {
+                    keyboard.hideSoftInputFromWindow(
+                            searchBox.getWindowToken(), 0
+                    );
+                    searchBox.clearFocus();
+                    return;
+                }
+            }
+        }
+
+        // Keep the app open instead of letting Back close the screen.
+        toast("You're in Donut4U Karaoke. Search for another song!");
     }
 
     @Override
