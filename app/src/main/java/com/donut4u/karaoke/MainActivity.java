@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -7,6 +6,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.ViewGroup;
@@ -20,6 +20,12 @@ import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
 import com.google.android.gms.ads.MobileAds;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
 public class MainActivity extends Activity {
 
     private static final int BG = Color.rgb(16, 19, 21);
@@ -30,7 +36,14 @@ public class MainActivity extends Activity {
     private static final String TEST_BANNER_ID =
             "ca-app-pub-5625332026157890/7288125709";
 
+    private static final String VERSION_URL =
+            "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/version.txt";
+
+    private static final String APK_URL =
+            "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/app-release.apk";
+
     private AdView adView;
+    private boolean updateDialogShown = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,6 +63,112 @@ public class MainActivity extends Activity {
                 }
             });
         });
+
+        checkForUpdates();
+    }
+
+    private void checkForUpdates() {
+        Thread thread = new Thread(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                URL url = new URL(
+                        VERSION_URL + "?t=" + System.currentTimeMillis()
+                );
+
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+                connection.setUseCaches(false);
+                connection.setRequestProperty(
+                        "Cache-Control",
+                        "no-cache"
+                );
+
+                int responseCode = connection.getResponseCode();
+
+                if (responseCode != HttpURLConnection.HTTP_OK) {
+                    return;
+                }
+
+                StringBuilder response = new StringBuilder();
+
+                try (InputStream input = connection.getInputStream();
+                     BufferedReader reader = new BufferedReader(
+                             new InputStreamReader(input)
+                     )) {
+
+                    String line;
+
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line.trim());
+                    }
+                }
+
+                String versionText = response.toString().trim();
+
+                if (versionText.isEmpty()) {
+                    return;
+                }
+
+                int latestVersionCode =
+                        Integer.parseInt(versionText);
+
+                int installedVersionCode =
+                        BuildConfig.VERSION_CODE;
+
+                if (latestVersionCode > installedVersionCode) {
+                    runOnUiThread(() -> showUpdateDialog(
+                            latestVersionCode
+                    ));
+                }
+
+            } catch (Exception ignored) {
+                // No internet or version file unavailable.
+                // The app will continue working normally.
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+
+        thread.start();
+    }
+
+    private void showUpdateDialog(int latestVersionCode) {
+        if (isFinishing()
+                || isDestroyed()
+                || updateDialogShown) {
+            return;
+        }
+
+        updateDialogShown = true;
+
+        new AlertDialog.Builder(this)
+                .setTitle("Update Available")
+                .setMessage(
+                        "A newer version of Donut4U Karaoke is available.\n\n"
+                                + "Installed version code: "
+                                + BuildConfig.VERSION_CODE
+                                + "\nLatest version code: "
+                                + latestVersionCode
+                                + "\n\nDownload the latest APK now?"
+                )
+                .setPositiveButton("DOWNLOAD UPDATE", (dialog, which) -> {
+                    Intent intent = new Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(APK_URL)
+                    );
+
+                    startActivity(intent);
+                })
+                .setNegativeButton("LATER", (dialog, which) -> {
+                    dialog.dismiss();
+                })
+                .setCancelable(true)
+                .show();
     }
 
     private void showHomeScreen() {
@@ -114,7 +233,6 @@ public class MainActivity extends Activity {
             startActivity(intent);
         });
 
-        // 🟢 NEW SHARE APP BUTTON
         Button shareButton = makeButton("SHARE APP");
 
         LinearLayout.LayoutParams shareParams =
@@ -125,7 +243,7 @@ public class MainActivity extends Activity {
         shareButton.setOnClickListener(v -> {
             String shareMessage =
                     "Try Donut4U Karaoke! Download the Android app here:\n"
-                    + "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/app-release.apk";
+                    + APK_URL;
 
             Intent shareIntent = new Intent(Intent.ACTION_SEND);
             shareIntent.setType("text/plain");
@@ -145,7 +263,6 @@ public class MainActivity extends Activity {
                     )
             );
         });
-        // 🟢 END OF NEW SHARE APP BUTTON
 
         TextView adLabel = new TextView(this);
         adLabel.setText("ADVERTISEMENT");
@@ -159,7 +276,9 @@ public class MainActivity extends Activity {
         LinearLayout adContainer = new LinearLayout(this);
         adContainer.setOrientation(LinearLayout.VERTICAL);
         adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(roundDrawable(PANEL, dp(10)));
+        adContainer.setBackground(
+                roundDrawable(PANEL, dp(10))
+        );
         adContainer.setPadding(dp(4), dp(12), dp(4), dp(12));
 
         LinearLayout.LayoutParams adContainerParams =
@@ -196,7 +315,16 @@ public class MainActivity extends Activity {
         actionParams.setMargins(dp(4), 0, dp(4), 0);
 
         actions.addView(donateButton, actionParams);
-        actions.addView(questionButton, actionParams);
+
+        LinearLayout.LayoutParams questionParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(52),
+                        1
+                );
+        questionParams.setMargins(dp(4), 0, dp(4), 0);
+
+        actions.addView(questionButton, questionParams);
 
         root.addView(actions, fullWidthWrap());
 
@@ -272,6 +400,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+
         if (adView != null) {
             adView.resume();
         }
@@ -282,6 +411,7 @@ public class MainActivity extends Activity {
         if (adView != null) {
             adView.pause();
         }
+
         super.onPause();
     }
 
@@ -291,6 +421,7 @@ public class MainActivity extends Activity {
             adView.destroy();
             adView = null;
         }
+
         super.onDestroy();
     }
 }
