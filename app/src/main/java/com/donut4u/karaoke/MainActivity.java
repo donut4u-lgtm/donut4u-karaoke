@@ -27,7 +27,6 @@ public class MainActivity extends Activity {
     private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
 
-    // 🔴 REAL ADMOB BANNER ID
     private static final String TEST_BANNER_ID =
             "ca-app-pub-5625332026157890/7288125709";
 
@@ -114,6 +113,39 @@ public class MainActivity extends Activity {
             intent.putExtra("create_mode", false);
             startActivity(intent);
         });
+
+        // 🟢 NEW SHARE APP BUTTON
+        Button shareButton = makeButton("SHARE APP");
+
+        LinearLayout.LayoutParams shareParams =
+                fullWidth(dp(54));
+        shareParams.bottomMargin = dp(24);
+        root.addView(shareButton, shareParams);
+
+        shareButton.setOnClickListener(v -> {
+            String shareMessage =
+                    "Try Donut4U Karaoke! Download the Android app here:\n"
+                    + "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/app-release.apk";
+
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+            shareIntent.putExtra(
+                    Intent.EXTRA_SUBJECT,
+                    "Donut4U Karaoke"
+            );
+            shareIntent.putExtra(
+                    Intent.EXTRA_TEXT,
+                    shareMessage
+            );
+
+            startActivity(
+                    Intent.createChooser(
+                            shareIntent,
+                            "Share Donut4U Karaoke"
+                    )
+            );
+        });
+        // 🟢 END OF NEW SHARE APP BUTTON
 
         TextView adLabel = new TextView(this);
         adLabel.setText("ADVERTISEMENT");
