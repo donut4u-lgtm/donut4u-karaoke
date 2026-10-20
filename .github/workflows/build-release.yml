@@ -57,10 +57,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           if [ -z "$YOUTUBE_API_KEY" ]; then
             echo "ERROR: YOUTUBE_API_KEY secret is missing."
             exit 1
           fi
+
           gradle assembleRelease --no-daemon --stacktrace --console=plain
 
       - name: Verify APK signature
@@ -79,14 +81,23 @@ jobs:
 
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
-      - name: Replace APK in existing GitHub Release
+      - name: Create update version file
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$GITHUB_RUN_NUMBER" > version.txt
+          echo "Update version code: $(cat version.txt)"
+
+      - name: Replace APK and version file in GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+
           gh release upload v1.0.0 \
             app/build/outputs/apk/release/app-release.apk \
+            version.txt \
             --clobber
 
       - name: Upload APK backup artifact
