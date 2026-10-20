@@ -1,108 +1,108 @@
 name: Build Donut4U Signed Release APK
 
 on:
-push:
-branches:
-- main
-workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Set up Java
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - name: Set up Gradle
-    uses: gradle/actions/setup-gradle@v4
-    with:
-      gradle-version: '8.10.2'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
 
-  - name: Decrypt signing key
-    env:
-      ENC_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
-      STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Decrypt signing key
+        env:
+          ENC_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      if [ ! -s signing/donut4u-release.jks.enc ]; then
-        echo "ERROR: Encrypted signing key not found."
-        exit 1
-      fi
+          if [ ! -s signing/donut4u-release.jks.enc ]; then
+            echo "ERROR: Encrypted signing key not found."
+            exit 1
+          fi
 
-      openssl enc -d -aes-256-cbc \
-        -pbkdf2 -iter 200000 \
-        -pass env:ENC_PASSWORD \
-        -in signing/donut4u-release.jks.enc \
-        -out "$RUNNER_TEMP/donut4u-release.jks"
+          openssl enc -d -aes-256-cbc \
+            -pbkdf2 -iter 200000 \
+            -pass env:ENC_PASSWORD \
+            -in signing/donut4u-release.jks.enc \
+            -out "$RUNNER_TEMP/donut4u-release.jks"
 
-      keytool -list \
-        -keystore "$RUNNER_TEMP/donut4u-release.jks" \
-        -storepass "$STORE_PASSWORD" \
-        -alias donut4u
+          keytool -list \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -storepass "$STORE_PASSWORD" \
+            -alias donut4u
 
-  - name: Build signed APK
-    env:
-      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-      DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/donut4u-release.jks
-      DONUT4U_KEYSTORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
-      DONUT4U_KEY_ALIAS: donut4u
-      DONUT4U_KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
-      GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Build signed APK
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/donut4u-release.jks
+          DONUT4U_KEYSTORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          DONUT4U_KEY_ALIAS: donut4u
+          DONUT4U_KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      if [ -z "$YOUTUBE_API_KEY" ]; then
-        echo "ERROR: YOUTUBE_API_KEY secret is missing."
-        exit 1
-      fi
+          if [ -z "$YOUTUBE_API_KEY" ]; then
+            echo "ERROR: YOUTUBE_API_KEY secret is missing."
+            exit 1
+          fi
 
-      gradle assembleRelease --no-daemon --stacktrace --console=plain
+          gradle assembleRelease --no-daemon --stacktrace --console=plain
 
-  - name: Verify APK signature
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      APK="$(find app/build/outputs/apk/release \
-        -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          APK="$(find app/build/outputs/apk/release \
+            -maxdepth 1 -type f -name '*.apk' | head -n 1)"
 
-      if [ -z "$APK" ]; then
-        echo "ERROR: Release APK not found."
-        exit 1
-      fi
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK not found."
+            exit 1
+          fi
 
-      APKSIGNER="$(find "$ANDROID_HOME/build-tools" \
-        -type f -name apksigner | sort -V | tail -n 1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" \
+            -type f -name apksigner | sort -V | tail -n 1)"
 
-      if [ -z "$APKSIGNER" ]; then
-        echo "ERROR: apksigner not found."
-        exit 1
-      fi
+          if [ -z "$APKSIGNER" ]; then
+            echo "ERROR: apksigner not found."
+            exit 1
+          fi
 
-      "$APKSIGNER" verify --verbose --print-certs "$APK"
-      echo "APK signature verified."
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          echo "APK signature verified."
 
-  - name: Upload signed APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: donut4u-karaoke-signed-release-apk
-      path: app/build/outputs/apk/release/*.apk
-      if-no-files-found: error
-      retention-days: 14
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: donut4u-karaoke-signed-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
-  - name: Remove temporary signing key
-    if: always()
-    run: rm -f "$RUNNER_TEMP/donut4u-release.jks"
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/donut4u-release.jks"
