@@ -35,12 +35,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          if [ ! -s signing/donut4u-release.jks.enc ]; then
-            echo "ERROR: Encrypted signing key not found."
-            exit 1
-          fi
-
           openssl enc -d -aes-256-cbc \
             -pbkdf2 -iter 200000 \
             -pass env:ENC_PASSWORD \
@@ -63,51 +57,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           if [ -z "$YOUTUBE_API_KEY" ]; then
             echo "ERROR: YOUTUBE_API_KEY secret is missing."
             exit 1
           fi
-
           gradle assembleRelease --no-daemon --stacktrace --console=plain
 
       - name: Verify APK signature
         shell: bash
         run: |
           set -euo pipefail
-
           APK="app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "ERROR: Release APK not found: $APK"
+            echo "ERROR: Release APK not found."
             exit 1
           fi
 
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" \
             -type f -name apksigner | sort -V | tail -n 1)"
 
-          if [ -z "$APKSIGNER" ]; then
-            echo "ERROR: apksigner not found."
-            exit 1
-          fi
-
           "$APKSIGNER" verify --verbose --print-certs "$APK"
-          echo "APK signature verified."
 
       - name: Replace APK in existing GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.0
-          name: Donut4U Karaoke
-          files: app/build/outputs/apk/release/app-release.apk
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          generate_release_notes: false
-          make_latest: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload v1.0.0 \
+            app/build/outputs/apk/release/app-release.apk \
+            --clobber
 
-      - name: Upload APK as backup artifact
+      - name: Upload APK backup artifact
         uses: actions/upload-artifact@v4
         with:
           name: donut4u-karaoke-signed-release-apk
