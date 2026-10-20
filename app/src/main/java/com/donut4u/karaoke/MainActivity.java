@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -125,8 +126,7 @@ public class MainActivity extends Activity {
                 }
 
             } catch (Exception ignored) {
-                // No internet or version file unavailable.
-                // The app will continue working normally.
+                // App continues normally if update checking fails.
             } finally {
                 if (connection != null) {
                     connection.disconnect();
@@ -230,6 +230,22 @@ public class MainActivity extends Activity {
                     AuthActivity.class
             );
             intent.putExtra("create_mode", false);
+            startActivity(intent);
+        });
+
+        // NEW: KARAOKE STUDIO BUTTON
+        Button karaokeStudioButton = makeButton("KARAOKE STUDIO");
+
+        LinearLayout.LayoutParams studioParams =
+                fullWidth(dp(54));
+        studioParams.bottomMargin = dp(12);
+        root.addView(karaokeStudioButton, studioParams);
+
+        karaokeStudioButton.setOnClickListener(v -> {
+            Intent intent = new Intent(
+                    MainActivity.this,
+                    KaraokeStudioActivity.class
+            );
             startActivity(intent);
         });
 
