@@ -14,6 +14,11 @@ val keystorePassword = System.getenv("DONUT4U_KEYSTORE_PASSWORD") ?: ""
 val keyAliasValue = System.getenv("DONUT4U_KEY_ALIAS") ?: ""
 val keyPasswordValue = System.getenv("DONUT4U_KEY_PASSWORD") ?: ""
 
+val ciVersionCode = providers.environmentVariable("GITHUB_RUN_NUMBER")
+    .orNull
+    ?.toIntOrNull()
+    ?: 2
+
 android {
     namespace = "com.donut4u.karaoke"
     compileSdk = 35
@@ -26,8 +31,9 @@ android {
         applicationId = "com.donut4u.karaoke"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+
+        versionCode = ciVersionCode
+        versionName = "1.0.$ciVersionCode"
 
         buildConfigField(
             "String",
@@ -65,6 +71,5 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-database")
 
-    // Google AdMob SDK
     implementation("com.google.android.gms:play-services-ads:25.5.0")
 }
