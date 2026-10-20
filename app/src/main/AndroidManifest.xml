@@ -15,14 +15,23 @@
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-5625332026157890~7539407143" />
 
+        <!-- Authentication -->
         <activity
             android:name=".AuthActivity"
             android:exported="false" />
 
+        <!-- Existing Online Song page: keep unchanged -->
         <activity
             android:name=".OnlineSongActivity"
             android:exported="false" />
 
+        <!-- NEW Karaoke Studio page -->
+        <activity
+            android:name=".KaraokeStudioActivity"
+            android:exported="false"
+            android:label="Karaoke Studio" />
+
+        <!-- Main application page -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
