@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -52,7 +52,7 @@ jobs:
             -storepass "$STORE_PASSWORD" \
             -alias donut4u
 
-      - name: Build signed APK
+      - name: Build signed release APK
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/donut4u-release.jks
@@ -76,11 +76,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find app/build/outputs/apk/release \
-            -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          APK="app/build/outputs/apk/release/app-release.apk"
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: Release APK not found."
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: Release APK not found: $APK"
             exit 1
           fi
 
@@ -95,11 +94,24 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           echo "APK signature verified."
 
-      - name: Upload signed APK
+      - name: Replace APK in existing GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: Donut4U Karaoke
+          files: app/build/outputs/apk/release/app-release.apk
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK as backup artifact
         uses: actions/upload-artifact@v4
         with:
           name: donut4u-karaoke-signed-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
 
