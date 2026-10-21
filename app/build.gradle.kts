@@ -15,6 +15,18 @@ android {
 
         versionCode = 1
         versionName = "1.0"
+
+        val youtubeApiKey = (
+            project.findProperty("YOUTUBE_API_KEY") as String?
+                ?: System.getenv("YOUTUBE_API_KEY")
+                ?: ""
+        )
+
+        buildConfigField(
+            "String",
+            "YOUTUBE_API_KEY",
+            "\"${youtubeApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+        )
     }
 
     buildFeatures {
