@@ -32,10 +32,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           test -n "${ANDROID_HOME:-}"
           test -d "$ANDROID_HOME"
-
           echo "Android SDK: $ANDROID_HOME"
 
       - name: Decrypt signing key
@@ -45,16 +43,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          test -n "$ENC_PASSWORD" || {
-            echo "ERROR: Keystore encryption password is missing."
-            exit 1
-          }
-
-          test -n "$STORE_PASSWORD" || {
-            echo "ERROR: Keystore password is missing."
-            exit 1
-          }
+          test -n "$ENC_PASSWORD"
+          test -n "$STORE_PASSWORD"
 
           openssl enc -d -aes-256-cbc \
             -pbkdf2 -iter 200000 \
@@ -78,12 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          test -n "$YOUTUBE_API_KEY" || {
-            echo "ERROR: YOUTUBE_API_KEY secret is missing."
-            exit 1
-          }
-
+          test -n "$YOUTUBE_API_KEY"
           gradle assembleRelease --no-daemon --stacktrace --console=plain
 
       - name: Find release APK
@@ -91,19 +76,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          find app/build/outputs/apk -type f -name '*.apk' -print
-
           APK="app/build/outputs/apk/release/app-release.apk"
-
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: Expected release APK is missing or empty."
-            exit 1
-          fi
+          test -s "$APK"
 
           mkdir -p "$RUNNER_TEMP/verified-release"
           cp "$APK" "$RUNNER_TEMP/verified-release/Donut4U-Karaoke.apk"
-
           echo "apk_path=$RUNNER_TEMP/verified-release/Donut4U-Karaoke.apk" >> "$GITHUB_OUTPUT"
 
       - name: Verify APK file integrity
@@ -112,47 +89,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Checking APK ZIP integrity..."
           unzip -t "$APK"
-
-          echo "APK file size:"
           stat -c '%s bytes' "$APK"
-
-          echo "APK SHA-256:"
           sha256sum "$APK"
 
-      - name: Verify package, version and minimum Android version
+      - name: Verify package and version
         env:
           APK: ${{ steps.find_apk.outputs.apk_path }}
         shell: bash
         run: |
           set -euo pipefail
-
-          AAPT="$(find "$ANDROID_HOME/build-tools" \
-            -type f -name aapt | sort -V | tail -n 1)"
-
-          if [ -z "$AAPT" ] || [ ! -x "$AAPT" ]; then
-            echo "ERROR: Android aapt tool was not found."
-            exit 1
-          fi
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          test -x "$AAPT"
 
           BADGING="$("$AAPT" dump badging "$APK")"
           echo "$BADGING"
 
-          echo "$BADGING" | grep -F \
-            "package: name='com.donut4u.karaoke'"
-
-          echo "$BADGING" | grep -F \
-            "versionCode='2'"
-
-          echo "$BADGING" | grep -F \
-            "versionName='1.0.1'"
-
-          echo "$BADGING" | grep -F \
-            "sdkVersion:'24'"
-
-          echo "Package and version checks passed."
+          echo "$BADGING" | grep -F "package: name='com.donut4u.karaoke'"
+          echo "$BADGING" | grep -F "versionCode='26'"
+          echo "$BADGING" | grep -F "versionName='1.0.26'"
+          echo "$BADGING" | grep -F "sdkVersion:'24'"
 
       - name: Verify APK alignment
         env:
@@ -160,63 +116,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" \
-            -type f -name zipalign | sort -V | tail -n 1)"
-
-          if [ -z "$ZIPALIGN" ] || [ ! -x "$ZIPALIGN" ]; then
-            echo "ERROR: zipalign tool was not found."
-            exit 1
-          fi
-
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -x "$ZIPALIGN"
           "$ZIPALIGN" -c -v 4 "$APK"
 
-      - name: Verify APK signature and signing certificate
+      - name: Verify APK signature
         env:
           APK: ${{ steps.find_apk.outputs.apk_path }}
-          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
-
-          APKSIGNER="$(find "$ANDROID_HOME/build-tools" \
-            -type f -name apksigner | sort -V | tail -n 1)"
-
-          test -n "$APKSIGNER"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$APKSIGNER"
-
           "$APKSIGNER" verify --verbose --print-certs "$APK"
-
-          echo "Release signing certificate:"
-          keytool -list -v \
-            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
-            -storepass "$STORE_PASSWORD" \
-            -alias donut4u |
-            grep -E 'Alias name:|SHA256:'
 
       - name: Create update version file
         shell: bash
         run: |
           set -euo pipefail
-          echo "$GITHUB_RUN_NUMBER" > version.txt
-          cat version.txt
+          echo "26" > version.txt
 
-      - name: Replace APK and version file in GitHub Release
+      - name: Upload APK to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APK: ${{ steps.find_apk.outputs.apk_path }}
         shell: bash
         run: |
           set -euo pipefail
-
           gh release view v1.0.0 >/dev/null
-
           gh release upload v1.0.0 \
             "$APK#Donut4U-Karaoke.apk" \
             version.txt \
             --clobber
-
-          echo "Verified APK uploaded to release v1.0.0."
 
       - name: Upload verified APK backup artifact
         uses: actions/upload-artifact@v4
