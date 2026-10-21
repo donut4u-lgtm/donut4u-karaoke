@@ -3,12 +3,13 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.Intent;
 import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.media.MediaPlayer;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -18,20 +19,47 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class KaraokeStudioActivity extends Activity {
 
     private static final int REQUEST_AUDIO = 4101;
 
+    private static final String API_BASE =
+            "https://donut4u-karaoke.onrender.com";
+
     private final int GREEN = Color.rgb(0, 190, 95);
     private final int DARK = Color.rgb(18, 22, 20);
+    private final int PANEL = Color.rgb(35, 42, 38);
     private final int WHITE = Color.WHITE;
+
+    private final ExecutorService networkExecutor =
+            Executors.newSingleThreadExecutor();
+
+    private final Handler mainHandler =
+            new Handler(Looper.getMainLooper());
 
     private MediaPlayer mediaPlayer;
     private TextView selectedSong;
     private TextView playbackStatus;
+    private TextView searchStatus;
     private Button playButton;
+    private Button searchButton;
+    private EditText songSearch;
+    private LinearLayout resultsContainer;
     private Uri selectedAudioUri;
 
     @Override
@@ -62,7 +90,7 @@ public class KaraokeStudioActivity extends Activity {
 
         TextView subtitle = new TextView(this);
         subtitle.setText(
-                "Find songs, choose music, and prepare for karaoke."
+                "Search online music, choose audio, and prepare for karaoke."
         );
         subtitle.setTextColor(WHITE);
         subtitle.setTextSize(14);
@@ -71,16 +99,16 @@ public class KaraokeStudioActivity extends Activity {
 
         addSection(root, "1. SEARCH FOR A SONG");
 
-        EditText songSearch = new EditText(this);
+        songSearch = new EditText(this);
         songSearch.setSingleLine(true);
         songSearch.setHint("Enter song title or artist");
         songSearch.setHintTextColor(Color.LTGRAY);
         songSearch.setTextColor(WHITE);
         songSearch.setPadding(dp(12), dp(8), dp(12), dp(8));
-        songSearch.setBackgroundColor(Color.rgb(43, 49, 45));
+        songSearch.setBackgroundColor(PANEL);
         root.addView(songSearch, matchWrap());
 
-        Button searchButton = makeButton("Search Songs Online");
+        searchButton = makeButton("Search Songs Online");
         root.addView(searchButton, matchWrap());
 
         searchButton.setOnClickListener(v -> {
@@ -91,8 +119,19 @@ public class KaraokeStudioActivity extends Activity {
                 return;
             }
 
-            openWebSearch(query + " song");
+            searchCatalog(query);
         });
+
+        searchStatus = new TextView(this);
+        searchStatus.setText("Search the online music catalog.");
+        searchStatus.setTextColor(Color.LTGRAY);
+        searchStatus.setTextSize(14);
+        searchStatus.setPadding(0, dp(12), 0, dp(8));
+        root.addView(searchStatus);
+
+        resultsContainer = new LinearLayout(this);
+        resultsContainer.setOrientation(LinearLayout.VERTICAL);
+        root.addView(resultsContainer, matchWrap());
 
         Button lyricsButton = makeButton("Search Song Lyrics");
         root.addView(lyricsButton, matchWrap());
@@ -134,8 +173,8 @@ public class KaraokeStudioActivity extends Activity {
 
         TextView vocalInfo = new TextView(this);
         vocalInfo.setText(
-                "Find an audio vocal-removal service. After processing, " +
-                "return here and select the instrumental audio file."
+                "Find an online vocal-removal service. After processing, " +
+                "return here and choose the instrumental audio file."
         );
         vocalInfo.setTextColor(WHITE);
         vocalInfo.setTextSize(14);
@@ -173,14 +212,200 @@ public class KaraokeStudioActivity extends Activity {
 
         TextView note = new TextView(this);
         note.setText(
-                "Note: Online searches open your browser. This version " +
-                "does not download songs automatically, remove vocals " +
-                "inside the app, or synchronize lyrics to the music yet."
+                "Online search displays catalog information. " +
+                "Downloading music, creating an instrumental, and " +
+                "synchronized lyrics are separate steps."
         );
         note.setTextColor(Color.LTGRAY);
         note.setTextSize(12);
         note.setPadding(0, dp(18), 0, 0);
         root.addView(note);
+    }
+
+    private void searchCatalog(String query) {
+        searchButton.setEnabled(false);
+        searchStatus.setText("Searching online music catalog...");
+        resultsContainer.removeAllViews();
+
+        networkExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                String encodedQuery = URLEncoder.encode(
+                        query,
+                        StandardCharsets.UTF_8.name()
+                );
+
+                URL url = new URL(
+                        API_BASE + "/v1/catalog-search?q=" + encodedQuery
+                );
+
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(20000);
+                connection.setReadTimeout(25000);
+                connection.setRequestProperty(
+                        "Accept",
+                        "application/json"
+                );
+
+                int responseCode = connection.getResponseCode();
+
+                InputStream stream;
+
+                if (responseCode >= 200 && responseCode < 300) {
+                    stream = connection.getInputStream();
+                } else {
+                    stream = connection.getErrorStream();
+
+                    String errorMessage = readStream(stream);
+
+                    throw new IOException(
+                            "Server returned HTTP " + responseCode
+                    );
+                }
+
+                String response = readStream(stream);
+                JSONObject json = new JSONObject(response);
+                JSONArray results = json.optJSONArray("results");
+
+                if (results == null) {
+                    throw new IOException(
+                            "The server returned an unexpected response."
+                    );
+                }
+
+                final JSONArray foundTracks = results;
+
+                mainHandler.post(() -> {
+                    searchButton.setEnabled(true);
+
+                    if (foundTracks.length() == 0) {
+                        searchStatus.setText(
+                                "No downloadable tracks found. Try another search."
+                        );
+                        return;
+                    }
+
+                    searchStatus.setText(
+                            "Found " + foundTracks.length() + " songs."
+                    );
+
+                    displayResults(foundTracks);
+                });
+
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    searchButton.setEnabled(true);
+                    searchStatus.setText(
+                            "Search failed. Check your internet and try again."
+                    );
+
+                    Toast.makeText(
+                            KaraokeStudioActivity.this,
+                            "Unable to search songs. Please try again.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                });
+
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    private String readStream(InputStream stream) throws IOException {
+        if (stream == null) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
+                        stream,
+                        StandardCharsets.UTF_8
+                ))) {
+
+            String line;
+
+            while ((line = reader.readLine()) != null) {
+                builder.append(line);
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private void displayResults(JSONArray results) {
+        resultsContainer.removeAllViews();
+
+        for (int i = 0; i < results.length(); i++) {
+            JSONObject track = results.optJSONObject(i);
+
+            if (track == null) {
+                continue;
+            }
+
+            String trackId = track.optString("id", "");
+            String trackName = track.optString("name", "Unknown title");
+            String artist = track.optString("artist", "Unknown artist");
+            int duration = track.optInt("duration", 0);
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            card.setBackgroundColor(PANEL);
+
+            LinearLayout.LayoutParams cardParams = matchWrap();
+            cardParams.bottomMargin = dp(10);
+            resultsContainer.addView(card, cardParams);
+
+            TextView nameView = new TextView(this);
+            nameView.setText(trackName);
+            nameView.setTextColor(GREEN);
+            nameView.setTextSize(17);
+            nameView.setTypeface(null, Typeface.BOLD);
+            card.addView(nameView);
+
+            TextView artistView = new TextView(this);
+            artistView.setText("Artist: " + artist);
+            artistView.setTextColor(WHITE);
+            artistView.setTextSize(14);
+            artistView.setPadding(0, dp(5), 0, 0);
+            card.addView(artistView);
+
+            TextView durationView = new TextView(this);
+            durationView.setText(
+                    "Duration: " + formatDuration(duration)
+            );
+            durationView.setTextColor(Color.LTGRAY);
+            durationView.setTextSize(13);
+            durationView.setPadding(0, dp(4), 0, 0);
+            card.addView(durationView);
+
+            TextView idView = new TextView(this);
+            idView.setText("Catalog ID: " + trackId);
+            idView.setTextColor(Color.LTGRAY);
+            idView.setTextSize(12);
+            idView.setPadding(0, dp(4), 0, 0);
+            card.addView(idView);
+        }
+    }
+
+    private String formatDuration(int seconds) {
+        if (seconds <= 0) {
+            return "Unknown";
+        }
+
+        return String.format(
+                Locale.US,
+                "%d:%02d",
+                seconds / 60,
+                seconds % 60
+        );
     }
 
     private void addSection(LinearLayout root, String text) {
@@ -272,15 +497,20 @@ public class KaraokeStudioActivity extends Activity {
 
             selectedAudioUri = data.getData();
 
-            getContentResolver().takePersistableUriPermission(
-                    selectedAudioUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-            );
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        selectedAudioUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                );
+            } catch (SecurityException ignored) {
+                // Some document providers do not grant persistent access.
+            }
 
             stopPlayback();
 
             selectedSong.setText(
-                    "Selected audio:\n" + selectedAudioUri.getLastPathSegment()
+                    "Selected audio:\n" +
+                    selectedAudioUri.getLastPathSegment()
             );
 
             playbackStatus.setText("Audio selected and ready to play");
@@ -328,7 +558,9 @@ public class KaraokeStudioActivity extends Activity {
             });
 
             mediaPlayer.setOnErrorListener((player, what, extra) -> {
-                playbackStatus.setText("Unable to play this audio file");
+                playbackStatus.setText(
+                        "Unable to play this audio file"
+                );
                 releasePlayer();
                 return true;
             });
@@ -366,6 +598,7 @@ public class KaraokeStudioActivity extends Activity {
                 mediaPlayer.release();
             } catch (Exception ignored) {
             }
+
             mediaPlayer = null;
         }
     }
@@ -373,6 +606,8 @@ public class KaraokeStudioActivity extends Activity {
     @Override
     protected void onDestroy() {
         releasePlayer();
+        networkExecutor.shutdownNow();
+        mainHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
 }
