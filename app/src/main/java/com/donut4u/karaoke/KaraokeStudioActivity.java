@@ -10,7 +10,6 @@ import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.media.MediaPlayer;
-import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
@@ -40,6 +39,9 @@ public class KaraokeStudioActivity extends Activity {
 
     private static final String API_BASE =
             "https://donut4u-karaoke.onrender.com";
+
+    private static final int CONNECT_TIMEOUT = 60000;
+    private static final int READ_TIMEOUT = 60000;
 
     private final int GREEN = Color.rgb(0, 190, 95);
     private final int DARK = Color.rgb(18, 22, 20);
@@ -219,7 +221,9 @@ public class KaraokeStudioActivity extends Activity {
 
     private void searchCatalog(String query) {
         searchButton.setEnabled(false);
-        searchStatus.setText("Searching online music catalog...");
+        searchStatus.setText(
+                "Connecting to music catalog. This may take up to 60 seconds..."
+        );
         resultsContainer.removeAllViews();
 
         networkExecutor.execute(() -> {
@@ -237,12 +241,10 @@ public class KaraokeStudioActivity extends Activity {
 
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
-                connection.setConnectTimeout(20000);
-                connection.setReadTimeout(25000);
-                connection.setRequestProperty(
-                        "Accept",
-                        "application/json"
-                );
+                connection.setConnectTimeout(CONNECT_TIMEOUT);
+                connection.setReadTimeout(READ_TIMEOUT);
+                connection.setUseCaches(false);
+                connection.setRequestProperty("Accept", "application/json");
 
                 int responseCode = connection.getResponseCode();
 
@@ -255,7 +257,7 @@ public class KaraokeStudioActivity extends Activity {
                     String errorBody = readStream(stream);
 
                     throw new IOException(
-                            "HTTP " + responseCode +
+                            "Server HTTP " + responseCode +
                             (errorBody.isEmpty() ? "" : ": " + errorBody)
                     );
                 }
@@ -263,7 +265,7 @@ public class KaraokeStudioActivity extends Activity {
                 String response = readStream(stream);
 
                 if (response.trim().isEmpty()) {
-                    throw new IOException("The server returned an empty response.");
+                    throw new IOException("Server returned an empty response.");
                 }
 
                 JSONObject json = new JSONObject(response);
@@ -271,19 +273,18 @@ public class KaraokeStudioActivity extends Activity {
 
                 if (results == null) {
                     throw new IOException(
-                            "The server response has no 'results' array."
+                            "Server response is missing the results array."
                     );
                 }
 
-                JSONArray foundTracks = results;
+                final JSONArray foundTracks = results;
 
                 mainHandler.post(() -> {
                     searchButton.setEnabled(true);
 
                     if (foundTracks.length() == 0) {
                         searchStatus.setText(
-                                "The server returned 0 songs for '" +
-                                query + "'. Try another title or artist."
+                                "The server returned 0 songs. Try another search."
                         );
                         return;
                     }
@@ -291,20 +292,33 @@ public class KaraokeStudioActivity extends Activity {
                     displayResults(foundTracks);
 
                     searchStatus.setText(
-                            "Server returned " + foundTracks.length() +
-                            " songs. Displayed " +
-                            resultsContainer.getChildCount() + "."
+                            "Found " + resultsContainer.getChildCount() +
+                            " songs."
                     );
                 });
 
-            } catch (Exception e) {
-                String error = e.getMessage();
+            } catch (java.net.SocketTimeoutException e) {
+                mainHandler.post(() -> {
+                    searchButton.setEnabled(true);
+                    searchStatus.setText(
+                            "Connection timed out after 60 seconds. " +
+                            "Check the server and try again."
+                    );
+                    Toast.makeText(
+                            KaraokeStudioActivity.this,
+                            "Server timeout. Please try again.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                });
 
-                if (error == null || error.trim().isEmpty()) {
-                    error = e.getClass().getSimpleName();
+            } catch (Exception e) {
+                String message = e.getMessage();
+
+                if (message == null || message.trim().isEmpty()) {
+                    message = e.getClass().getSimpleName();
                 }
 
-                final String errorMessage = error;
+                final String errorMessage = message;
 
                 mainHandler.post(() -> {
                     searchButton.setEnabled(true);
@@ -333,10 +347,7 @@ public class KaraokeStudioActivity extends Activity {
         StringBuilder builder = new StringBuilder();
 
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(
-                        stream,
-                        StandardCharsets.UTF_8
-                ))) {
+                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
 
             String line;
 
@@ -461,8 +472,7 @@ public class KaraokeStudioActivity extends Activity {
                     "https://www.google.com/search?q=" + Uri.encode(query)
             );
 
-            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-            startActivity(intent);
+            startActivity(new Intent(Intent.ACTION_VIEW, uri));
 
         } catch (Exception e) {
             Toast.makeText(
@@ -510,7 +520,7 @@ public class KaraokeStudioActivity extends Activity {
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                 );
             } catch (SecurityException ignored) {
-                // Persistent permission is not supported by every provider.
+                // Some file providers do not support persistent permissions.
             }
 
             stopPlayback();
@@ -565,9 +575,7 @@ public class KaraokeStudioActivity extends Activity {
             });
 
             mediaPlayer.setOnErrorListener((player, what, extra) -> {
-                playbackStatus.setText(
-                        "Unable to play this audio file"
-                );
+                playbackStatus.setText("Unable to play this audio file");
                 releasePlayer();
                 return true;
             });
