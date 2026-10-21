@@ -1,4 +1,3 @@
-
 name: Build Donut4U Signed Release APK
 
 on:
@@ -34,16 +33,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${ANDROID_HOME:-}" ] || [ ! -d "$ANDROID_HOME" ]; then
-            echo "ERROR: Android SDK is not installed or ANDROID_HOME is missing."
-            exit 1
-          fi
+          test -n "${ANDROID_HOME:-}"
+          test -d "$ANDROID_HOME"
 
           echo "Android SDK: $ANDROID_HOME"
-
-          if [ ! -x "$ANDROID_HOME/platform-tools/adb" ]; then
-            echo "Android platform-tools not found; Gradle may report missing SDK packages."
-          fi
 
       - name: Decrypt signing key
         env:
@@ -54,12 +47,12 @@ jobs:
           set -euo pipefail
 
           test -n "$ENC_PASSWORD" || {
-            echo "ERROR: Keystore encryption password secret is missing."
+            echo "ERROR: Keystore encryption password is missing."
             exit 1
           }
 
           test -n "$STORE_PASSWORD" || {
-            echo "ERROR: Keystore password secret is missing."
+            echo "ERROR: Keystore password is missing."
             exit 1
           }
 
@@ -86,10 +79,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$YOUTUBE_API_KEY" ]; then
+          test -n "$YOUTUBE_API_KEY" || {
             echo "ERROR: YOUTUBE_API_KEY secret is missing."
             exit 1
-          fi
+          }
 
           gradle assembleRelease --no-daemon --stacktrace --console=plain
 
@@ -99,27 +92,89 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Searching for release APK files..."
+          find app/build/outputs/apk -type f -name '*.apk' -print
 
-          find app/build/outputs/apk -type f -name '*.apk' -print 2>/dev/null || true
+          APK="app/build/outputs/apk/release/app-release.apk"
 
-          APK="$(find app/build/outputs/apk -type f -name '*.apk' \
-            ! -name '*-unsigned.apk' \
-            ! -name '*-unaligned.apk' \
-            -print -quit 2>/dev/null || true)"
-
-          if [ -z "$APK" ] || [ ! -s "$APK" ]; then
-            echo "ERROR: No release APK was generated."
-            echo "Review the Gradle assembleRelease output above."
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: Expected release APK is missing or empty."
             exit 1
           fi
 
-          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
-          echo "Found APK: $APK"
+          mkdir -p "$RUNNER_TEMP/verified-release"
+          cp "$APK" "$RUNNER_TEMP/verified-release/Donut4U-Karaoke.apk"
 
-      - name: Verify APK signature
+          echo "apk_path=$RUNNER_TEMP/verified-release/Donut4U-Karaoke.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Verify APK file integrity
         env:
           APK: ${{ steps.find_apk.outputs.apk_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking APK ZIP integrity..."
+          unzip -t "$APK"
+
+          echo "APK file size:"
+          stat -c '%s bytes' "$APK"
+
+          echo "APK SHA-256:"
+          sha256sum "$APK"
+
+      - name: Verify package, version and minimum Android version
+        env:
+          APK: ${{ steps.find_apk.outputs.apk_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AAPT="$(find "$ANDROID_HOME/build-tools" \
+            -type f -name aapt | sort -V | tail -n 1)"
+
+          if [ -z "$AAPT" ] || [ ! -x "$AAPT" ]; then
+            echo "ERROR: Android aapt tool was not found."
+            exit 1
+          fi
+
+          BADGING="$("$AAPT" dump badging "$APK")"
+          echo "$BADGING"
+
+          echo "$BADGING" | grep -F \
+            "package: name='com.donut4u.karaoke'"
+
+          echo "$BADGING" | grep -F \
+            "versionCode='2'"
+
+          echo "$BADGING" | grep -F \
+            "versionName='1.0.1'"
+
+          echo "$BADGING" | grep -F \
+            "sdkVersion:'24'"
+
+          echo "Package and version checks passed."
+
+      - name: Verify APK alignment
+        env:
+          APK: ${{ steps.find_apk.outputs.apk_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" \
+            -type f -name zipalign | sort -V | tail -n 1)"
+
+          if [ -z "$ZIPALIGN" ] || [ ! -x "$ZIPALIGN" ]; then
+            echo "ERROR: zipalign tool was not found."
+            exit 1
+          fi
+
+          "$ZIPALIGN" -c -v 4 "$APK"
+
+      - name: Verify APK signature and signing certificate
+        env:
+          APK: ${{ steps.find_apk.outputs.apk_path }}
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -127,19 +182,24 @@ jobs:
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" \
             -type f -name apksigner | sort -V | tail -n 1)"
 
-          if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
-            echo "ERROR: apksigner was not found in Android build-tools."
-            exit 1
-          fi
+          test -n "$APKSIGNER"
+          test -x "$APKSIGNER"
 
           "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          echo "Release signing certificate:"
+          keytool -list -v \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -storepass "$STORE_PASSWORD" \
+            -alias donut4u |
+            grep -E 'Alias name:|SHA256:'
 
       - name: Create update version file
         shell: bash
         run: |
           set -euo pipefail
           echo "$GITHUB_RUN_NUMBER" > version.txt
-          echo "Update version code: $(cat version.txt)"
+          cat version.txt
 
       - name: Replace APK and version file in GitHub Release
         env:
@@ -149,20 +209,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! gh release view v1.0.0 >/dev/null 2>&1; then
-            echo "ERROR: GitHub Release v1.0.0 does not exist."
-            exit 1
-          fi
+          gh release view v1.0.0 >/dev/null
 
           gh release upload v1.0.0 \
             "$APK#Donut4U-Karaoke.apk" \
             version.txt \
             --clobber
 
-      - name: Upload APK backup artifact
+          echo "Verified APK uploaded to release v1.0.0."
+
+      - name: Upload verified APK backup artifact
         uses: actions/upload-artifact@v4
         with:
-          name: donut4u-karaoke-signed-release-apk
+          name: donut4u-karaoke-verified-release-apk
           path: ${{ steps.find_apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 14
@@ -170,4 +229,5 @@ jobs:
       - name: Remove temporary signing key
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/donut4u-release.jks"
+        run: |
+          rm -f "$RUNNER_TEMP/donut4u-release.jks"
