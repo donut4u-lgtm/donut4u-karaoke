@@ -1,52 +1,26 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.os.Bundle;
+import android.net.Uri;
 import android.view.Gravity;
-import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
-import com.google.android.gms.ads.AdRequest;
-import com.google.android.gms.ads.AdSize;
-import com.google.android.gms.ads.AdView;
-import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
-
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
 
 public class MainActivity extends Activity {
 
     private static final int BG = Color.rgb(16, 19, 21);
     private static final int GREEN = Color.rgb(0, 210, 105);
-    private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
-
-    private static final String TEST_BANNER_ID =
-            "ca-app-pub-5625332026157890/7288125709";
-
-    private static final String VERSION_URL =
-            "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/version.txt";
 
     private static final String APK_URL =
             "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/app-release.apk";
-
-    private AdView adView;
-    private boolean updateDialogShown = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,126 +29,46 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        showHomeScreen();
+        FirebaseUser user =
+                FirebaseAuth.getInstance().getCurrentUser();
 
-        MobileAds.initialize(this, initializationStatus -> {
-            runOnUiThread(() -> {
-                if (adView != null && !isFinishing()) {
-                    adView.loadAd(new AdRequest.Builder().build());
-                }
-            });
-        });
-
-        checkForUpdates();
-    }
-
-    private void checkForUpdates() {
-        Thread thread = new Thread(() -> {
-            HttpURLConnection connection = null;
-
-            try {
-                URL url = new URL(
-                        VERSION_URL + "?t=" + System.currentTimeMillis()
-                );
-
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(10000);
-                connection.setReadTimeout(10000);
-                connection.setUseCaches(false);
-                connection.setRequestProperty("Cache-Control", "no-cache");
-
-                if (connection.getResponseCode()
-                        != HttpURLConnection.HTTP_OK) {
-                    return;
-                }
-
-                StringBuilder response = new StringBuilder();
-
-                try (InputStream input = connection.getInputStream();
-                     BufferedReader reader = new BufferedReader(
-                             new InputStreamReader(input))) {
-
-                    String line;
-
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line.trim());
-                    }
-                }
-
-                String versionText = response.toString().trim();
-
-                if (versionText.isEmpty()) {
-                    return;
-                }
-
-                int latestVersionCode = Integer.parseInt(versionText);
-                int installedVersionCode = BuildConfig.VERSION_CODE;
-
-                if (latestVersionCode > installedVersionCode) {
-                    runOnUiThread(() ->
-                            showUpdateDialog(latestVersionCode));
-                }
-
-            } catch (Exception ignored) {
-                // Update checking must not prevent normal app use.
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
-            }
-        });
-
-        thread.start();
-    }
-
-    private void showUpdateDialog(int latestVersionCode) {
-        if (isFinishing() || isDestroyed() || updateDialogShown) {
+        // PAGE 1: YouTube song search after successful sign-in.
+        if (user != null && user.isEmailVerified()) {
+            openSongSearch();
             return;
         }
 
-        updateDialogShown = true;
-
-        new AlertDialog.Builder(this)
-                .setTitle("Update Available")
-                .setMessage(
-                        "A newer version of Donut4U Karaoke is available.\n\n"
-                                + "Installed version code: "
-                                + BuildConfig.VERSION_CODE
-                                + "\nLatest version code: "
-                                + latestVersionCode
-                                + "\n\nDownload the latest APK now?"
-                )
-                .setPositiveButton("DOWNLOAD UPDATE", (dialog, which) -> {
-                    Intent intent = new Intent(
-                            Intent.ACTION_VIEW,
-                            Uri.parse(APK_URL)
-                    );
-                    startActivity(intent);
-                })
-                .setNegativeButton("LATER", (dialog, which) ->
-                        dialog.dismiss())
-                .setCancelable(true)
-                .show();
+        showWelcomeScreen();
     }
 
-    private void showHomeScreen() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
+    private void openSongSearch() {
+        Intent intent = new Intent(
+                MainActivity.this,
+                OnlineSongActivity.class
+        );
 
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+        );
+
+        startActivity(intent);
+        finish();
+    }
+
+    private void showWelcomeScreen() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setGravity(Gravity.CENTER);
         root.setPadding(dp(24), dp(28), dp(24), dp(28));
-
-        scroll.addView(root);
+        root.setBackgroundColor(BG);
 
         TextView title = new TextView(this);
         title.setText("Donut4U Karaoke");
         title.setTextColor(GREEN);
         title.setTextSize(28);
-        title.setTypeface(null, Typeface.BOLD);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
         root.addView(title, fullWidthWrap());
 
@@ -183,54 +77,33 @@ public class MainActivity extends Activity {
         subtitle.setTextColor(MUTED);
         subtitle.setTextSize(15);
         subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(8), 0, dp(28));
+        subtitle.setPadding(0, dp(10), 0, dp(28));
         root.addView(subtitle, fullWidthWrap());
 
-        Button createButton = makeButton("CREATE ACCOUNT");
-        LinearLayout.LayoutParams createParams = fullWidth(dp(54));
-        createParams.bottomMargin = dp(12);
-        root.addView(createButton, createParams);
-
-        createButton.setOnClickListener(v -> openAuthentication(true));
-
         Button signInButton = makeButton("SIGN IN");
-        LinearLayout.LayoutParams signInParams = fullWidth(dp(54));
+        LinearLayout.LayoutParams signInParams =
+                fullWidth(dp(54));
         signInParams.bottomMargin = dp(12);
         root.addView(signInButton, signInParams);
 
-        signInButton.setOnClickListener(v -> openAuthentication(false));
+        signInButton.setOnClickListener(v ->
+                openAuthentication(false));
 
-        Button karaokeStudioButton = makeButton("KARAOKE STUDIO");
-        LinearLayout.LayoutParams studioParams = fullWidth(dp(54));
-        studioParams.bottomMargin = dp(24);
-        root.addView(karaokeStudioButton, studioParams);
+        Button createButton = makeButton("CREATE ACCOUNT");
+        LinearLayout.LayoutParams createParams =
+                fullWidth(dp(54));
+        createParams.bottomMargin = dp(12);
+        root.addView(createButton, createParams);
 
-        karaokeStudioButton.setOnClickListener(v -> {
-            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-
-            if (user == null || !user.isEmailVerified()) {
-                openAuthentication(false);
-                return;
-            }
-
-            Intent intent = new Intent(
-                    MainActivity.this,
-                    OnlineSongActivity.class
-            );
-            startActivity(intent);
-        });
+        createButton.setOnClickListener(v ->
+                openAuthentication(true));
 
         Button shareButton = makeButton("SHARE APP");
-        LinearLayout.LayoutParams shareParams = fullWidth(dp(54));
-        shareParams.bottomMargin = dp(24);
-        root.addView(shareButton, shareParams);
+        root.addView(shareButton, fullWidth(dp(54)));
 
         shareButton.setOnClickListener(v -> {
-            String shareMessage =
-                    "Try Donut4U Karaoke! Download the Android app here:\n"
-                            + APK_URL;
-
-            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            Intent shareIntent =
+                    new Intent(Intent.ACTION_SEND);
             shareIntent.setType("text/plain");
             shareIntent.putExtra(
                     Intent.EXTRA_SUBJECT,
@@ -238,7 +111,8 @@ public class MainActivity extends Activity {
             );
             shareIntent.putExtra(
                     Intent.EXTRA_TEXT,
-                    shareMessage
+                    "Try Donut4U Karaoke! Download the app here:\n"
+                            + APK_URL
             );
 
             startActivity(Intent.createChooser(
@@ -247,84 +121,15 @@ public class MainActivity extends Activity {
             ));
         });
 
-        TextView adLabel = new TextView(this);
-        adLabel.setText("ADVERTISEMENT");
-        adLabel.setTextColor(MUTED);
-        adLabel.setTextSize(11);
-        adLabel.setGravity(Gravity.CENTER);
-        adLabel.setPadding(0, dp(8), 0, dp(8));
-        root.addView(adLabel, fullWidthWrap());
-
-        LinearLayout adContainer = new LinearLayout(this);
-        adContainer.setOrientation(LinearLayout.VERTICAL);
-        adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(roundDrawable(PANEL, dp(10)));
-        adContainer.setPadding(dp(4), dp(20), dp(4), dp(20));
-
-        LinearLayout.LayoutParams adContainerParams = fullWidthWrap();
-        adContainerParams.bottomMargin = dp(24);
-        root.addView(adContainer, adContainerParams);
-
-        adView = new AdView(this);
-        adView.setAdUnitId(TEST_BANNER_ID);
-        adView.setAdSize(AdSize.BANNER);
-
-        adContainer.addView(
-                adView,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER);
-        actions.setWeightSum(2);
-
-        Button donateButton = makeButton("DONATE");
-        Button questionButton = makeButton("QUESTION");
-
-        LinearLayout.LayoutParams actionParams =
-                new LinearLayout.LayoutParams(0, dp(52), 1);
-        actionParams.setMargins(dp(4), 0, dp(4), 0);
-        actions.addView(donateButton, actionParams);
-
-        LinearLayout.LayoutParams questionParams =
-                new LinearLayout.LayoutParams(0, dp(52), 1);
-        questionParams.setMargins(dp(4), 0, dp(4), 0);
-        actions.addView(questionButton, questionParams);
-
-        root.addView(actions, fullWidthWrap());
-
-        donateButton.setOnClickListener(v ->
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Support Donut4U Karaoke")
-                        .setMessage(
-                                "Thank you for supporting the app. "
-                                        + "Donation details have not been configured yet."
-                        )
-                        .setPositiveButton("OK", null)
-                        .show()
-        );
-
-        questionButton.setOnClickListener(v ->
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Help")
-                        .setMessage(
-                                "Create an account or sign in before using "
-                                        + "Karaoke Studio. Search for a song "
-                                        + "inside the app to begin."
-                        )
-                        .setPositiveButton("OK", null)
-                        .show()
-        );
-
-        setContentView(scroll);
+        setContentView(root);
     }
 
     private void openAuthentication(boolean createMode) {
-        Intent intent = new Intent(this, AuthActivity.class);
+        Intent intent = new Intent(
+                MainActivity.this,
+                AuthActivity.class
+        );
+
         intent.putExtra("create_mode", createMode);
         startActivity(intent);
     }
@@ -333,67 +138,38 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(Color.BLACK);
-        button.setTextSize(13);
-        button.setTypeface(null, Typeface.BOLD);
+        button.setTextSize(14);
+        button.setTypeface(null, android.graphics.Typeface.BOLD);
         button.setAllCaps(false);
         button.setMinHeight(dp(48));
-        button.setBackground(roundDrawable(GREEN, dp(10)));
-        button.setStateListAnimator(null);
-        return button;
-    }
 
-    private GradientDrawable roundDrawable(int color, int radius) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        return drawable;
+        android.graphics.drawable.GradientDrawable background =
+                new android.graphics.drawable.GradientDrawable();
+        background.setColor(GREEN);
+        background.setCornerRadius(dp(10));
+        button.setBackground(background);
+
+        return button;
     }
 
     private LinearLayout.LayoutParams fullWidth(int height) {
         return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT,
                 height
         );
     }
 
     private LinearLayout.LayoutParams fullWidthWrap() {
         return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
         );
     }
 
     private int dp(int value) {
         return (int) (
-                value * getResources().getDisplayMetrics().density + 0.5f
+                value * getResources()
+                        .getDisplayMetrics().density + 0.5f
         );
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-
-        if (adView != null) {
-            adView.resume();
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        if (adView != null) {
-            adView.pause();
-        }
-
-        super.onPause();
-    }
-
-    @Override
-    protected void onDestroy() {
-        if (adView != null) {
-            adView.destroy();
-            adView = null;
-        }
-
-        super.onDestroy();
     }
 }
