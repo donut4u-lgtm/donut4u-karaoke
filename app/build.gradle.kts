@@ -1,4 +1,3 @@
-
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
@@ -10,11 +9,11 @@ android {
 
     defaultConfig {
         applicationId = "com.donut4u.karaoke"
-        minSdk = 24
+        minSdk = 23
         targetSdk = 35
 
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         val youtubeApiKey =
             (project.findProperty("YOUTUBE_API_KEY") as String?)
@@ -47,8 +46,8 @@ android {
                 System.getenv("DONUT4U_KEY_PASSWORD")
                     ?: error("DONUT4U_KEY_PASSWORD is missing")
 
-            isV1SigningEnabled = true
-            isV2SigningEnabled = true
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 
