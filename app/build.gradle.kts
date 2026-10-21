@@ -12,8 +12,8 @@ android {
         minSdk = 24
         targetSdk = 35
 
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 26
+        versionName = "1.0.26"
 
         val youtubeApiKey =
             (project.findProperty("YOUTUBE_API_KEY") as String?)
