@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -33,10 +34,13 @@ public class MainActivity extends Activity {
         FirebaseUser user =
                 FirebaseAuth.getInstance().getCurrentUser();
 
-        // PAGE 1: Open YouTube song search for a signed-in user.
-        if (user != null) {
+        if (user != null && user.isEmailVerified()) {
             openSongSearch();
             return;
+        }
+
+        if (user != null) {
+            FirebaseAuth.getInstance().signOut();
         }
 
         showWelcomeScreen();
@@ -82,8 +86,7 @@ public class MainActivity extends Activity {
         root.addView(subtitle, fullWidthWrap());
 
         Button signInButton = makeButton("SIGN IN");
-        LinearLayout.LayoutParams signInParams =
-                fullWidth(dp(54));
+        LinearLayout.LayoutParams signInParams = fullWidth(dp(54));
         signInParams.bottomMargin = dp(12);
         root.addView(signInButton, signInParams);
 
@@ -91,8 +94,7 @@ public class MainActivity extends Activity {
                 openAuthentication(false));
 
         Button createButton = makeButton("CREATE ACCOUNT");
-        LinearLayout.LayoutParams createParams =
-                fullWidth(dp(54));
+        LinearLayout.LayoutParams createParams = fullWidth(dp(54));
         createParams.bottomMargin = dp(12);
         root.addView(createButton, createParams);
 
