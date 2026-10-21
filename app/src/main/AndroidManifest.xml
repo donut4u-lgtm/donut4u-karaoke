@@ -1,4 +1,4 @@
-
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -8,30 +8,25 @@
         android:label="Donut4U Karaoke"
         android:icon="@drawable/donut4u_icon"
         android:roundIcon="@drawable/donut4u_icon"
+        android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
-        <!-- Google AdMob App ID -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-5625332026157890~7539407143" />
 
-        <!-- Authentication -->
         <activity
-            android:name=".AuthActivity"
+            android:name=".KaraokeStudioActivity"
             android:exported="false" />
 
-        <!-- Existing Online Song page: keep unchanged -->
         <activity
             android:name=".OnlineSongActivity"
             android:exported="false" />
 
-        <!-- NEW Karaoke Studio page -->
         <activity
-            android:name=".KaraokeStudioActivity"
-            android:exported="false"
-            android:label="Karaoke Studio" />
+            android:name=".AuthActivity"
+            android:exported="false" />
 
-        <!-- Main application page -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -44,4 +39,5 @@
         </activity>
 
     </application>
+
 </manifest>
