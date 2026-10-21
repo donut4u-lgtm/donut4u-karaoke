@@ -3,8 +3,9 @@ package com.donut4u.karaoke;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.net.Uri;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -32,8 +33,8 @@ public class MainActivity extends Activity {
         FirebaseUser user =
                 FirebaseAuth.getInstance().getCurrentUser();
 
-        // PAGE 1: YouTube song search after successful sign-in.
-        if (user != null && user.isEmailVerified()) {
+        // PAGE 1: Open YouTube song search for a signed-in user.
+        if (user != null) {
             openSongSearch();
             return;
         }
@@ -68,7 +69,7 @@ public class MainActivity extends Activity {
         title.setText("Donut4U Karaoke");
         title.setTextColor(GREEN);
         title.setTextSize(28);
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        title.setTypeface(null, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
         root.addView(title, fullWidthWrap());
 
@@ -102,8 +103,7 @@ public class MainActivity extends Activity {
         root.addView(shareButton, fullWidth(dp(54)));
 
         shareButton.setOnClickListener(v -> {
-            Intent shareIntent =
-                    new Intent(Intent.ACTION_SEND);
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
             shareIntent.setType("text/plain");
             shareIntent.putExtra(
                     Intent.EXTRA_SUBJECT,
@@ -139,12 +139,11 @@ public class MainActivity extends Activity {
         button.setText(label);
         button.setTextColor(Color.BLACK);
         button.setTextSize(14);
-        button.setTypeface(null, android.graphics.Typeface.BOLD);
+        button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
         button.setMinHeight(dp(48));
 
-        android.graphics.drawable.GradientDrawable background =
-                new android.graphics.drawable.GradientDrawable();
+        GradientDrawable background = new GradientDrawable();
         background.setColor(GREEN);
         background.setCornerRadius(dp(10));
         button.setBackground(background);
