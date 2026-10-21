@@ -16,17 +16,40 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        val youtubeApiKey = (
-            project.findProperty("YOUTUBE_API_KEY") as String?
+        val youtubeApiKey =
+            (project.findProperty("YOUTUBE_API_KEY") as String?)
                 ?: System.getenv("YOUTUBE_API_KEY")
                 ?: ""
-        )
 
         buildConfigField(
             "String",
             "YOUTUBE_API_KEY",
             "\"${youtubeApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         )
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file(
+                System.getenv("DONUT4U_KEYSTORE_PATH")
+                    ?: error("DONUT4U_KEYSTORE_PATH is missing")
+            )
+            storePassword =
+                System.getenv("DONUT4U_KEYSTORE_PASSWORD")
+                    ?: error("DONUT4U_KEYSTORE_PASSWORD is missing")
+            keyAlias =
+                System.getenv("DONUT4U_KEY_ALIAS")
+                    ?: error("DONUT4U_KEY_ALIAS is missing")
+            keyPassword =
+                System.getenv("DONUT4U_KEY_PASSWORD")
+                    ?: error("DONUT4U_KEY_PASSWORD is missing")
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures {
