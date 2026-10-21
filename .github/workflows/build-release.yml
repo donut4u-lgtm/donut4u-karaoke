@@ -24,13 +24,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+
+      - name: Check Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ANDROID_HOME:-}" ] || [ ! -d "$ANDROID_HOME" ]; then
+            echo "ERROR: Android SDK is not installed or ANDROID_HOME is missing."
+            exit 1
+          fi
+
+          echo "Android SDK: $ANDROID_HOME"
+
+          if [ ! -x "$ANDROID_HOME/platform-tools/adb" ]; then
+            echo "Android platform-tools not found; Gradle may report missing SDK packages."
+          fi
 
       - name: Decrypt signing key
         env:
@@ -86,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Searching for generated release APK files..."
+          echo "Searching for release APK files..."
 
           find app/build/outputs/apk -type f -name '*.apk' -print 2>/dev/null || true
 
@@ -96,8 +109,8 @@ jobs:
             -print -quit 2>/dev/null || true)"
 
           if [ -z "$APK" ] || [ ! -s "$APK" ]; then
-            echo "ERROR: No usable release APK was generated."
-            echo "Check the Gradle build output and signing configuration."
+            echo "ERROR: No release APK was generated."
+            echo "Review the Gradle assembleRelease output above."
             exit 1
           fi
 
@@ -115,7 +128,7 @@ jobs:
             -type f -name apksigner | sort -V | tail -n 1)"
 
           if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
-            echo "ERROR: Android apksigner was not found."
+            echo "ERROR: apksigner was not found in Android build-tools."
             exit 1
           fi
 
@@ -138,7 +151,6 @@ jobs:
 
           if ! gh release view v1.0.0 >/dev/null 2>&1; then
             echo "ERROR: GitHub Release v1.0.0 does not exist."
-            echo "Create the release first or update the workflow to use the intended release tag."
             exit 1
           fi
 
