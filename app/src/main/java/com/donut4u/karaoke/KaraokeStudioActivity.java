@@ -150,9 +150,7 @@ public class KaraokeStudioActivity extends Activity {
         addSection(root, "2. SELECT YOUR MUSIC");
 
         TextView fileInfo = new TextView(this);
-        fileInfo.setText(
-                "Choose an audio file stored on your phone."
-        );
+        fileInfo.setText("Choose an audio file stored on your phone.");
         fileInfo.setTextColor(WHITE);
         fileInfo.setTextSize(14);
         root.addView(fileInfo);
@@ -197,17 +195,14 @@ public class KaraokeStudioActivity extends Activity {
 
         playButton = makeButton("Play Instrumental");
         root.addView(playButton, matchWrap());
-
         playButton.setOnClickListener(v -> togglePlayback());
 
         Button stopButton = makeButton("Stop Music");
         root.addView(stopButton, matchWrap());
-
         stopButton.setOnClickListener(v -> stopPlayback());
 
         Button backButton = makeButton("Back");
         root.addView(backButton, matchWrap());
-
         backButton.setOnClickListener(v -> finish());
 
         TextView note = new TextView(this);
@@ -257,53 +252,67 @@ public class KaraokeStudioActivity extends Activity {
                     stream = connection.getInputStream();
                 } else {
                     stream = connection.getErrorStream();
-
-                    String errorMessage = readStream(stream);
+                    String errorBody = readStream(stream);
 
                     throw new IOException(
-                            "Server returned HTTP " + responseCode
+                            "HTTP " + responseCode +
+                            (errorBody.isEmpty() ? "" : ": " + errorBody)
                     );
                 }
 
                 String response = readStream(stream);
+
+                if (response.trim().isEmpty()) {
+                    throw new IOException("The server returned an empty response.");
+                }
+
                 JSONObject json = new JSONObject(response);
                 JSONArray results = json.optJSONArray("results");
 
                 if (results == null) {
                     throw new IOException(
-                            "The server returned an unexpected response."
+                            "The server response has no 'results' array."
                     );
                 }
 
-                final JSONArray foundTracks = results;
+                JSONArray foundTracks = results;
 
                 mainHandler.post(() -> {
                     searchButton.setEnabled(true);
 
                     if (foundTracks.length() == 0) {
                         searchStatus.setText(
-                                "No downloadable tracks found. Try another search."
+                                "The server returned 0 songs for '" +
+                                query + "'. Try another title or artist."
                         );
                         return;
                     }
 
-                    searchStatus.setText(
-                            "Found " + foundTracks.length() + " songs."
-                    );
-
                     displayResults(foundTracks);
+
+                    searchStatus.setText(
+                            "Server returned " + foundTracks.length() +
+                            " songs. Displayed " +
+                            resultsContainer.getChildCount() + "."
+                    );
                 });
 
             } catch (Exception e) {
+                String error = e.getMessage();
+
+                if (error == null || error.trim().isEmpty()) {
+                    error = e.getClass().getSimpleName();
+                }
+
+                final String errorMessage = error;
+
                 mainHandler.post(() -> {
                     searchButton.setEnabled(true);
-                    searchStatus.setText(
-                            "Search failed. Check your internet and try again."
-                    );
+                    searchStatus.setText("Search error: " + errorMessage);
 
                     Toast.makeText(
                             KaraokeStudioActivity.this,
-                            "Unable to search songs. Please try again.",
+                            "Search failed: " + errorMessage,
                             Toast.LENGTH_LONG
                     ).show();
                 });
@@ -378,9 +387,7 @@ public class KaraokeStudioActivity extends Activity {
             card.addView(artistView);
 
             TextView durationView = new TextView(this);
-            durationView.setText(
-                    "Duration: " + formatDuration(duration)
-            );
+            durationView.setText("Duration: " + formatDuration(duration));
             durationView.setTextColor(Color.LTGRAY);
             durationView.setTextSize(13);
             durationView.setPadding(0, dp(4), 0, 0);
@@ -503,7 +510,7 @@ public class KaraokeStudioActivity extends Activity {
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                 );
             } catch (SecurityException ignored) {
-                // Some document providers do not grant persistent access.
+                // Persistent permission is not supported by every provider.
             }
 
             stopPlayback();
