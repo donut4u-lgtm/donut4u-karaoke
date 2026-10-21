@@ -47,8 +47,8 @@ android {
                 System.getenv("DONUT4U_KEY_PASSWORD")
                     ?: error("DONUT4U_KEY_PASSWORD is missing")
 
-            enableV1Signing = true
-            enableV2Signing = true
+            isV1SigningEnabled = true
+            isV2SigningEnabled = true
         }
     }
 
