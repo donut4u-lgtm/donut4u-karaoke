@@ -1,735 +1,386 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
-import android.content.Intent;
-import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
-
-import com.google.android.gms.ads.AdRequest;
-import com.google.android.gms.ads.AdSize;
-import com.google.android.gms.ads.AdView;
-import com.google.android.gms.ads.MobileAds;
+import android.widget.Toast;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
-import com.google.firebase.database.DatabaseReference;
-import com.google.firebase.database.FirebaseDatabase;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
 
 public class AuthActivity extends Activity {
 
-    private static final int GREEN = Color.rgb(0, 210, 105);
-    private static final int BG = Color.rgb(16, 19, 21);
-    private static final int PANEL = Color.rgb(35, 39, 42);
-    private static final int MUTED = Color.rgb(185, 194, 189);
-
-    private static final String DATABASE_URL =
-            "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
-
-    private static final String DEVICE_PREFS =
-            "donut4u_device_session";
-
-    private static final String DEVICE_ID_KEY =
-            "installation_id";
-
-    // 🔴 REAL ADMOB BANNER ID — NOT THE TEST ID
-    private static final String TEST_BANNER_ID =
-            "ca-app-pub-5625332026157890/7288125709";
+    private static final int DARK = Color.rgb(13, 20, 17);
+    private static final int PANEL = Color.rgb(25, 37, 31);
+    private static final int GREEN = Color.rgb(0, 190, 115);
+    private static final int WHITE = Color.WHITE;
+    private static final int MUTED = Color.rgb(190, 205, 196);
 
     private FirebaseAuth auth;
-    private EditText emailField;
-    private EditText passwordField;
-    private TextView message;
-    private AdView adView;
 
-    private boolean createMode = false;
-    private boolean openingKaraoke = false;
-    private boolean claimingSession = false;
-    private boolean adsInitialized = false;
+    private EditText emailInput;
+    private EditText passwordInput;
+    private TextView statusText;
+    private ProgressBar progressBar;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
-
-        createMode = getIntent().getBooleanExtra("create_mode", false);
-
         auth = FirebaseAuth.getInstance();
 
-        // Initialize Google Mobile Ads.
-        MobileAds.initialize(this, initializationStatus -> {
-            runOnUiThread(() -> {
-                adsInitialized = true;
-                loadBannerIfReady();
-            });
-        });
+        FirebaseUser currentUser = auth.getCurrentUser();
 
-        FirebaseUser user = auth.getCurrentUser();
-
-        if (user != null && user.isEmailVerified()) {
-            claimActiveSession(user);
-        } else if (user != null) {
-            showVerification(
-                    user,
-                    "Please verify your email to continue."
-            );
-        } else {
-            showLoginForm();
+        if (currentUser != null) {
+            openMainScreen();
+            return;
         }
+
+        buildScreen();
     }
 
-    private void showLoginForm() {
-        openingKaraoke = false;
-        claimingSession = false;
-
-        destroyAdView();
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
-        scroll.setClipToPadding(false);
-
+    private void buildScreen() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(24), dp(30), dp(24), dp(28));
+        root.setPadding(dp(24), dp(24), dp(24), dp(24));
+        root.setBackgroundColor(DARK);
 
-        scroll.addView(root);
+        TextView title = new TextView(this);
+        title.setText("DONUT4U KARAOKE");
+        title.setTextColor(GREEN);
+        title.setTextSize(27);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
 
-        View logo = new View(this);
-        logo.setBackground(roundDrawable(GREEN, dp(18)));
-
-        LinearLayout.LayoutParams logoParams =
-                new LinearLayout.LayoutParams(dp(6), dp(6));
-        logoParams.bottomMargin = dp(8);
-        root.addView(logo, logoParams);
-
-        addText(root, "Donut4U Karaoke", GREEN, 27, true);
-
-        TextView subtitle = addText(
-                root,
-                createMode ? "Create your account" : "Welcome back",
-                Color.WHITE,
-                22,
-                true
-        );
-        subtitle.setPadding(0, dp(12), 0, dp(8));
-
-        addText(
-                root,
-                createMode
-                        ? "Create an account to start singing."
-                        : "Sign in to continue to karaoke.",
-                MUTED,
-                14,
-                false
+        root.addView(
+                title,
+                new LinearLayout.LayoutParams(-1, -2)
         );
 
-        addLabel(root, "EMAIL ADDRESS");
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Sign in or create your account");
+        subtitle.setTextColor(MUTED);
+        subtitle.setTextSize(15);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(0, dp(8), 0, dp(24));
 
-        emailField = new EditText(this);
-        emailField.setSingleLine(true);
-        emailField.setHint("you@example.com");
-        emailField.setInputType(
+        root.addView(
+                subtitle,
+                new LinearLayout.LayoutParams(-1, -2)
+        );
+
+        emailInput = new EditText(this);
+        emailInput.setSingleLine(true);
+        emailInput.setTextColor(WHITE);
+        emailInput.setHintTextColor(MUTED);
+        emailInput.setHint("Email address");
+        emailInput.setInputType(
                 InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
         );
-        emailField.setAutofillHints("emailAddress");
-        styleField(emailField);
+        emailInput.setPadding(dp(12), 0, dp(12), 0);
+        emailInput.setBackgroundColor(PANEL);
 
-        LinearLayout.LayoutParams emailParams = fullWidth(dp(58));
-        emailParams.topMargin = dp(8);
-        emailParams.bottomMargin = dp(24);
-        root.addView(emailField, emailParams);
+        LinearLayout.LayoutParams fieldParams =
+                new LinearLayout.LayoutParams(-1, dp(54));
 
-        addLabel(root, "PASSWORD");
+        fieldParams.bottomMargin = dp(12);
 
-        passwordField = new EditText(this);
-        passwordField.setSingleLine(true);
-        passwordField.setHint("At least 6 characters");
-        passwordField.setInputType(
+        root.addView(emailInput, fieldParams);
+
+        passwordInput = new EditText(this);
+        passwordInput.setSingleLine(true);
+        passwordInput.setTextColor(WHITE);
+        passwordInput.setHintTextColor(MUTED);
+        passwordInput.setHint("Password");
+        passwordInput.setInputType(
                 InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_VARIATION_PASSWORD
         );
-        passwordField.setAutofillHints("password");
-        styleField(passwordField);
+        passwordInput.setPadding(dp(12), 0, dp(12), 0);
+        passwordInput.setBackgroundColor(PANEL);
 
-        LinearLayout.LayoutParams passwordParams = fullWidth(dp(58));
-        passwordParams.topMargin = dp(8);
+        LinearLayout.LayoutParams passwordParams =
+                new LinearLayout.LayoutParams(-1, dp(54));
+
         passwordParams.bottomMargin = dp(12);
-        root.addView(passwordField, passwordParams);
 
-        // 🟢 Banner area for Sign In and Create Account.
-        TextView adLabel = new TextView(this);
-        adLabel.setText("ADVERTISEMENT");
-        adLabel.setTextColor(MUTED);
-        adLabel.setTextSize(11);
-        adLabel.setGravity(Gravity.CENTER);
-        adLabel.setPadding(0, dp(8), 0, dp(8));
-        root.addView(adLabel, fullWidthWrap());
+        root.addView(passwordInput, passwordParams);
 
-        LinearLayout adContainer = new LinearLayout(this);
-        adContainer.setOrientation(LinearLayout.VERTICAL);
-        adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(
-                roundDrawable(PANEL, dp(10))
-        );
-        adContainer.setPadding(dp(4), dp(10), dp(4), dp(10));
+        Button signInButton = makeButton("SIGN IN");
+        signInButton.setOnClickListener(v -> signIn());
 
-        LinearLayout.LayoutParams adContainerParams = fullWidthWrap();
-        adContainerParams.bottomMargin = dp(12);
-        root.addView(adContainer, adContainerParams);
-
-        adView = new AdView(this);
-        adView.setAdUnitId(TEST_BANNER_ID);
-        adView.setAdSize(AdSize.BANNER);
-
-        adContainer.addView(
-                adView,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
+        root.addView(
+                signInButton,
+                buttonParams()
         );
 
-        loadBannerIfReady();
+        Button createButton = makeButton("CREATE ACCOUNT");
+        createButton.setOnClickListener(v -> createAccount());
 
-        message = addText(root, "", MUTED, 13, false);
-        message.setGravity(Gravity.CENTER);
-        message.setPadding(dp(4), dp(6), dp(4), dp(6));
-
-        Button primary = makeButton(
-                createMode ? "CREATE ACCOUNT" : "SIGN IN"
+        root.addView(
+                createButton,
+                buttonParams()
         );
 
-        LinearLayout.LayoutParams primaryParams = fullWidth(dp(54));
-        primaryParams.topMargin = dp(16);
-        root.addView(primary, primaryParams);
-
-        primary.setOnClickListener(v -> {
-            if (createMode) {
-                createAccount();
-            } else {
-                signIn();
-            }
-        });
-
-        Button switchButton = makeButton(
-                createMode
-                        ? "I ALREADY HAVE AN ACCOUNT"
-                        : "CREATE NEW ACCOUNT"
-        );
-
-        LinearLayout.LayoutParams switchParams = fullWidth(dp(50));
-        switchParams.topMargin = dp(12);
-        root.addView(switchButton, switchParams);
-
-        switchButton.setOnClickListener(v -> {
-            createMode = !createMode;
-            showLoginForm();
-        });
-
-        Button resetButton = makeButton("FORGOT PASSWORD?");
-
-        LinearLayout.LayoutParams resetParams = fullWidth(dp(48));
-        resetParams.topMargin = dp(8);
-        root.addView(resetButton, resetParams);
-
+        Button resetButton = makeButton("RESET PASSWORD");
         resetButton.setOnClickListener(v -> resetPassword());
 
-        addText(
-                root,
-                "Email verification is required before karaoke access.",
-                MUTED,
-                12,
-                false
+        root.addView(
+                resetButton,
+                buttonParams()
         );
 
-        setContentView(scroll);
-    }
+        progressBar = new ProgressBar(this);
+        progressBar.setVisibility(View.GONE);
 
-    private void loadBannerIfReady() {
-        if (adsInitialized && adView != null && !isFinishing()) {
-            adView.loadAd(new AdRequest.Builder().build());
-        }
-    }
-
-    private void destroyAdView() {
-        if (adView != null) {
-            adView.destroy();
-            adView = null;
-        }
-    }
-
-    private void addLabel(LinearLayout root, String label) {
-        TextView view = new TextView(this);
-        view.setText(label);
-        view.setTextColor(GREEN);
-        view.setTextSize(12);
-        view.setTypeface(null, Typeface.BOLD);
-        view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-
-        LinearLayout.LayoutParams params = fullWidth(
-                ViewGroup.LayoutParams.WRAP_CONTENT
+        root.addView(
+                progressBar,
+                new LinearLayout.LayoutParams(-2, dp(48))
         );
-        root.addView(view, params);
-    }
 
-    private void createAccount() {
-        String email = emailField.getText().toString().trim();
-        String password = passwordField.getText().toString();
+        statusText = new TextView(this);
+        statusText.setTextColor(MUTED);
+        statusText.setTextSize(14);
+        statusText.setGravity(Gravity.CENTER);
+        statusText.setPadding(0, dp(8), 0, dp(8));
 
-        if (!validate(email, password)) {
-            return;
-        }
+        root.addView(
+                statusText,
+                new LinearLayout.LayoutParams(-1, -2)
+        );
 
-        setMessage("Creating account...");
+        TextView information = new TextView(this);
+        information.setText(
+                "An account is required to enter Karaoke Studio."
+        );
+        information.setTextColor(MUTED);
+        information.setTextSize(12);
+        information.setGravity(Gravity.CENTER);
+        information.setPadding(0, dp(12), 0, 0);
 
-        auth.createUserWithEmailAndPassword(email, password)
-                .addOnCompleteListener(this, task -> {
-                    if (!task.isSuccessful()) {
-                        setMessage(errorMessage(task.getException()));
-                        return;
-                    }
+        root.addView(
+                information,
+                new LinearLayout.LayoutParams(-1, -2)
+        );
 
-                    FirebaseUser user = auth.getCurrentUser();
-
-                    if (user == null) {
-                        setMessage(
-                                "Account created. Please sign in again."
-                        );
-                        return;
-                    }
-
-                    user.sendEmailVerification()
-                            .addOnCompleteListener(this, sendTask -> {
-                                if (sendTask.isSuccessful()) {
-                                    showVerification(
-                                            user,
-                                            "Verification email sent. Check your inbox and spam folder."
-                                    );
-                                } else {
-                                    showVerification(
-                                            user,
-                                            "Account created, but email could not be sent. Tap RESEND EMAIL."
-                                    );
-                                }
-                            });
-                });
+        setContentView(root);
     }
 
     private void signIn() {
-        String email = emailField.getText().toString().trim();
-        String password = passwordField.getText().toString();
+        String email = emailInput.getText().toString().trim();
+        String password = passwordInput.getText().toString();
 
-        if (!validate(email, password)) {
+        if (!validate(email, password, false)) {
             return;
         }
 
-        setMessage("Signing in...");
+        setLoading(true, "Signing in...");
 
         auth.signInWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
-                    if (!task.isSuccessful()) {
-                        setMessage(errorMessage(task.getException()));
-                        return;
-                    }
+                    setLoading(false, "");
 
-                    FirebaseUser user = auth.getCurrentUser();
-
-                    if (user == null) {
-                        setMessage("Could not load your account.");
-                    } else if (user.isEmailVerified()) {
-                        claimActiveSession(user);
+                    if (task.isSuccessful()) {
+                        openMainScreen();
                     } else {
-                        showVerification(
-                                user,
-                                "Your email is not verified yet. Verify it to continue."
+                        showError(
+                                task.getException(),
+                                "Sign-in failed."
                         );
                     }
                 });
     }
 
-    private boolean validate(String email, String password) {
+    private void createAccount() {
+        String email = emailInput.getText().toString().trim();
+        String password = passwordInput.getText().toString();
+
+        if (!validate(email, password, true)) {
+            return;
+        }
+
+        setLoading(true, "Creating your account...");
+
+        auth.createUserWithEmailAndPassword(email, password)
+                .addOnCompleteListener(this, task -> {
+                    setLoading(false, "");
+
+                    if (task.isSuccessful()) {
+                        Toast.makeText(
+                                this,
+                                "Account created successfully.",
+                                Toast.LENGTH_LONG
+                        ).show();
+
+                        openMainScreen();
+                    } else {
+                        showError(
+                                task.getException(),
+                                "Account creation failed."
+                        );
+                    }
+                });
+    }
+
+    private void resetPassword() {
+        String email = emailInput.getText().toString().trim();
+
         if (email.isEmpty()) {
-            setMessage("Enter your email address.");
+            emailInput.setError(
+                    "Enter your email address first."
+            );
+            emailInput.requestFocus();
+            return;
+        }
+
+        if (!android.util.Patterns.EMAIL_ADDRESS
+                .matcher(email)
+                .matches()) {
+            emailInput.setError(
+                    "Enter a valid email address."
+            );
+            emailInput.requestFocus();
+            return;
+        }
+
+        setLoading(true, "Sending password-reset email...");
+
+        auth.sendPasswordResetEmail(email)
+                .addOnCompleteListener(this, task -> {
+                    setLoading(false, "");
+
+                    if (task.isSuccessful()) {
+                        statusText.setText(
+                                "Password-reset instructions have been sent "
+                                        + "if the address is registered."
+                        );
+                    } else {
+                        showError(
+                                task.getException(),
+                                "Could not send reset email."
+                        );
+                    }
+                });
+    }
+
+    private boolean validate(
+            String email,
+            String password,
+            boolean creatingAccount
+    ) {
+        if (email.isEmpty()) {
+            emailInput.setError("Email is required.");
+            emailInput.requestFocus();
             return false;
         }
 
-        if (password.length() < 6) {
-            setMessage(
+        if (!android.util.Patterns.EMAIL_ADDRESS
+                .matcher(email)
+                .matches()) {
+            emailInput.setError("Enter a valid email address.");
+            emailInput.requestFocus();
+            return false;
+        }
+
+        if (password.isEmpty()) {
+            passwordInput.setError("Password is required.");
+            passwordInput.requestFocus();
+            return false;
+        }
+
+        if (creatingAccount && password.length() < 6) {
+            passwordInput.setError(
                     "Password must contain at least 6 characters."
             );
+            passwordInput.requestFocus();
             return false;
         }
 
         return true;
     }
 
-    /*
-     * Each app installation gets a persistent ID.
-     * A successful sign-in writes this ID to Firebase.
-     * OnlineSongActivity must monitor this record and sign out
-     * when the stored ID no longer matches this installation.
-     */
-    private String getInstallationId() {
-        SharedPreferences prefs = getSharedPreferences(
-                DEVICE_PREFS,
-                MODE_PRIVATE
+    private void setLoading(boolean loading, String message) {
+        progressBar.setVisibility(
+                loading ? View.VISIBLE : View.GONE
         );
 
-        String id = prefs.getString(DEVICE_ID_KEY, null);
+        statusText.setText(message);
 
-        if (id == null || id.trim().isEmpty()) {
-            id = UUID.randomUUID().toString();
-
-            prefs.edit()
-                    .putString(DEVICE_ID_KEY, id)
-                    .apply();
-        }
-
-        return id;
+        emailInput.setEnabled(!loading);
+        passwordInput.setEnabled(!loading);
     }
 
-    private void claimActiveSession(FirebaseUser user) {
-        if (claimingSession || openingKaraoke || isFinishing()) {
-            return;
-        }
-
-        if (user == null || !user.isEmailVerified()) {
-            showLoginForm();
-            return;
-        }
-
-        claimingSession = true;
-        setMessage("Activating this phone...");
-
-        String installationId = getInstallationId();
-
-        DatabaseReference sessionRef =
-                FirebaseDatabase.getInstance(DATABASE_URL)
-                        .getReference("activeSessions")
-                        .child(user.getUid());
-
-        Map<String, Object> session = new HashMap<>();
-        session.put("sessionId", installationId);
-        session.put("updatedAt", System.currentTimeMillis());
-
-        sessionRef.setValue(session)
-                .addOnCompleteListener(this, task -> {
-                    claimingSession = false;
-
-                    if (isFinishing() || isDestroyed()) {
-                        return;
-                    }
-
-                    if (task.isSuccessful()) {
-                        openKaraoke();
-                    } else {
-                        setMessage(
-                                "Could not activate this phone. Check your internet connection and Firebase Realtime Database rules, then try again. "
-                                        + errorMessage(task.getException())
-                        );
-                    }
-                });
-    }
-
-    private void showVerification(
-            FirebaseUser user,
-            String initialMessage
+    private void showError(
+            Exception exception,
+            String fallback
     ) {
-        destroyAdView();
+        String message = fallback;
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(24), dp(32), dp(24), dp(28));
-
-        scroll.addView(root);
-
-        addText(root, "Donut4U Karaoke", GREEN, 27, true);
-        addText(root, "Verify your email", Color.WHITE, 22, true);
-
-        addText(
-                root,
-                "Tap the verification link sent to:",
-                MUTED,
-                14,
-                false
-        );
-
-        addText(
-                root,
-                user.getEmail() == null ? "" : user.getEmail(),
-                GREEN,
-                16,
-                true
-        );
-
-        addText(
-                root,
-                "After opening the link in your email, return here and tap I VERIFIED MY EMAIL. Check your spam folder if needed.",
-                MUTED,
-                14,
-                false
-        );
-
-        message = addText(
-                root,
-                initialMessage,
-                MUTED,
-                14,
-                false
-        );
-
-        Button checkButton = makeButton("I VERIFIED MY EMAIL");
-        LinearLayout.LayoutParams checkParams = fullWidth(dp(54));
-        checkParams.topMargin = dp(20);
-        root.addView(checkButton, checkParams);
-        checkButton.setOnClickListener(v -> checkVerification());
-
-        Button resendButton = makeButton("RESEND EMAIL");
-        LinearLayout.LayoutParams resendParams = fullWidth(dp(50));
-        resendParams.topMargin = dp(12);
-        root.addView(resendButton, resendParams);
-        resendButton.setOnClickListener(v -> resendVerification());
-
-        Button signOutButton = makeButton(
-                "SIGN OUT / USE ANOTHER EMAIL"
-        );
-        LinearLayout.LayoutParams signOutParams = fullWidth(dp(50));
-        signOutParams.topMargin = dp(12);
-        root.addView(signOutButton, signOutParams);
-
-        signOutButton.setOnClickListener(v -> {
-            auth.signOut();
-            createMode = false;
-            showLoginForm();
-        });
-
-        setContentView(scroll);
-    }
-
-    private void checkVerification() {
-        FirebaseUser user = auth.getCurrentUser();
-
-        if (user == null) {
-            showLoginForm();
-            return;
+        if (exception != null
+                && exception.getLocalizedMessage() != null) {
+            message = exception.getLocalizedMessage();
         }
 
-        setMessage("Checking email verification...");
+        statusText.setText(message);
 
-        user.reload().addOnCompleteListener(this, task -> {
-            FirebaseUser refreshedUser = auth.getCurrentUser();
+        Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_LONG
+        ).show();
+    }
 
-            if (task.isSuccessful()
-                    && refreshedUser != null
-                    && refreshedUser.isEmailVerified()) {
-                claimActiveSession(refreshedUser);
-            } else if (!task.isSuccessful()) {
-                setMessage(
-                        "Could not check verification. Check your internet and try again."
+    private void openMainScreen() {
+        android.content.Intent intent =
+                new android.content.Intent(
+                        this,
+                        MainActivity.class
                 );
-            } else {
-                setMessage(
-                        "Email is not verified yet. Open the email link, then try again."
-                );
-            }
-        });
-    }
 
-    private void resendVerification() {
-        FirebaseUser user = auth.getCurrentUser();
-
-        if (user == null) {
-            showLoginForm();
-            return;
-        }
-
-        setMessage("Sending verification email...");
-
-        user.sendEmailVerification()
-                .addOnCompleteListener(this, task -> {
-                    if (task.isSuccessful()) {
-                        setMessage(
-                                "Email sent. Check your inbox and spam folder."
-                        );
-                    } else {
-                        setMessage(errorMessage(task.getException()));
-                    }
-                });
-    }
-
-    private void resetPassword() {
-        String email = emailField.getText().toString().trim();
-
-        if (email.isEmpty()) {
-            setMessage("Enter your email address first.");
-            return;
-        }
-
-        auth.sendPasswordResetEmail(email)
-                .addOnCompleteListener(this, task -> {
-                    if (task.isSuccessful()) {
-                        setMessage(
-                                "If the account exists, a password-reset email has been sent."
-                        );
-                    } else {
-                        setMessage(errorMessage(task.getException()));
-                    }
-                });
-    }
-
-    private void openKaraoke() {
-        if (openingKaraoke || isFinishing()) {
-            return;
-        }
-
-        openingKaraoke = true;
-
-        startActivity(
-                new Intent(this, OnlineSongActivity.class)
+        intent.addFlags(
+                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
         );
 
+        startActivity(intent);
         finish();
-    }
-
-    private TextView addText(
-            LinearLayout root,
-            String value,
-            int color,
-            int size,
-            boolean bold
-    ) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextColor(color);
-        view.setTextSize(size);
-        view.setGravity(Gravity.CENTER);
-        view.setPadding(dp(4), dp(8), dp(4), dp(8));
-
-        if (bold) {
-            view.setTypeface(null, Typeface.BOLD);
-        }
-
-        root.addView(view, fullWidthWrap());
-        return view;
-    }
-
-    private void styleField(EditText field) {
-        field.setTextColor(Color.WHITE);
-        field.setHintTextColor(MUTED);
-        field.setTextSize(16);
-        field.setSingleLine(true);
-        field.setPadding(dp(16), 0, dp(16), 0);
-        field.setBackground(roundDrawable(PANEL, dp(10)));
-        field.setMinHeight(dp(58));
-        field.setSelectAllOnFocus(false);
-
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
-            field.setTextCursorDrawable(null);
-        }
     }
 
     private Button makeButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextColor(Color.BLACK);
-        button.setTextSize(13);
-        button.setTypeface(null, Typeface.BOLD);
+        button.setTextColor(WHITE);
+        button.setTextSize(14);
         button.setAllCaps(false);
-        button.setMinHeight(dp(48));
-        button.setPadding(dp(12), dp(8), dp(12), dp(8));
-        button.setBackground(roundDrawable(GREEN, dp(10)));
-        button.setStateListAnimator(null);
+        button.setBackgroundColor(GREEN);
         return button;
     }
 
-    private GradientDrawable roundDrawable(int color, int radius) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        return drawable;
+    private LinearLayout.LayoutParams buttonParams() {
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, dp(50));
+
+        params.bottomMargin = dp(8);
+
+        return params;
     }
 
-    private LinearLayout.LayoutParams fullWidth(int height) {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                height
-        );
-    }
-
-    private LinearLayout.LayoutParams fullWidthWrap() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-    }
-
-    private int dp(int value) {
+    private int dp(float value) {
         return (int) (
-                value * getResources().getDisplayMetrics().density + 0.5f
+                value * getResources().getDisplayMetrics().density
+                        + 0.5f
         );
-    }
-
-    private void setMessage(String text) {
-        if (message != null) {
-            message.setText(text);
-        }
-    }
-
-    private String errorMessage(Exception error) {
-        if (error == null || error.getMessage() == null) {
-            return "Something went wrong. Please try again.";
-        }
-
-        return error.getMessage();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-
-        if (adView != null) {
-            adView.resume();
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        if (adView != null) {
-            adView.pause();
-        }
-
-        super.onPause();
-    }
-
-    @Override
-    protected void onDestroy() {
-        destroyAdView();
-        super.onDestroy();
     }
 }
