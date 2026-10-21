@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -92,7 +93,6 @@ public class OnlineSongActivity extends Activity {
 
     private boolean donationScreenVisible = false;
     private boolean playbackVisible = false;
-    private boolean adInitialized = false;
 
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor();
@@ -471,10 +471,6 @@ public class OnlineSongActivity extends Activity {
         resultsContainer.setOrientation(LinearLayout.VERTICAL);
         root.addView(resultsContainer, fullWidthWrap());
 
-        /*
-         * Keep the scrollable YouTube page above the banner.
-         * The banner stays at the bottom of Page 1.
-         */
         LinearLayout pageLayout = new LinearLayout(this);
         pageLayout.setOrientation(LinearLayout.VERTICAL);
         pageLayout.setBackgroundColor(BG);
@@ -500,7 +496,8 @@ public class OnlineSongActivity extends Activity {
         try {
             MobileAds.initialize(this, initializationStatus -> {});
 
-            adView = new AdView(this);
+            AdView view = new AdView(this);
+            adView = view;
             adView.setAdUnitId(AD_UNIT_ID);
             adView.setAdSize(AdSize.BANNER);
 
@@ -512,14 +509,12 @@ public class OnlineSongActivity extends Activity {
 
             parent.addView(adView, params);
             adView.loadAd(new AdRequest.Builder().build());
-            adInitialized = true;
 
         } catch (Exception e) {
             if (adView != null) {
                 adView.destroy();
                 adView = null;
             }
-            adInitialized = false;
         }
     }
 
