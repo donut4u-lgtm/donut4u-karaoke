@@ -20,6 +20,8 @@ import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
 import com.google.android.gms.ads.MobileAds;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -58,9 +60,7 @@ public class MainActivity extends Activity {
         MobileAds.initialize(this, initializationStatus -> {
             runOnUiThread(() -> {
                 if (adView != null && !isFinishing()) {
-                    adView.loadAd(
-                            new AdRequest.Builder().build()
-                    );
+                    adView.loadAd(new AdRequest.Builder().build());
                 }
             });
         });
@@ -82,14 +82,10 @@ public class MainActivity extends Activity {
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(10000);
                 connection.setUseCaches(false);
-                connection.setRequestProperty(
-                        "Cache-Control",
-                        "no-cache"
-                );
+                connection.setRequestProperty("Cache-Control", "no-cache");
 
-                int responseCode = connection.getResponseCode();
-
-                if (responseCode != HttpURLConnection.HTTP_OK) {
+                if (connection.getResponseCode()
+                        != HttpURLConnection.HTTP_OK) {
                     return;
                 }
 
@@ -97,8 +93,7 @@ public class MainActivity extends Activity {
 
                 try (InputStream input = connection.getInputStream();
                      BufferedReader reader = new BufferedReader(
-                             new InputStreamReader(input)
-                     )) {
+                             new InputStreamReader(input))) {
 
                     String line;
 
@@ -113,20 +108,16 @@ public class MainActivity extends Activity {
                     return;
                 }
 
-                int latestVersionCode =
-                        Integer.parseInt(versionText);
-
-                int installedVersionCode =
-                        BuildConfig.VERSION_CODE;
+                int latestVersionCode = Integer.parseInt(versionText);
+                int installedVersionCode = BuildConfig.VERSION_CODE;
 
                 if (latestVersionCode > installedVersionCode) {
-                    runOnUiThread(() -> showUpdateDialog(
-                            latestVersionCode
-                    ));
+                    runOnUiThread(() ->
+                            showUpdateDialog(latestVersionCode));
                 }
 
             } catch (Exception ignored) {
-                // App continues normally if update checking fails.
+                // Update checking must not prevent normal app use.
             } finally {
                 if (connection != null) {
                     connection.disconnect();
@@ -138,9 +129,7 @@ public class MainActivity extends Activity {
     }
 
     private void showUpdateDialog(int latestVersionCode) {
-        if (isFinishing()
-                || isDestroyed()
-                || updateDialogShown) {
+        if (isFinishing() || isDestroyed() || updateDialogShown) {
             return;
         }
 
@@ -161,12 +150,10 @@ public class MainActivity extends Activity {
                             Intent.ACTION_VIEW,
                             Uri.parse(APK_URL)
                     );
-
                     startActivity(intent);
                 })
-                .setNegativeButton("LATER", (dialog, which) -> {
-                    dialog.dismiss();
-                })
+                .setNegativeButton("LATER", (dialog, which) ->
+                        dialog.dismiss())
                 .setCancelable(true)
                 .show();
     }
@@ -189,7 +176,6 @@ public class MainActivity extends Activity {
         title.setTextSize(28);
         title.setTypeface(null, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
-
         root.addView(title, fullWidthWrap());
 
         TextView subtitle = new TextView(this);
@@ -198,68 +184,51 @@ public class MainActivity extends Activity {
         subtitle.setTextSize(15);
         subtitle.setGravity(Gravity.CENTER);
         subtitle.setPadding(0, dp(8), 0, dp(28));
-
         root.addView(subtitle, fullWidthWrap());
 
         Button createButton = makeButton("CREATE ACCOUNT");
-
-        LinearLayout.LayoutParams createParams =
-                fullWidth(dp(54));
+        LinearLayout.LayoutParams createParams = fullWidth(dp(54));
         createParams.bottomMargin = dp(12);
         root.addView(createButton, createParams);
 
-        createButton.setOnClickListener(v -> {
-            Intent intent = new Intent(
-                    MainActivity.this,
-                    AuthActivity.class
-            );
-            intent.putExtra("create_mode", true);
-            startActivity(intent);
-        });
+        createButton.setOnClickListener(v -> openAuthentication(true));
 
         Button signInButton = makeButton("SIGN IN");
-
-        LinearLayout.LayoutParams signInParams =
-                fullWidth(dp(54));
-        signInParams.bottomMargin = dp(24);
+        LinearLayout.LayoutParams signInParams = fullWidth(dp(54));
+        signInParams.bottomMargin = dp(12);
         root.addView(signInButton, signInParams);
 
-        signInButton.setOnClickListener(v -> {
-            Intent intent = new Intent(
-                    MainActivity.this,
-                    AuthActivity.class
-            );
-            intent.putExtra("create_mode", false);
-            startActivity(intent);
-        });
+        signInButton.setOnClickListener(v -> openAuthentication(false));
 
-        // NEW: KARAOKE STUDIO BUTTON
         Button karaokeStudioButton = makeButton("KARAOKE STUDIO");
-
-        LinearLayout.LayoutParams studioParams =
-                fullWidth(dp(54));
-        studioParams.bottomMargin = dp(12);
+        LinearLayout.LayoutParams studioParams = fullWidth(dp(54));
+        studioParams.bottomMargin = dp(24);
         root.addView(karaokeStudioButton, studioParams);
 
         karaokeStudioButton.setOnClickListener(v -> {
+            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+
+            if (user == null || !user.isEmailVerified()) {
+                openAuthentication(false);
+                return;
+            }
+
             Intent intent = new Intent(
                     MainActivity.this,
-                    KaraokeStudioActivity.class
+                    OnlineSongActivity.class
             );
             startActivity(intent);
         });
 
         Button shareButton = makeButton("SHARE APP");
-
-        LinearLayout.LayoutParams shareParams =
-                fullWidth(dp(54));
+        LinearLayout.LayoutParams shareParams = fullWidth(dp(54));
         shareParams.bottomMargin = dp(24);
         root.addView(shareButton, shareParams);
 
         shareButton.setOnClickListener(v -> {
             String shareMessage =
                     "Try Donut4U Karaoke! Download the Android app here:\n"
-                    + APK_URL;
+                            + APK_URL;
 
             Intent shareIntent = new Intent(Intent.ACTION_SEND);
             shareIntent.setType("text/plain");
@@ -272,12 +241,10 @@ public class MainActivity extends Activity {
                     shareMessage
             );
 
-            startActivity(
-                    Intent.createChooser(
-                            shareIntent,
-                            "Share Donut4U Karaoke"
-                    )
-            );
+            startActivity(Intent.createChooser(
+                    shareIntent,
+                    "Share Donut4U Karaoke"
+            ));
         });
 
         TextView adLabel = new TextView(this);
@@ -286,19 +253,15 @@ public class MainActivity extends Activity {
         adLabel.setTextSize(11);
         adLabel.setGravity(Gravity.CENTER);
         adLabel.setPadding(0, dp(8), 0, dp(8));
-
         root.addView(adLabel, fullWidthWrap());
 
         LinearLayout adContainer = new LinearLayout(this);
         adContainer.setOrientation(LinearLayout.VERTICAL);
         adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(
-                roundDrawable(PANEL, dp(10))
-        );
-        adContainer.setPadding(dp(4), dp(12), dp(4), dp(12));
+        adContainer.setBackground(roundDrawable(PANEL, dp(10)));
+        adContainer.setPadding(dp(4), dp(20), dp(4), dp(20));
 
-        LinearLayout.LayoutParams adContainerParams =
-                fullWidthWrap();
+        LinearLayout.LayoutParams adContainerParams = fullWidthWrap();
         adContainerParams.bottomMargin = dp(24);
         root.addView(adContainer, adContainerParams);
 
@@ -323,23 +286,13 @@ public class MainActivity extends Activity {
         Button questionButton = makeButton("QUESTION");
 
         LinearLayout.LayoutParams actionParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(52),
-                        1
-                );
+                new LinearLayout.LayoutParams(0, dp(52), 1);
         actionParams.setMargins(dp(4), 0, dp(4), 0);
-
         actions.addView(donateButton, actionParams);
 
         LinearLayout.LayoutParams questionParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(52),
-                        1
-                );
+                new LinearLayout.LayoutParams(0, dp(52), 1);
         questionParams.setMargins(dp(4), 0, dp(4), 0);
-
         actions.addView(questionButton, questionParams);
 
         root.addView(actions, fullWidthWrap());
@@ -349,7 +302,7 @@ public class MainActivity extends Activity {
                         .setTitle("Support Donut4U Karaoke")
                         .setMessage(
                                 "Thank you for supporting the app. "
-                                + "Donation details have not been configured yet."
+                                        + "Donation details have not been configured yet."
                         )
                         .setPositiveButton("OK", null)
                         .show()
@@ -359,14 +312,21 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle("Help")
                         .setMessage(
-                                "Create an account or sign in to access karaoke. "
-                                + "After signing in, search for a song to begin."
+                                "Create an account or sign in before using "
+                                        + "Karaoke Studio. Search for a song "
+                                        + "inside the app to begin."
                         )
                         .setPositiveButton("OK", null)
                         .show()
         );
 
         setContentView(scroll);
+    }
+
+    private void openAuthentication(boolean createMode) {
+        Intent intent = new Intent(this, AuthActivity.class);
+        intent.putExtra("create_mode", createMode);
+        startActivity(intent);
     }
 
     private Button makeButton(String label) {
@@ -382,10 +342,7 @@ public class MainActivity extends Activity {
         return button;
     }
 
-    private GradientDrawable roundDrawable(
-            int color,
-            int radius
-    ) {
+    private GradientDrawable roundDrawable(int color, int radius) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
@@ -408,8 +365,7 @@ public class MainActivity extends Activity {
 
     private int dp(int value) {
         return (int) (
-                value * getResources()
-                        .getDisplayMetrics().density + 0.5f
+                value * getResources().getDisplayMetrics().density + 0.5f
         );
     }
 
