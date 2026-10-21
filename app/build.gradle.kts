@@ -3,67 +3,37 @@ plugins {
     id("com.google.gms.google-services")
 }
 
-val youtubeApiKey = providers.gradleProperty("YOUTUBE_API_KEY")
-    .orElse(providers.environmentVariable("YOUTUBE_API_KEY"))
-    .getOrElse("")
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-
-val keystorePath = System.getenv("DONUT4U_KEYSTORE_PATH") ?: ""
-val keystorePassword = System.getenv("DONUT4U_KEYSTORE_PASSWORD") ?: ""
-val keyAliasValue = System.getenv("DONUT4U_KEY_ALIAS") ?: ""
-val keyPasswordValue = System.getenv("DONUT4U_KEY_PASSWORD") ?: ""
-
-val ciVersionCode = providers.environmentVariable("GITHUB_RUN_NUMBER")
-    .orNull
-    ?.toIntOrNull()
-    ?: 2
-
 android {
     namespace = "com.donut4u.karaoke"
     compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.donut4u.karaoke"
+        minSdk = 24
+        targetSdk = 28
+        versionCode = 1
+        versionName = "1.0"
+
+        buildConfigField(
+            "String",
+            "YOUTUBE_API_KEY",
+            "\"\""
+        )
+    }
 
     buildFeatures {
         buildConfig = true
     }
 
-    defaultConfig {
-        applicationId = "com.donut4u.karaoke"
-        minSdk = 24
-        targetSdk = 35
-
-        versionCode = ciVersionCode
-        versionName = "1.0.$ciVersionCode"
-
-        buildConfigField(
-            "String",
-            "YOUTUBE_API_KEY",
-            "\"${youtubeApiKey}\""
-        )
-    }
-
-    signingConfigs {
-        create("release") {
-            if (keystorePath.isNotBlank()) {
-                storeFile = file(keystorePath)
-            }
-            storePassword = keystorePassword
-            keyAlias = keyAliasValue
-            keyPassword = keyPasswordValue
-        }
-    }
-
-    buildTypes {
-        getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
-        }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    implementation("androidx.media3:media3-exoplayer:1.8.0")
-    implementation("androidx.media3:media3-common:1.8.0")
+    implementation("androidx.core:core:1.15.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
 
     implementation(
         platform("com.google.firebase:firebase-bom:35.0.2")
@@ -72,4 +42,7 @@ dependencies {
     implementation("com.google.firebase:firebase-database")
 
     implementation("com.google.android.gms:play-services-ads:25.5.0")
+
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+    implementation("androidx.media3:media3-common:1.8.0")
 }
