@@ -257,7 +257,9 @@ def process_job(job_id, track_id):
         no_vocals_path = separated_dir / "no_vocals.wav"
 
         if not vocals_path.is_file() or not no_vocals_path.is_file():
-            raise RuntimeError("Vocal separation did not produce both audio stems.")
+            raise RuntimeError(
+                "Vocal separation did not produce both audio stems."
+            )
 
         shutil.move(str(no_vocals_path), str(instrumental_path))
 
@@ -306,7 +308,7 @@ def process_job(job_id, track_id):
             artist=track.get("artist_name", "Unknown"),
         )
 
-    except Exception as exc:
+    except Exception:
         # Do not return internal errors or credentials to the client.
         shutil.rmtree(directory, ignore_errors=True)
 
@@ -324,6 +326,39 @@ def health():
         "status": "ok",
         "service": "Donut4U Karaoke Processing API",
     }
+
+
+@app.get("/v1/catalog-search")
+def public_catalog_search(
+    q: str = Query(min_length=1, max_length=100),
+):
+    """
+    Public read-only song search for the Android app.
+    Does not expose the private API token.
+    """
+    cleanup_expired_jobs()
+
+    tracks = jamendo_request({
+        "search": q.strip(),
+        "limit": 20,
+        "audioformat": "mp32",
+    })
+
+    results = []
+
+    for track in tracks:
+        if not track.get("audiodownload_allowed"):
+            continue
+
+        results.append({
+            "id": str(track.get("id", "")),
+            "name": track.get("name", ""),
+            "artist": track.get("artist_name", ""),
+            "duration": track.get("duration"),
+            "image": track.get("image"),
+        })
+
+    return {"results": results}
 
 
 @app.get("/v1/search")
@@ -427,12 +462,18 @@ def get_instrumental(
     job = get_job_or_404(job_id)
 
     if job["status"] != "completed":
-        raise HTTPException(status_code=409, detail="Processing is not complete.")
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
 
     audio_path = Path(job["directory"]) / "instrumental.wav"
 
     if not audio_path.is_file():
-        raise HTTPException(status_code=404, detail="Instrumental file not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Instrumental file not found."
+        )
 
     return FileResponse(
         audio_path,
@@ -449,12 +490,18 @@ def get_lyrics(
     job = get_job_or_404(job_id)
 
     if job["status"] != "completed":
-        raise HTTPException(status_code=409, detail="Processing is not complete.")
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
 
     lyrics_path = Path(job["directory"]) / "lyrics.json"
 
     if not lyrics_path.is_file():
-        raise HTTPException(status_code=404, detail="Lyrics file not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Lyrics file not found."
+        )
 
     with open(lyrics_path, "r", encoding="utf-8") as source:
         return json.load(source)
@@ -469,7 +516,10 @@ def delete_job(
         job = JOBS.get(job_id)
 
         if job is None:
-            raise HTTPException(status_code=404, detail="Job not found.")
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found."
+            )
 
         if job["status"] == "processing":
             raise HTTPException(
