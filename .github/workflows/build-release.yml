@@ -1,3 +1,4 @@
+
 name: Build Donut4U Signed Release APK
 
 on:
@@ -23,6 +24,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -35,6 +39,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          test -n "$ENC_PASSWORD" || {
+            echo "ERROR: Keystore encryption password secret is missing."
+            exit 1
+          }
+
+          test -n "$STORE_PASSWORD" || {
+            echo "ERROR: Keystore password secret is missing."
+            exit 1
+          }
+
           openssl enc -d -aes-256-cbc \
             -pbkdf2 -iter 200000 \
             -pass env:ENC_PASSWORD \
@@ -65,19 +80,44 @@ jobs:
 
           gradle assembleRelease --no-daemon --stacktrace --console=plain
 
-      - name: Verify APK signature
+      - name: Find release APK
+        id: find_apk
         shell: bash
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: Release APK not found."
+          echo "Searching for generated release APK files..."
+
+          find app/build/outputs/apk -type f -name '*.apk' -print 2>/dev/null || true
+
+          APK="$(find app/build/outputs/apk -type f -name '*.apk' \
+            ! -name '*-unsigned.apk' \
+            ! -name '*-unaligned.apk' \
+            -print -quit 2>/dev/null || true)"
+
+          if [ -z "$APK" ] || [ ! -s "$APK" ]; then
+            echo "ERROR: No usable release APK was generated."
+            echo "Check the Gradle build output and signing configuration."
             exit 1
           fi
 
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Found APK: $APK"
+
+      - name: Verify APK signature
+        env:
+          APK: ${{ steps.find_apk.outputs.apk_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" \
             -type f -name apksigner | sort -V | tail -n 1)"
+
+          if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
+            echo "ERROR: Android apksigner was not found."
+            exit 1
+          fi
 
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
@@ -91,12 +131,19 @@ jobs:
       - name: Replace APK and version file in GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK: ${{ steps.find_apk.outputs.apk_path }}
         shell: bash
         run: |
           set -euo pipefail
 
+          if ! gh release view v1.0.0 >/dev/null 2>&1; then
+            echo "ERROR: GitHub Release v1.0.0 does not exist."
+            echo "Create the release first or update the workflow to use the intended release tag."
+            exit 1
+          fi
+
           gh release upload v1.0.0 \
-            app/build/outputs/apk/release/app-release.apk \
+            "$APK#Donut4U-Karaoke.apk" \
             version.txt \
             --clobber
 
@@ -104,10 +151,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: donut4u-karaoke-signed-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 14
 
       - name: Remove temporary signing key
         if: always()
+        shell: bash
         run: rm -f "$RUNNER_TEMP/donut4u-release.jks"
