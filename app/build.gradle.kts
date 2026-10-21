@@ -34,15 +34,21 @@ android {
                 System.getenv("DONUT4U_KEYSTORE_PATH")
                     ?: error("DONUT4U_KEYSTORE_PATH is missing")
             )
+
             storePassword =
                 System.getenv("DONUT4U_KEYSTORE_PASSWORD")
                     ?: error("DONUT4U_KEYSTORE_PASSWORD is missing")
+
             keyAlias =
                 System.getenv("DONUT4U_KEY_ALIAS")
                     ?: error("DONUT4U_KEY_ALIAS is missing")
+
             keyPassword =
                 System.getenv("DONUT4U_KEY_PASSWORD")
                     ?: error("DONUT4U_KEY_PASSWORD is missing")
+
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 
