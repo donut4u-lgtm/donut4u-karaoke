@@ -58,10 +58,17 @@ public class MainActivity extends Activity {
 
         showWelcomeScreen();
 
+        // Check for updates without blocking the Home screen.
+        AppUpdateChecker.checkForUpdates(this);
+
         MobileAds.initialize(this, initializationStatus -> {
             runOnUiThread(() -> {
-                if (adView != null && !isFinishing() && !isDestroyed()) {
-                    adView.loadAd(new AdRequest.Builder().build());
+                if (adView != null
+                        && !isFinishing()
+                        && !isDestroyed()) {
+                    adView.loadAd(
+                            new AdRequest.Builder().build()
+                    );
                 }
             });
         });
@@ -137,8 +144,12 @@ public class MainActivity extends Activity {
         LinearLayout adContainer = new LinearLayout(this);
         adContainer.setOrientation(LinearLayout.VERTICAL);
         adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(roundDrawable(PANEL, dp(10)));
-        adContainer.setPadding(dp(4), dp(12), dp(4), dp(12));
+        adContainer.setBackground(
+                roundDrawable(PANEL, dp(10))
+        );
+        adContainer.setPadding(
+                dp(4), dp(12), dp(4), dp(12)
+        );
 
         LinearLayout.LayoutParams adContainerParams =
                 fullWidthWrap();
@@ -175,7 +186,8 @@ public class MainActivity extends Activity {
             Button button,
             int bottomMargin
     ) {
-        LinearLayout.LayoutParams params = fullWidth(dp(52));
+        LinearLayout.LayoutParams params =
+                fullWidth(dp(52));
         params.bottomMargin = dp(bottomMargin);
         root.addView(button, params);
     }
@@ -244,12 +256,17 @@ public class MainActivity extends Activity {
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
         button.setMinHeight(dp(48));
-        button.setBackground(roundDrawable(GREEN, dp(10)));
+        button.setBackground(
+                roundDrawable(GREEN, dp(10))
+        );
         button.setStateListAnimator(null);
         return button;
     }
 
-    private GradientDrawable roundDrawable(int color, int radius) {
+    private GradientDrawable roundDrawable(
+            int color,
+            int radius
+    ) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
