@@ -32,8 +32,9 @@ public class MainActivity extends Activity {
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/7288125709";
 
+    // Correct APK filename published by the release workflow.
     private static final String APK_URL =
-            "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/app-release.apk";
+            "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/Donut4U-Karaoke.apk";
 
     private AdView adView;
 
