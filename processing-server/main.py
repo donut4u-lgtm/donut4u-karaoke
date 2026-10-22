@@ -15,7 +15,7 @@ import socket
 
 from pathlib import Path
 from datetime import datetime, timezone
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs
 
 import httpx
 
@@ -64,13 +64,16 @@ def cleanup_expired_jobs():
 
 def get_job_or_404(job_id):
     cleanup_expired_jobs()
+
     with JOBS_LOCK:
         job = JOBS.get(job_id)
+
         if not job:
             raise HTTPException(
                 status_code=404,
                 detail="Job not found or expired."
             )
+
         return dict(job)
 
 
@@ -87,49 +90,76 @@ def validate_public_url(url):
     parsed = urlparse(url)
 
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("Use a complete public http:// or https:// URL.")
+        raise ValueError(
+            "Use a complete public http:// or https:// URL."
+        )
 
     host = parsed.hostname.lower()
 
-    if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
-        raise ValueError("Local network URLs are not supported.")
+    if (
+        host in ("localhost", "localhost.localdomain")
+        or host.endswith(".local")
+    ):
+        raise ValueError(
+            "Local network URLs are not supported."
+        )
 
     try:
         for item in socket.getaddrinfo(host, None):
             address = ipaddress.ip_address(item[4][0])
+
             if not address.is_global:
                 raise ValueError(
                     "Private or local network URLs are not supported."
                 )
+
     except socket.gaierror:
-        raise ValueError("The URL host could not be resolved.")
+        raise ValueError(
+            "The URL host could not be resolved."
+        )
 
     return url
 
 
+# ============================================================
+# GOOGLE WEB SEARCH
+# Searches Google HTML directly without a Google API key.
+# ============================================================
+
 def web_search(query):
-    """Search Google Search HTML directly, without an API key."""
+    """Search Google Search HTML without an API key."""
+
     query = (query or "").strip()
+
     if not query:
         return []
 
     try:
         response = httpx.get(
             "https://www.google.com/search",
-            params={"q": query, "num": 20},
+            params={
+                "q": query,
+                "num": 20,
+                "gbv": "1"
+            },
             headers={
                 "User-Agent": (
-                    "Mozilla/5.0 (Linux; Android 13) "
+                    "Mozilla/5.0 (X11; Linux x86_64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Mobile Safari/537.36"
+                    "Chrome/131.0.0.0 Safari/537.36"
                 ),
                 "Accept": "text/html,application/xhtml+xml",
                 "Accept-Language": "en-US,en;q=0.9",
             },
-            timeout=httpx.Timeout(10.0, connect=4.0),
+            timeout=httpx.Timeout(
+                15.0,
+                connect=5.0
+            ),
             follow_redirects=True,
         )
+
         response.raise_for_status()
+
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,
@@ -140,56 +170,98 @@ def web_search(query):
         ) from exc
 
     page = response.text
+    page_lower = page.lower()
+    final_url = str(response.url).lower()
 
     if (
-        "unusual traffic" in page.lower()
-        or "automated queries" in page.lower()
-        or "/sorry/" in str(response.url)
+        "unusual traffic" in page_lower
+        or "automated queries" in page_lower
+        or "/sorry/" in final_url
+        or "our systems have detected unusual traffic" in page_lower
     ):
         raise HTTPException(
             status_code=502,
-            detail="Google temporarily blocked this search request.",
+            detail=(
+                "Google temporarily blocked this search request. "
+                "Please try again later."
+            ),
         )
 
     results = []
     seen = set()
 
-    anchors = re.findall(
-        r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>'
-        r'(?:(?!</a>).)*?<h3\b[^>]*>(.*?)</h3>.*?</a>',
+    # Find result links containing an H3 title.
+    # This supports different attribute ordering in HTML anchors.
+    for match in re.finditer(
+        r"<a\b([^>]*)>(.*?)</a\s*>",
         page,
         re.I | re.S,
-    )
+    ):
+        attributes, body = match.groups()
 
-    for href, heading in anchors:
-        target = html.unescape(href)
+        heading_match = re.search(
+            r"<h3\b[^>]*>(.*?)</h3\s*>",
+            body,
+            re.I | re.S,
+        )
+
+        if not heading_match:
+            continue
+
+        href_match = re.search(
+            r"\bhref\s*=\s*([\"'])(.*?)\1",
+            attributes,
+            re.I | re.S,
+        )
+
+        if not href_match:
+            continue
+
+        target = html.unescape(
+            href_match.group(2)
+        ).strip()
+
+        if target.startswith("//"):
+            target = "https:" + target
+
+        elif target.startswith("/"):
+            target = "https://www.google.com" + target
+
         parsed = urlparse(target)
+        host_before = (parsed.hostname or "").lower()
 
-        if parsed.path == "/url" and (
-            parsed.hostname or ""
-        ).endswith("google.com"):
+        # Resolve Google's redirect links.
+        if (
+            host_before.endswith("google.com")
+            and parsed.path == "/url"
+        ):
             params = parse_qs(parsed.query)
+
             target = (
                 params.get("q")
                 or params.get("url")
                 or [""]
             )[0]
-        elif target.startswith("/url?"):
-            params = parse_qs(parsed.query)
-            target = (
-                params.get("q")
-                or params.get("url")
-                or [""]
-            )[0]
+
+        target = html.unescape(target).strip()
 
         try:
             target = validate_public_url(target)
+
         except ValueError:
             continue
 
-        host = urlparse(target).hostname or ""
-        if host == "google.com" or host.endswith(".google.com"):
+        host = (
+            urlparse(target).hostname or ""
+        ).lower()
+
+        if (
+            host == "google.com"
+            or host.endswith(".google.com")
+        ):
             continue
+
+        heading = heading_match.group(1)
 
         title = html.unescape(
             re.sub(
@@ -203,6 +275,7 @@ def web_search(query):
             continue
 
         seen.add(target)
+
         results.append({
             "title": title[:250],
             "url": target,
@@ -216,8 +289,23 @@ def web_search(query):
         if len(results) >= 20:
             break
 
+    # Do not silently return an empty list when parsing fails.
+    if not results:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Google responded, but no search results could be "
+                "extracted. Google may have changed its page format "
+                "or restricted this request."
+            ),
+        )
+
     return results
 
+
+# ============================================================
+# AUDIO URL RESOLUTION
+# ============================================================
 
 def resolve_audio_url(source_url):
     source_url = validate_public_url(source_url)
@@ -233,9 +321,13 @@ def resolve_audio_url(source_url):
     try:
         with httpx.Client(
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=httpx.Timeout(25.0, connect=8.0),
+            timeout=httpx.Timeout(
+                25.0,
+                connect=8.0
+            ),
             follow_redirects=True
         ) as client:
+
             response = client.get(source_url)
             response.raise_for_status()
 
@@ -265,28 +357,39 @@ def resolve_audio_url(source_url):
         r'<meta[^>]+(?:property|name)=["\']'
         r'(?:og:audio|og:audio:url|twitter:player:stream)["\']'
         r'[^>]+content=["\']([^"\']+)["\']',
+
         r'<audio[^>]+src=["\']([^"\']+)["\']',
+
         r'<source[^>]+src=["\']([^"\']+)["\']',
+
         r'["\'](?:contentUrl|audioUrl|audio_url|downloadUrl)["\']'
         r'\s*:\s*["\']([^"\']+)["\']',
+
         r'["\'](https?://[^"\']+\.(?:mp3|wav|m4a|aac|ogg|opus|flac)'
         r'(?:\?[^"\']*)?)["\']'
     ]
 
     for pattern in patterns:
         match = re.search(pattern, page, re.I)
+
         if not match:
             continue
 
-        candidate = html.unescape(match.group(1)).replace("\\/", "/")
+        candidate = html.unescape(
+            match.group(1)
+        ).replace("\\/", "/")
 
         if candidate.startswith("//"):
             candidate = parsed.scheme + ":" + candidate
+
         elif candidate.startswith("/"):
-            candidate = f"{parsed.scheme}://{parsed.netloc}{candidate}"
+            candidate = (
+                f"{parsed.scheme}://{parsed.netloc}{candidate}"
+            )
 
         try:
             return validate_public_url(candidate)
+
         except ValueError:
             continue
 
@@ -296,6 +399,10 @@ def resolve_audio_url(source_url):
     )
 
 
+# ============================================================
+# AUDIO DOWNLOAD
+# ============================================================
+
 def download_track(url, destination):
     total = 0
 
@@ -303,15 +410,22 @@ def download_track(url, destination):
         "GET",
         url,
         follow_redirects=True,
-        timeout=httpx.Timeout(120.0, connect=10.0),
+        timeout=httpx.Timeout(
+            120.0,
+            connect=10.0
+        ),
         headers={"User-Agent": "Mozilla/5.0"}
     ) as response:
+
         response.raise_for_status()
 
         content_type = response.headers.get(
             "content-type", ""
         ).lower()
-        path = urlparse(str(response.url)).path.lower()
+
+        path = urlparse(
+            str(response.url)
+        ).path.lower()
 
         if (
             not content_type.startswith("audio/")
@@ -325,24 +439,40 @@ def download_track(url, destination):
             )
 
         size = response.headers.get("content-length")
+
         if size and int(size) > MAX_DOWNLOAD_BYTES:
-            raise ValueError("Audio file exceeds the 100 MB limit.")
+            raise ValueError(
+                "Audio file exceeds the 100 MB limit."
+            )
 
         with open(destination, "wb") as output:
-            for chunk in response.iter_bytes(1024 * 1024):
+            for chunk in response.iter_bytes(
+                1024 * 1024
+            ):
                 total += len(chunk)
+
                 if total > MAX_DOWNLOAD_BYTES:
-                    raise ValueError("Audio file exceeds the 100 MB limit.")
+                    raise ValueError(
+                        "Audio file exceeds the 100 MB limit."
+                    )
+
                 output.write(chunk)
 
     if total == 0:
-        raise ValueError("The downloaded audio file is empty.")
+        raise ValueError(
+            "The downloaded audio file is empty."
+        )
 
+
+# ============================================================
+# AUDIO DURATION
+# ============================================================
 
 def get_audio_duration(path):
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            "ffprobe",
+            "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(path)
@@ -354,6 +484,7 @@ def get_audio_duration(path):
     )
 
     duration = float(result.stdout.strip())
+
     if duration <= 0 or duration > MAX_TRACK_SECONDS:
         raise ValueError(
             f"Audio must be between 1 second and "
@@ -362,6 +493,10 @@ def get_audio_duration(path):
 
     return duration
 
+
+# ============================================================
+# WHISPER MODEL
+# ============================================================
 
 def get_whisper_model():
     global WHISPER_INSTANCE
@@ -373,11 +508,17 @@ def get_whisper_model():
                 device="cpu",
                 compute_type="int8"
             )
+
         return WHISPER_INSTANCE
 
 
+# ============================================================
+# KARAOKE PROCESSING JOB
+# ============================================================
+
 def process_job(job_id):
     job = get_job_or_404(job_id)
+
     directory = Path(job["directory"])
     source_path = directory / "source-audio"
     output_root = directory / "separated"
@@ -385,14 +526,35 @@ def process_job(job_id):
     lyrics_path = directory / "lyrics.json"
 
     try:
-        update_job(job_id, status="processing", progress="resolving_audio")
-        source_url = resolve_audio_url(job.get("source_url", ""))
-        download_track(source_url, source_path)
+        update_job(
+            job_id,
+            status="processing",
+            progress="resolving_audio"
+        )
 
-        update_job(job_id, progress="checking_audio")
-        duration = get_audio_duration(source_path)
+        source_url = resolve_audio_url(
+            job.get("source_url", "")
+        )
 
-        update_job(job_id, progress="separating_vocals")
+        download_track(
+            source_url,
+            source_path
+        )
+
+        update_job(
+            job_id,
+            progress="checking_audio"
+        )
+
+        duration = get_audio_duration(
+            source_path
+        )
+
+        update_job(
+            job_id,
+            progress="separating_vocals"
+        )
+
         subprocess.run(
             [
                 "python", "-m", "demucs",
@@ -408,19 +570,35 @@ def process_job(job_id):
             check=True
         )
 
-        separated_dir = output_root / DEMUCS_MODEL / source_path.stem
+        separated_dir = (
+            output_root
+            / DEMUCS_MODEL
+            / source_path.stem
+        )
+
         vocals_path = separated_dir / "vocals.wav"
         no_vocals_path = separated_dir / "no_vocals.wav"
 
-        if not vocals_path.is_file() or not no_vocals_path.is_file():
+        if (
+            not vocals_path.is_file()
+            or not no_vocals_path.is_file()
+        ):
             raise RuntimeError(
                 "Vocal separation did not produce both audio stems."
             )
 
-        shutil.move(str(no_vocals_path), str(instrumental_path))
-        update_job(job_id, progress="transcribing_lyrics")
+        shutil.move(
+            str(no_vocals_path),
+            str(instrumental_path)
+        )
+
+        update_job(
+            job_id,
+            progress="transcribing_lyrics"
+        )
 
         model = get_whisper_model()
+
         segments, info = model.transcribe(
             str(vocals_path),
             word_timestamps=True,
@@ -428,20 +606,31 @@ def process_job(job_id):
         )
 
         words = []
+
         for segment in segments:
-            for word in getattr(segment, "words", None) or []:
+            for word in (
+                getattr(segment, "words", None) or []
+            ):
                 words.append({
                     "start": round(float(word.start), 3),
                     "end": round(float(word.end), 3),
                     "text": word.word.strip()
                 })
 
-        with open(lyrics_path, "w", encoding="utf-8") as out:
+        with open(
+            lyrics_path,
+            "w",
+            encoding="utf-8"
+        ) as out:
             json.dump(
                 {
                     "track_id": job_id,
                     "duration_seconds": duration,
-                    "language": getattr(info, "language", None),
+                    "language": getattr(
+                        info,
+                        "language",
+                        None
+                    ),
                     "words": words
                 },
                 out,
@@ -450,18 +639,38 @@ def process_job(job_id):
             )
 
         source_path.unlink(missing_ok=True)
-        shutil.rmtree(output_root, ignore_errors=True)
-        update_job(job_id, status="completed", progress="completed")
+
+        shutil.rmtree(
+            output_root,
+            ignore_errors=True
+        )
+
+        update_job(
+            job_id,
+            status="completed",
+            progress="completed"
+        )
 
     except Exception as exc:
-        shutil.rmtree(directory, ignore_errors=True)
+        shutil.rmtree(
+            directory,
+            ignore_errors=True
+        )
+
         update_job(
             job_id,
             status="failed",
             progress="failed",
-            error=str(exc)[:400] or "Processing failed. Try another audio link."
+            error=(
+                str(exc)[:400]
+                or "Processing failed. Try another audio link."
+            )
         )
 
+
+# ============================================================
+# API HEALTH
+# ============================================================
 
 @app.get("/health")
 def health():
@@ -471,23 +680,45 @@ def health():
     }
 
 
-@app.get("/v1/web-search")
-def public_web_search(q: str = Query(min_length=1, max_length=160)):
-    cleanup_expired_jobs()
-    return {"results": web_search(q.strip())}
+# ============================================================
+# GOOGLE WEB SEARCH ENDPOINT
+# ============================================================
 
+@app.get("/v1/web-search")
+def public_web_search(
+    q: str = Query(min_length=1, max_length=160)
+):
+    cleanup_expired_jobs()
+
+    return {
+        "results": web_search(q.strip())
+    }
+
+
+# ============================================================
+# CATALOG SEARCH ENDPOINT
+# ============================================================
 
 @app.get("/v1/catalog-search")
-def public_catalog_search(q: str = Query(min_length=1, max_length=160)):
+def public_catalog_search(
+    q: str = Query(min_length=1, max_length=160)
+):
     cleanup_expired_jobs()
+
     results = web_search(q.strip())
 
     return {
         "results": [
             {
                 "name": item["title"],
-                "artist": item.get("artist") or item.get("source", ""),
-                "id": item.get("page_url") or item["url"],
+                "artist": (
+                    item.get("artist")
+                    or item.get("source", "")
+                ),
+                "id": (
+                    item.get("page_url")
+                    or item["url"]
+                ),
                 "url": item["url"],
                 "source": item.get("source", ""),
                 "duration": 0
@@ -497,23 +728,44 @@ def public_catalog_search(q: str = Query(min_length=1, max_length=160)):
     }
 
 
+# ============================================================
+# CREATE KARAOKE PROCESSING JOB
+# ============================================================
+
 @app.post("/v1/jobs/from-url")
 def create_job_from_url(
     payload: dict,
     background_tasks: BackgroundTasks
 ):
     try:
-        source_url = validate_public_url(payload.get("url", ""))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        source_url = validate_public_url(
+            payload.get("url", "")
+        )
 
-    title = str(payload.get("title") or "Internet audio")[:250]
-    artist = str(payload.get("artist") or "Unknown")[:160]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
+
+    title = str(
+        payload.get("title") or "Internet audio"
+    )[:250]
+
+    artist = str(
+        payload.get("artist") or "Unknown"
+    )[:160]
 
     cleanup_expired_jobs()
+
     job_id = secrets.token_urlsafe(18)
     directory = JOB_ROOT / job_id
-    directory.mkdir(parents=True, exist_ok=False)
+
+    directory.mkdir(
+        parents=True,
+        exist_ok=False
+    )
+
     now = time.time()
 
     with JOBS_LOCK:
@@ -532,13 +784,25 @@ def create_job_from_url(
             "error": None
         }
 
-    background_tasks.add_task(process_job, job_id)
-    return {"job_id": job_id, "status": "queued"}
+    background_tasks.add_task(
+        process_job,
+        job_id
+    )
 
+    return {
+        "job_id": job_id,
+        "status": "queued"
+    }
+
+
+# ============================================================
+# JOB STATUS
+# ============================================================
 
 @app.get("/v1/jobs/{job_id}")
 def job_status(job_id: str):
     job = get_job_or_404(job_id)
+
     return {
         "job_id": job["job_id"],
         "track_id": job.get("track_id"),
@@ -550,6 +814,10 @@ def job_status(job_id: str):
     }
 
 
+# ============================================================
+# GET INSTRUMENTAL AUDIO
+# ============================================================
+
 @app.get("/v1/jobs/{job_id}/instrumental")
 def get_instrumental(job_id: str):
     job = get_job_or_404(job_id)
@@ -560,7 +828,11 @@ def get_instrumental(job_id: str):
             detail="Processing is not complete."
         )
 
-    path = Path(job["directory"]) / "instrumental.wav"
+    path = (
+        Path(job["directory"])
+        / "instrumental.wav"
+    )
+
     if not path.is_file():
         raise HTTPException(
             status_code=404,
@@ -574,6 +846,10 @@ def get_instrumental(job_id: str):
     )
 
 
+# ============================================================
+# GET GENERATED LYRICS
+# ============================================================
+
 @app.get("/v1/jobs/{job_id}/lyrics")
 def get_lyrics(job_id: str):
     job = get_job_or_404(job_id)
@@ -584,16 +860,28 @@ def get_lyrics(job_id: str):
             detail="Processing is not complete."
         )
 
-    path = Path(job["directory"]) / "lyrics.json"
+    path = (
+        Path(job["directory"])
+        / "lyrics.json"
+    )
+
     if not path.is_file():
         raise HTTPException(
             status_code=404,
             detail="Lyrics file not found."
         )
 
-    with open(path, "r", encoding="utf-8") as source:
+    with open(
+        path,
+        "r",
+        encoding="utf-8"
+    ) as source:
         return json.load(source)
 
+
+# ============================================================
+# DELETE JOB
+# ============================================================
 
 @app.delete("/v1/jobs/{job_id}")
 def delete_job(job_id: str):
@@ -601,7 +889,10 @@ def delete_job(job_id: str):
         job = JOBS.get(job_id)
 
         if not job:
-            raise HTTPException(status_code=404, detail="Job not found.")
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found."
+            )
 
         if job["status"] == "processing":
             raise HTTPException(
@@ -612,5 +903,12 @@ def delete_job(job_id: str):
         directory = job["directory"]
         del JOBS[job_id]
 
-    shutil.rmtree(directory, ignore_errors=True)
-    return {"deleted": True, "job_id": job_id}
+    shutil.rmtree(
+        directory,
+        ignore_errors=True
+    )
+
+    return {
+        "deleted": True,
+        "job_id": job_id
+    }
