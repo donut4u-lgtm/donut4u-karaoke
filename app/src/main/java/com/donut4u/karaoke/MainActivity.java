@@ -9,12 +9,16 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
@@ -22,10 +26,16 @@ public class MainActivity extends Activity {
 
     private static final int BG = Color.rgb(16, 19, 21);
     private static final int GREEN = Color.rgb(0, 210, 105);
+    private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
+
+    private static final String AD_UNIT_ID =
+            "ca-app-pub-5625332026157890/7288125709";
 
     private static final String APK_URL =
             "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/app-release.apk";
+
+    private AdView adView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -47,6 +57,14 @@ public class MainActivity extends Activity {
         }
 
         showWelcomeScreen();
+
+        MobileAds.initialize(this, initializationStatus -> {
+            runOnUiThread(() -> {
+                if (adView != null && !isFinishing() && !isDestroyed()) {
+                    adView.loadAd(new AdRequest.Builder().build());
+                }
+            });
+        });
     }
 
     private void openSongSearch() {
@@ -75,6 +93,8 @@ public class MainActivity extends Activity {
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(dp(24), dp(28), dp(24), dp(28));
         root.setBackgroundColor(BG);
+
+        scrollView.addView(root);
 
         TextView title = new TextView(this);
         title.setText("Donut4U Karaoke");
@@ -109,10 +129,33 @@ public class MainActivity extends Activity {
         TextView advertisement = new TextView(this);
         advertisement.setText("Advertisement");
         advertisement.setTextColor(MUTED);
-        advertisement.setTextSize(13);
+        advertisement.setTextSize(12);
         advertisement.setGravity(Gravity.CENTER);
-        advertisement.setPadding(0, dp(14), 0, dp(14));
-        root.addView(advertisement, fullWidth(dp(54)));
+        advertisement.setPadding(0, dp(8), 0, dp(8));
+        root.addView(advertisement, fullWidthWrap());
+
+        LinearLayout adContainer = new LinearLayout(this);
+        adContainer.setOrientation(LinearLayout.VERTICAL);
+        adContainer.setGravity(Gravity.CENTER);
+        adContainer.setBackground(roundDrawable(PANEL, dp(10)));
+        adContainer.setPadding(dp(4), dp(12), dp(4), dp(12));
+
+        LinearLayout.LayoutParams adContainerParams =
+                fullWidthWrap();
+        adContainerParams.bottomMargin = dp(20);
+        root.addView(adContainer, adContainerParams);
+
+        adView = new AdView(this);
+        adView.setAdSize(AdSize.BANNER);
+        adView.setAdUnitId(AD_UNIT_ID);
+
+        adContainer.addView(
+                adView,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+        );
 
         Button donateButton = makeButton("Donate");
         addButton(root, donateButton, 10);
@@ -124,7 +167,6 @@ public class MainActivity extends Activity {
         questionButton.setOnClickListener(v ->
                 showQuestionDialog());
 
-        scrollView.addView(root);
         setContentView(scrollView);
     }
 
@@ -133,8 +175,7 @@ public class MainActivity extends Activity {
             Button button,
             int bottomMargin
     ) {
-        LinearLayout.LayoutParams params =
-                fullWidth(dp(52));
+        LinearLayout.LayoutParams params = fullWidth(dp(52));
         params.bottomMargin = dp(bottomMargin);
         root.addView(button, params);
     }
@@ -164,14 +205,11 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Support Donut4U Karaoke")
                 .setMessage(
-                        "Sign in to access the song screen "
-                                + "and its available donation options. "
-                                + "Your support helps keep the app running "
-                                + "and growing."
+                        "Thank you for supporting Donut4U Karaoke. "
+                                + "The donation options will be available "
+                                + "when their payment details are configured."
                 )
-                .setPositiveButton("Sign in", (dialog, which) ->
-                        openAuthentication(false))
-                .setNegativeButton("Close", null)
+                .setPositiveButton("OK", null)
                 .show();
     }
 
@@ -179,10 +217,10 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Question and Answer")
                 .setMessage(
-                        "Welcome to Donut4U Karaoke!\n\n"
-                                + "Create an account or sign in to "
-                                + "continue to the karaoke song screen "
-                                + "and its available support options."
+                        "Create an account or sign in to continue "
+                                + "to the karaoke song screen. "
+                                + "You can find songs and access the "
+                                + "available support options there."
                 )
                 .setPositiveButton("OK", null)
                 .show();
@@ -206,26 +244,29 @@ public class MainActivity extends Activity {
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
         button.setMinHeight(dp(48));
-
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(GREEN);
-        background.setCornerRadius(dp(10));
-        button.setBackground(background);
-
+        button.setBackground(roundDrawable(GREEN, dp(10)));
+        button.setStateListAnimator(null);
         return button;
+    }
+
+    private GradientDrawable roundDrawable(int color, int radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        return drawable;
     }
 
     private LinearLayout.LayoutParams fullWidth(int height) {
         return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 height
         );
     }
 
     private LinearLayout.LayoutParams fullWidthWrap() {
         return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
         );
     }
 
@@ -234,5 +275,33 @@ public class MainActivity extends Activity {
                 value * getResources()
                         .getDisplayMetrics().density + 0.5f
         );
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (adView != null) {
+            adView.resume();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        if (adView != null) {
+            adView.pause();
+        }
+
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (adView != null) {
+            adView.destroy();
+            adView = null;
+        }
+
+        super.onDestroy();
     }
 }
