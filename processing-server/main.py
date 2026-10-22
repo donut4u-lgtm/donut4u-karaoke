@@ -1,3 +1,4 @@
+
 # File: processing-server/main.py
 
 import os
@@ -107,135 +108,113 @@ def validate_public_url(url):
 
 
 def web_search(query):
-    """
-    Search the music catalog first, then try general web search.
-    Returns a list of dictionaries containing title, url, source,
-    and optional artist/snippet/page_url/preview fields.
-    """
+    """Search Google Search HTML directly, without an API key."""
     query = (query or "").strip()
     if not query:
         return []
 
-    # Primary search provider: Apple's public iTunes Search API.
     try:
         response = httpx.get(
-            "https://itunes.apple.com/search",
-            params={
-                "term": query,
-                "entity": "song",
-                "media": "music",
-                "limit": 25
-            },
-            headers={"User-Agent": "Donut4UKaraoke/2.1"},
-            timeout=httpx.Timeout(8.0, connect=4.0),
-            follow_redirects=True
-        )
-        response.raise_for_status()
-        payload = response.json()
-
-        results = []
-        seen = set()
-
-        for item in payload.get("results", []):
-            title = (item.get("trackName") or "").strip()
-            artist = (item.get("artistName") or "").strip()
-            preview_url = (item.get("previewUrl") or "").strip()
-            page_url = (item.get("trackViewUrl") or "").strip()
-
-            if not title or not (preview_url or page_url):
-                continue
-
-            result_url = preview_url or page_url
-            if result_url in seen:
-                continue
-            seen.add(result_url)
-
-            results.append({
-                "title": title,
-                "url": result_url,
-                "page_url": page_url,
-                "artist": artist,
-                "snippet": (
-                    "Artist: " + artist
-                    if artist else "Music search result"
-                ),
-                "source": "Apple Music / iTunes",
-                "preview": bool(preview_url)
-            })
-
-        if results:
-            return results
-
-    except (httpx.HTTPError, ValueError, TypeError, KeyError):
-        pass
-
-    # Fallback: DuckDuckGo HTML search. Parsing failures return an empty
-    # list rather than making the app wait indefinitely.
-    try:
-        response = httpx.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query + " song music"},
+            "https://www.google.com/search",
+            params={"q": query, "num": 20},
             headers={
-                "User-Agent":
-                    "Mozilla/5.0 (X11; Linux x86_64) "
-                    "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+                "User-Agent": (
+                    "Mozilla/5.0 (Linux; Android 13) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Mobile Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
             },
-            timeout=httpx.Timeout(8.0, connect=4.0),
-            follow_redirects=True
+            timeout=httpx.Timeout(10.0, connect=4.0),
+            follow_redirects=True,
         )
         response.raise_for_status()
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,
             detail=(
-                "Music search is temporarily unavailable. "
+                "Google Search could not be reached. "
                 "Please try again shortly."
-            )
-        )
+            ),
+        ) from exc
 
     page = response.text
+
+    if (
+        "unusual traffic" in page.lower()
+        or "automated queries" in page.lower()
+        or "/sorry/" in str(response.url)
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail="Google temporarily blocked this search request.",
+        )
+
     results = []
+    seen = set()
+
     anchors = re.findall(
-        r'<a\b(?=[^>]*class=["\'][^"\']*result__a[^"\']*["\'])'
-        r'[^>]*>.*?</a>',
+        r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>'
+        r'(?:(?!</a>).)*?<h3\b[^>]*>(.*?)</h3>.*?</a>',
         page,
-        re.I | re.S
+        re.I | re.S,
     )
 
-    for anchor in anchors[:25]:
-        match = re.search(
-            r'href=["\']([^"\']+)["\']',
-            anchor,
-            re.I
-        )
-        if not match:
-            continue
-
-        target = html.unescape(match.group(1))
+    for href, heading in anchors:
+        target = html.unescape(href)
         parsed = urlparse(target)
 
-        if "duckduckgo.com" in (parsed.hostname or ""):
-            redirect = parse_qs(parsed.query).get("uddg", [])
-            if redirect:
-                target = unquote(redirect[0])
+        if parsed.path == "/url" and (
+            parsed.hostname or ""
+        ).endswith("google.com"):
+            params = parse_qs(parsed.query)
+            target = (
+                params.get("q")
+                or params.get("url")
+                or [""]
+            )[0]
+        elif target.startswith("/url?"):
+            params = parse_qs(parsed.query)
+            target = (
+                params.get("q")
+                or params.get("url")
+                or [""]
+            )[0]
 
         try:
             target = validate_public_url(target)
         except ValueError:
             continue
 
-        title = html.unescape(
-            re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", anchor))
-        ).strip()
-
-        if not title or any(item["url"] == target for item in results):
+        host = urlparse(target).hostname or ""
+        if host == "google.com" or host.endswith(".google.com"):
             continue
 
+        title = html.unescape(
+            re.sub(
+                r"\s+",
+                " ",
+                re.sub(r"<[^>]+>", "", heading),
+            )
+        ).strip()
+
+        if not title or target in seen:
+            continue
+
+        seen.add(target)
         results.append({
             "title": title[:250],
             "url": target,
-            "source": urlparse(target).hostname or ""
+            "page_url": target,
+            "artist": "",
+            "snippet": "",
+            "source": host,
+            "preview": False,
         })
+
+        if len(results) >= 20:
+            break
 
     return results
 
