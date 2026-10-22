@@ -1,3 +1,4 @@
+
 import os
 import re
 import json
@@ -23,7 +24,7 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Donut4U Karaoke Processing API",
-    version="2.0.0"
+    version="2.0.1"
 )
 
 JOB_TTL_MINUTES = int(os.getenv("JOB_TTL_MINUTES", "60"))
@@ -131,7 +132,7 @@ def web_search(query):
             params={"q": query.strip()},
             headers={
                 "User-Agent":
-                    "Mozilla/5.0 (compatible; Donut4UKaraoke/2.0)"
+                    "Mozilla/5.0 (compatible; Donut4UKaraoke/2.0.1)"
             },
             timeout=20,
             follow_redirects=True,
@@ -190,7 +191,7 @@ def web_search(query):
         if not title:
             continue
 
-        if any(x["url"] == target for x in results):
+        if any(item["url"] == target for item in results):
             continue
 
         results.append({
@@ -218,7 +219,7 @@ def resolve_audio_url(source_url):
             source_url,
             headers={
                 "User-Agent":
-                    "Mozilla/5.0 (compatible; Donut4UKaraoke/2.0)"
+                    "Mozilla/5.0 (compatible; Donut4UKaraoke/2.0.1)"
             },
             timeout=25,
             follow_redirects=True
@@ -542,6 +543,34 @@ def public_web_search(
 
     return {
         "results": web_search(q.strip())
+    }
+
+
+@app.get("/v1/catalog-search")
+def public_catalog_search(
+    q: str = Query(min_length=1, max_length=160)
+):
+    """
+    Compatibility endpoint for the Android Stage 2 screen.
+
+    Results are web-search links, not a licensed music catalog.
+    A result is not guaranteed to contain playable audio.
+    """
+    cleanup_expired_jobs()
+    results = web_search(q.strip())
+
+    return {
+        "results": [
+            {
+                "name": item["title"],
+                "artist": item["source"],
+                "id": item["url"],
+                "url": item["url"],
+                "source": item["source"],
+                "duration": 0
+            }
+            for item in results
+        ]
     }
 
 
