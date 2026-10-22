@@ -1,8 +1,8 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.media.MediaPlayer;
@@ -11,14 +11,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -79,11 +74,9 @@ public class KaraokeStudioActivity extends Activity {
     private Button playButton;
     private Button makeKaraokeButton;
 
-    private WebView webView;
     private AdView adView;
     private MediaPlayer mediaPlayer;
 
-    private Uri selectedAudioUri;
     private String selectedSourceUrl = "";
     private String currentJobId = "";
     private String currentJobStatus = "";
@@ -128,11 +121,11 @@ public class KaraokeStudioActivity extends Activity {
         subtitle.setPadding(0, dp(6), 0, dp(14));
         content.addView(subtitle, matchWrap());
 
-        section(content, "1. SEARCH THE INTERNET");
+        section(content, "1. SEARCH DIRECT AUDIO FILES");
 
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
-        searchInput.setHint("Song title, artist, or music URL");
+        searchInput.setHint("Song title, artist, or direct MP3 URL");
         searchInput.setHintTextColor(Color.LTGRAY);
         searchInput.setTextColor(WHITE);
         searchInput.setTextSize(16);
@@ -166,46 +159,11 @@ public class KaraokeStudioActivity extends Activity {
         resultsContainer.setOrientation(LinearLayout.VERTICAL);
         content.addView(resultsContainer, matchWrap());
 
-        section(content, "2. PLAY A RESULT");
+        section(content, "2. SELECT A DIRECT AUDIO RESULT");
 
-        TextView webInfo = text(
-                "Open a search result here when the website supports "
-                        + "in-app playback. Some services may require "
-                        + "their own app or a signed-in account.",
-                13, WHITE, false);
-
-        content.addView(webInfo, matchWrap());
-
-        Button openSourceButton =
-                button("OPEN SELECTED SONG WEBSITE");
-
-        content.addView(openSourceButton, matchWrap());
-        openSourceButton.setOnClickListener(
-                v -> openSelectedSource());
-
-        Button closeWebButton = button("CLOSE WEB PLAYER");
-        content.addView(closeWebButton, matchWrap());
-        closeWebButton.setOnClickListener(v -> closeWebPlayer());
-
-        webView = new WebView(this);
-        webView.setVisibility(View.GONE);
-        webView.setBackgroundColor(Color.BLACK);
-        webView.setWebViewClient(new WebViewClient());
-        webView.setWebChromeClient(new WebChromeClient());
-
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setSupportZoom(true);
-        settings.setBuiltInZoomControls(true);
-        settings.setDisplayZoomControls(false);
-
-        LinearLayout.LayoutParams webParams = matchWrap();
-        webParams.topMargin = dp(8);
-        webView.setLayoutParams(webParams);
-        webView.setMinimumHeight(dp(220));
-        content.addView(webView);
+        content.addView(text(
+                "Only direct audio files (MP3, WAV, M4A, AAC, OGG, OPUS, or FLAC) are accepted. Websites and video links are not supported.",
+                13, WHITE, false), matchWrap());
 
         section(content, "3. MAKE KARAOKE");
 
@@ -230,10 +188,6 @@ public class KaraokeStudioActivity extends Activity {
 
         content.addView(makeKaraokeButton, matchWrap());
         makeKaraokeButton.setOnClickListener(v -> makeKaraoke());
-
-        Button chooseAudioButton = button("CHOOSE AUDIO FILE");
-        content.addView(chooseAudioButton, matchWrap());
-        chooseAudioButton.setOnClickListener(v -> chooseAudio());
 
         playbackStatus = text("Ready.", 14, WHITE, false);
         playbackStatus.setPadding(0, dp(10), 0, dp(4));
@@ -292,53 +246,97 @@ public class KaraokeStudioActivity extends Activity {
         String query = searchInput.getText().toString().trim();
 
         if (query.isEmpty()) {
-            searchInput.setError("Enter a song title or artist");
+            searchInput.setError(
+                    "Enter a song title, artist, or direct audio URL");
             return;
         }
 
         hideKeyboard();
+        searchButton.setEnabled(false);
+        searchStatus.setText("Searching for direct audio files...");
+        resultsContainer.removeAllViews();
 
-        try {
-            String encoded = URLEncoder.encode(
-                    query, StandardCharsets.UTF_8.name());
+        executor.execute(() -> {
+            HttpURLConnection connection = null;
 
-            selectedSourceUrl =
-                    "https://www.google.com/search?q=" + encoded;
+            try {
+                String encoded = URLEncoder.encode(
+                        query, StandardCharsets.UTF_8.name());
 
-            selectedAudioUri = null;
+                URL url = new URL(
+                        API_BASE + "/v1/catalog-search?q=" + encoded);
 
-            selectedSong.setText(
-                    "Google search: " + query
-                            + "\nChoose a suitable music source, then "
-                            + "use OPEN SELECTED SONG WEBSITE.");
+                connection =
+                        (HttpURLConnection) url.openConnection();
 
-            searchStatus.setText(
-                    "Opening Google Search results...");
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(20000);
+                connection.setReadTimeout(30000);
+                connection.setRequestProperty(
+                        "Accept", "application/json");
 
-            resultsContainer.removeAllViews();
+                int code = connection.getResponseCode();
 
-            searchButton.setEnabled(true);
+                InputStream stream = code >= 200 && code < 300
+                        ? connection.getInputStream()
+                        : connection.getErrorStream();
 
-            webView.setVisibility(View.VISIBLE);
-            webView.loadUrl(selectedSourceUrl);
+                String response = readStream(stream);
 
-            playbackStatus.setText(
-                    "Google Search is open below. Select a suitable "
-                            + "music source. Karaoke conversion works "
-                            + "only when the source provides audio "
-                            + "the server can access.");
+                if (code < 200 || code >= 300) {
+                    throw new Exception(
+                            "Search HTTP " + code
+                                    + responseSuffix(response));
+                }
 
-        } catch (Exception e) {
-            searchButton.setEnabled(true);
-            searchStatus.setText(
-                    "Unable to open Google Search: "
-                            + (e.getMessage() == null
-                            ? "Unknown error" : e.getMessage()));
-        }
+                JSONObject json = new JSONObject(response);
+                JSONArray found = json.optJSONArray("results");
+
+                if (found == null) {
+                    found = new JSONArray();
+                }
+
+                final JSONArray results = found;
+
+                mainHandler.post(() -> {
+                    if (destroyed) {
+                        return;
+                    }
+
+                    searchButton.setEnabled(true);
+                    displayResults(results);
+
+                    searchStatus.setText(
+                            results.length() == 0
+                                    ? "No direct audio files found. Try another song or paste a direct MP3 URL."
+                                    : "Direct audio results only. Select one to make karaoke.");
+                });
+
+            } catch (Exception e) {
+                String message = e.getMessage() == null
+                        ? "Search failed"
+                        : e.getMessage();
+
+                mainHandler.post(() -> {
+                    if (destroyed) {
+                        return;
+                    }
+
+                    searchButton.setEnabled(true);
+                    searchStatus.setText("Search failed: " + message);
+                });
+
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
     }
 
     private void displayResults(JSONArray results) {
         resultsContainer.removeAllViews();
+        int shown = 0;
 
         for (int i = 0; i < results.length(); i++) {
             JSONObject result = results.optJSONObject(i);
@@ -350,17 +348,21 @@ public class KaraokeStudioActivity extends Activity {
             String title = firstNonEmpty(
                     result.optString("title", ""),
                     result.optString("name", ""),
-                    "Untitled result");
+                    "Untitled audio");
 
             String url = firstNonEmpty(
                     result.optString("url", ""),
-                    result.optString("link", ""),
-                    result.optString("href", ""));
+                    result.optString("link", ""));
 
             String description = firstNonEmpty(
-                    result.optString("snippet", ""),
-                    result.optString("description", ""),
-                    result.optString("artist", ""));
+                    result.optString("artist", ""),
+                    result.optString("source", ""));
+
+            if (!isDirectAudioUrl(url)) {
+                continue;
+            }
+
+            shown++;
 
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
@@ -384,83 +386,58 @@ public class KaraokeStudioActivity extends Activity {
                 card.addView(descriptionView, matchWrap());
             }
 
-            if (!url.isEmpty()) {
-                TextView urlView = text(
-                        url, 12, Color.LTGRAY, false);
+            TextView urlView = text(
+                    url, 12, Color.LTGRAY, false);
 
-                urlView.setPadding(0, dp(4), 0, dp(4));
-                card.addView(urlView, matchWrap());
+            urlView.setPadding(0, dp(4), 0, dp(4));
+            card.addView(urlView, matchWrap());
 
-                Button playResultButton =
-                        button("OPEN AND PLAY THIS RESULT");
+            Button selectButton =
+                    button("SELECT AUDIO AND MAKE KARAOKE");
 
-                card.addView(playResultButton, matchWrap());
+            card.addView(selectButton, matchWrap());
 
-                playResultButton.setOnClickListener(v -> {
-                    selectedSourceUrl = url;
-                    selectedAudioUri = null;
+            selectButton.setOnClickListener(v -> {
+                selectedSourceUrl = url;
 
-                    selectedSong.setText(
-                            "Selected result:\n" + title
-                                    + "\n" + url);
+                selectedSong.setText(
+                        "Selected audio:\n" + title + "\n" + url);
 
-                    openSelectedSource();
-                });
+                makeKaraoke();
+            });
+        }
 
-                Button karaokeButton =
-                        button("MAKE KARAOKE FROM THIS RESULT");
+        if (shown == 0) {
+            resultsContainer.addView(text(
+                    "No supported direct audio-file links were returned. Website pages and video links are filtered out.",
+                    13, WHITE, false), matchWrap());
+        }
+    }
 
-                card.addView(karaokeButton, matchWrap());
+    private boolean isDirectAudioUrl(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return false;
+        }
 
-                karaokeButton.setOnClickListener(v -> {
-                    selectedSourceUrl = url;
-                    selectedAudioUri = null;
+        try {
+            Uri uri = Uri.parse(value.trim());
+            String scheme = uri.getScheme();
+            String path = uri.getPath();
 
-                    selectedSong.setText(
-                            "Selected for karaoke:\n" + title
-                                    + "\n" + url);
-
-                    makeKaraoke();
-                });
-
-            } else {
-                card.addView(text(
-                        "This result does not provide a usable URL.",
-                        12, Color.LTGRAY, false), matchWrap());
+            if (uri.getHost() == null || path == null) {
+                return false;
             }
-        }
-    }
 
-    private void openSelectedSource() {
-        if (selectedSourceUrl == null
-                || selectedSourceUrl.trim().isEmpty()) {
-            Toast.makeText(
-                    this,
-                    "Select a search result first.",
-                    Toast.LENGTH_LONG).show();
-            return;
-        }
+            if (!"https".equalsIgnoreCase(scheme)
+                    && !"http".equalsIgnoreCase(scheme)) {
+                return false;
+            }
 
-        if (!isHttpUrl(selectedSourceUrl)) {
-            Toast.makeText(
-                    this,
-                    "This result does not contain a valid web URL.",
-                    Toast.LENGTH_LONG).show();
-            return;
-        }
+            return path.toLowerCase(Locale.US).matches(
+                    ".*\\.(mp3|wav|m4a|aac|ogg|opus|flac)$");
 
-        webView.setVisibility(View.VISIBLE);
-        webView.loadUrl(selectedSourceUrl);
-
-        playbackStatus.setText(
-                "Opening website. Playback depends on the source website.");
-    }
-
-    private void closeWebPlayer() {
-        if (webView != null) {
-            webView.stopLoading();
-            webView.loadUrl("about:blank");
-            webView.setVisibility(View.GONE);
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -477,15 +454,15 @@ public class KaraokeStudioActivity extends Activity {
                 || selectedSourceUrl.trim().isEmpty()) {
             Toast.makeText(
                     this,
-                    "Select an internet result first.",
+                    "Select a direct audio-file result first.",
                     Toast.LENGTH_LONG).show();
             return;
         }
 
-        if (!isHttpUrl(selectedSourceUrl)) {
+        if (!isDirectAudioUrl(selectedSourceUrl)) {
             Toast.makeText(
                     this,
-                    "The selected result is not a valid web URL.",
+                    "Choose a direct supported audio-file URL (MP3, WAV, M4A, AAC, OGG, OPUS, or FLAC).",
                     Toast.LENGTH_LONG).show();
             return;
         }
@@ -495,6 +472,7 @@ public class KaraokeStudioActivity extends Activity {
         currentJobId = "";
 
         makeKaraokeButton.setEnabled(false);
+
         playbackStatus.setText(
                 "Sending the selected URL to the karaoke server...");
 
@@ -508,9 +486,12 @@ public class KaraokeStudioActivity extends Activity {
             HttpURLConnection connection = null;
 
             try {
-                URL url = new URL(API_BASE + "/v1/jobs/from-url");
+                URL url = new URL(
+                        API_BASE + "/v1/jobs/from-url");
 
-                connection = (HttpURLConnection) url.openConnection();
+                connection =
+                        (HttpURLConnection) url.openConnection();
+
                 connection.setRequestMethod("POST");
                 connection.setConnectTimeout(30000);
                 connection.setReadTimeout(60000);
@@ -630,7 +611,9 @@ public class KaraokeStudioActivity extends Activity {
                 URL url = new URL(
                         API_BASE + "/v1/jobs/" + Uri.encode(jobId));
 
-                connection = (HttpURLConnection) url.openConnection();
+                connection =
+                        (HttpURLConnection) url.openConnection();
+
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(20000);
                 connection.setReadTimeout(30000);
@@ -743,7 +726,9 @@ public class KaraokeStudioActivity extends Activity {
                         API_BASE + "/v1/jobs/"
                                 + Uri.encode(jobId) + "/lyrics");
 
-                connection = (HttpURLConnection) url.openConnection();
+                connection =
+                        (HttpURLConnection) url.openConnection();
+
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(20000);
                 connection.setReadTimeout(30000);
@@ -1012,58 +997,7 @@ public class KaraokeStudioActivity extends Activity {
         }
     }
 
-    private void chooseAudio() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.setType("audio/*");
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-
-        try {
-            startActivityForResult(intent, 4101);
-        } catch (Exception e) {
-            Toast.makeText(
-                    this,
-                    "Unable to open audio picker.",
-                    Toast.LENGTH_LONG).show();
-        }
-    }
-
-    @Override
-    protected void onActivityResult(
-            int requestCode, int resultCode, Intent data) {
-
-        super.onActivityResult(requestCode, resultCode, data);
-
-        if (requestCode == 4101
-                && resultCode == RESULT_OK
-                && data != null
-                && data.getData() != null) {
-
-            stopPlayback();
-
-            selectedAudioUri = data.getData();
-            selectedSourceUrl = "";
-
-            try {
-                getContentResolver().takePersistableUriPermission(
-                        selectedAudioUri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Exception ignored) {
-            }
-
-            selectedSong.setText(
-                    "Selected local audio:\n" + selectedAudioUri);
-
-            playbackStatus.setText("Local audio ready.");
-            playButton.setText("PLAY AUDIO");
-        }
-    }
-
     private void togglePlayback() {
-        if (selectedAudioUri != null) {
-            toggleLocalPlayback();
-            return;
-        }
-
         if (mediaPlayer != null) {
             try {
                 if (mediaPlayer.isPlaying()) {
@@ -1073,11 +1007,10 @@ public class KaraokeStudioActivity extends Activity {
                 } else {
                     mediaPlayer.start();
                     playButton.setText("PAUSE AUDIO");
-                    playbackStatus.setText("Playing.");
+                    playbackStatus.setText("Playing instrumental.");
                 }
             } catch (Exception e) {
                 stopPlayback();
-
                 playbackStatus.setText(
                         "Unable to continue playback.");
             }
@@ -1098,65 +1031,8 @@ public class KaraokeStudioActivity extends Activity {
 
         Toast.makeText(
                 this,
-                "Select an audio file or create a karaoke track first.",
+                "Select a direct audio result and create a karaoke track first.",
                 Toast.LENGTH_LONG).show();
-    }
-
-    private void toggleLocalPlayback() {
-        if (mediaPlayer != null) {
-            try {
-                if (mediaPlayer.isPlaying()) {
-                    mediaPlayer.pause();
-                    playButton.setText("RESUME AUDIO");
-                    playbackStatus.setText("Paused.");
-                } else {
-                    mediaPlayer.start();
-                    playButton.setText("PAUSE AUDIO");
-                    playbackStatus.setText("Playing local audio.");
-                }
-            } catch (Exception e) {
-                stopPlayback();
-            }
-
-            return;
-        }
-
-        try {
-            mediaPlayer = new MediaPlayer();
-            mediaPlayer.setDataSource(this, selectedAudioUri);
-
-            mediaPlayer.setOnPreparedListener(player -> {
-                player.start();
-                playButton.setText("PAUSE AUDIO");
-
-                playbackStatus.setText(
-                        "Playing local audio.");
-            });
-
-            mediaPlayer.setOnCompletionListener(player -> {
-                stopPlayback();
-                playbackStatus.setText("Playback finished.");
-            });
-
-            mediaPlayer.setOnErrorListener(
-                    (player, what, extra) -> {
-                        stopPlayback();
-
-                        playbackStatus.setText(
-                                "Unable to play this audio file.");
-
-                        return true;
-                    });
-
-            playbackStatus.setText("Loading audio...");
-            mediaPlayer.prepareAsync();
-
-        } catch (Exception e) {
-            stopPlayback();
-
-            playbackStatus.setText(
-                    "Unable to open this audio file.");
-        }
     }
 
     private void stopPlayback() {
@@ -1176,24 +1052,6 @@ public class KaraokeStudioActivity extends Activity {
 
         if (playButton != null) {
             playButton.setText("PLAY INSTRUMENTAL");
-        }
-    }
-
-    private boolean isHttpUrl(String value) {
-        if (value == null) {
-            return false;
-        }
-
-        try {
-            Uri uri = Uri.parse(value);
-            String scheme = uri.getScheme();
-
-            return uri.getHost() != null
-                    && ("https".equalsIgnoreCase(scheme)
-                    || "http".equalsIgnoreCase(scheme));
-
-        } catch (Exception e) {
-            return false;
         }
     }
 
@@ -1350,12 +1208,6 @@ public class KaraokeStudioActivity extends Activity {
         destroyed = true;
 
         stopPlayback();
-
-        if (webView != null) {
-            webView.stopLoading();
-            webView.destroy();
-            webView = null;
-        }
 
         if (adView != null) {
             adView.destroy();
