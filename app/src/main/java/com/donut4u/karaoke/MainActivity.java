@@ -2,6 +2,7 @@
 package com.donut4u.karaoke;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -10,7 +11,9 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -63,9 +66,13 @@ public class MainActivity extends Activity {
     }
 
     private void showWelcomeScreen() {
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundColor(BG);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(dp(24), dp(28), dp(24), dp(28));
         root.setBackgroundColor(BG);
 
@@ -82,48 +89,103 @@ public class MainActivity extends Activity {
         subtitle.setTextColor(MUTED);
         subtitle.setTextSize(15);
         subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(10), 0, dp(28));
+        subtitle.setPadding(0, dp(10), 0, dp(24));
         root.addView(subtitle, fullWidthWrap());
 
-        Button signInButton = makeButton("SIGN IN");
-        LinearLayout.LayoutParams signInParams = fullWidth(dp(54));
-        signInParams.bottomMargin = dp(12);
-        root.addView(signInButton, signInParams);
-
-        signInButton.setOnClickListener(v ->
-                openAuthentication(false));
-
-        Button createButton = makeButton("CREATE ACCOUNT");
-        LinearLayout.LayoutParams createParams = fullWidth(dp(54));
-        createParams.bottomMargin = dp(12);
-        root.addView(createButton, createParams);
-
+        Button createButton = makeButton("Create account");
+        addButton(root, createButton, 10);
         createButton.setOnClickListener(v ->
                 openAuthentication(true));
 
-        Button shareButton = makeButton("SHARE APP");
-        root.addView(shareButton, fullWidth(dp(54)));
+        Button signInButton = makeButton("Sign in");
+        addButton(root, signInButton, 10);
+        signInButton.setOnClickListener(v ->
+                openAuthentication(false));
 
-        shareButton.setOnClickListener(v -> {
-            Intent shareIntent = new Intent(Intent.ACTION_SEND);
-            shareIntent.setType("text/plain");
-            shareIntent.putExtra(
-                    Intent.EXTRA_SUBJECT,
-                    "Donut4U Karaoke"
-            );
-            shareIntent.putExtra(
-                    Intent.EXTRA_TEXT,
-                    "Try Donut4U Karaoke! Download the app here:\n"
-                            + APK_URL
-            );
+        Button shareButton = makeButton("Share app");
+        addButton(root, shareButton, 18);
+        shareButton.setOnClickListener(v -> shareApp());
 
-            startActivity(Intent.createChooser(
-                    shareIntent,
-                    "Share Donut4U Karaoke"
-            ));
-        });
+        TextView advertisement = new TextView(this);
+        advertisement.setText("Advertisement");
+        advertisement.setTextColor(MUTED);
+        advertisement.setTextSize(13);
+        advertisement.setGravity(Gravity.CENTER);
+        advertisement.setPadding(0, dp(14), 0, dp(14));
+        root.addView(advertisement, fullWidth(dp(54)));
 
-        setContentView(root);
+        Button donateButton = makeButton("Donate");
+        addButton(root, donateButton, 10);
+        donateButton.setOnClickListener(v ->
+                showDonationMessage());
+
+        Button questionButton = makeButton("Question");
+        addButton(root, questionButton, 10);
+        questionButton.setOnClickListener(v ->
+                showQuestionDialog());
+
+        scrollView.addView(root);
+        setContentView(scrollView);
+    }
+
+    private void addButton(
+            LinearLayout root,
+            Button button,
+            int bottomMargin
+    ) {
+        LinearLayout.LayoutParams params =
+                fullWidth(dp(52));
+        params.bottomMargin = dp(bottomMargin);
+        root.addView(button, params);
+    }
+
+    private void shareApp() {
+        Intent shareIntent = new Intent(Intent.ACTION_SEND);
+        shareIntent.setType("text/plain");
+
+        shareIntent.putExtra(
+                Intent.EXTRA_SUBJECT,
+                "Donut4U Karaoke"
+        );
+
+        shareIntent.putExtra(
+                Intent.EXTRA_TEXT,
+                "Try Donut4U Karaoke! Download the app here:\n"
+                        + APK_URL
+        );
+
+        startActivity(Intent.createChooser(
+                shareIntent,
+                "Share Donut4U Karaoke"
+        ));
+    }
+
+    private void showDonationMessage() {
+        new AlertDialog.Builder(this)
+                .setTitle("Support Donut4U Karaoke")
+                .setMessage(
+                        "Sign in to access the song screen "
+                                + "and its available donation options. "
+                                + "Your support helps keep the app running "
+                                + "and growing."
+                )
+                .setPositiveButton("Sign in", (dialog, which) ->
+                        openAuthentication(false))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void showQuestionDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Question and Answer")
+                .setMessage(
+                        "Welcome to Donut4U Karaoke!\n\n"
+                                + "Create an account or sign in to "
+                                + "continue to the karaoke song screen "
+                                + "and its available support options."
+                )
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     private void openAuthentication(boolean createMode) {
