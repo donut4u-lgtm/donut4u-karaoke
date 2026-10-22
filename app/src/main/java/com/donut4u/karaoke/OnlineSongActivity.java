@@ -129,6 +129,10 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
+        // Check for updates for verified, signed-in users.
+        // If the check fails, normal app use continues.
+        AppUpdateChecker.checkForUpdates(this);
+
         installationId = getInstallationId();
         showSessionLoadingScreen();
         listenForActiveSession(user);
