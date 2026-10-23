@@ -6,12 +6,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.TextureView;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -88,7 +87,9 @@ public class KaraokeStudioActivity extends Activity {
     private Button playButton;
     private Button pauseButton;
     private Button stopButton;
-    private TextureView videoSurfaceView;
+
+    // FIX: Use SurfaceView for video output.
+    private SurfaceView videoSurfaceView;
 
     private ExoPlayer player;
     private AdView adView;
@@ -250,7 +251,8 @@ public class KaraokeStudioActivity extends Activity {
         );
         root.addView(nowPlayingText, matchWrap());
 
-        videoSurfaceView = new TextureView(this);
+        // FIX: SurfaceView replaces TextureView.
+        videoSurfaceView = new SurfaceView(this);
         videoSurfaceView.setBackgroundColor(Color.BLACK);
 
         LinearLayout.LayoutParams videoParams =
@@ -658,14 +660,15 @@ public class KaraokeStudioActivity extends Activity {
     ) {
         try {
             if (player != null) {
+                player.clearVideoSurfaceView(videoSurfaceView);
                 player.release();
                 player = null;
             }
 
             player = new ExoPlayer.Builder(this).build();
 
-            // TextureView renders the video inside the scrolling layout.
-            player.setVideoTextureView(videoSurfaceView);
+            // FIX: Connect ExoPlayer to the SurfaceView.
+            player.setVideoSurfaceView(videoSurfaceView);
 
             player.addListener(new Player.Listener() {
                 @Override
@@ -807,6 +810,7 @@ public class KaraokeStudioActivity extends Activity {
 
     private void stopPlayback() {
         if (player != null) {
+            player.clearVideoSurfaceView(videoSurfaceView);
             player.stop();
             player.release();
             player = null;
@@ -815,8 +819,15 @@ public class KaraokeStudioActivity extends Activity {
         currentVideoUrl = "";
         currentTitle = "";
         currentArtist = "";
-        nowPlayingText.setText("No song selected");
-        lyricsText.setText("Lyrics will appear here when available.");
+
+        if (nowPlayingText != null) {
+            nowPlayingText.setText("No song selected");
+        }
+
+        if (lyricsText != null) {
+            lyricsText.setText("Lyrics will appear here when available.");
+        }
+
         setStatus("Playback stopped.");
     }
 
@@ -938,10 +949,13 @@ public class KaraokeStudioActivity extends Activity {
             adView.destroy();
             adView = null;
         }
+
         if (player != null) {
+            player.clearVideoSurfaceView(videoSurfaceView);
             player.release();
             player = null;
         }
+
         mainHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
