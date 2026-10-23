@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -24,7 +23,7 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Donut4U Karaoke Processing API",
-    version="2.2.1"
+    version="2.2.2"
 )
 
 JOB_TTL_MINUTES = int(os.getenv("JOB_TTL_MINUTES", "60"))
@@ -202,7 +201,6 @@ def validate_audio_url(url):
 
 # ============================================================
 # DIRECT AUDIO SEARCH
-# No webpage extraction, no video pages, no Jamendo.
 # ============================================================
 
 def web_search(query):
@@ -374,7 +372,7 @@ def resolve_audio_url(source_url):
 
 # ============================================================
 # AUDIO DOWNLOAD
-# Supports limited redirects while validating every destination.
+# Allows limited redirects and checks final audio MIME type.
 # ============================================================
 
 def download_track(url, destination):
@@ -387,7 +385,7 @@ def download_track(url, destination):
             current_url,
             follow_redirects=False,
             timeout=httpx.Timeout(120.0, connect=10.0),
-            headers={"User-Agent": "Donut4U-Karaoke/2.2.1"},
+            headers={"User-Agent": "Donut4U-Karaoke/2.2.2"},
         ) as response:
 
             if response.is_redirect:
@@ -405,8 +403,10 @@ def download_track(url, destination):
 
                 next_url = urljoin(current_url, location)
 
-                # Redirect targets must still be public direct audio URLs.
-                current_url = validate_audio_url(next_url)
+                # A signed audio URL may not end in an audio extension.
+                # Validate that the destination is public, then verify
+                # the actual response MIME type after following the redirect.
+                current_url = validate_public_url(next_url)
                 continue
 
             response.raise_for_status()
