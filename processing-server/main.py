@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -10,6 +9,7 @@ import threading
 import subprocess
 import ipaddress
 import socket
+import tempfile
 
 from pathlib import Path
 from datetime import datetime, timezone
@@ -24,25 +24,26 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Donut4U Karaoke Processing API",
-    version="2.2.2"
+    version="2.2.3",
 )
 
 JOB_TTL_MINUTES = int(os.getenv("JOB_TTL_MINUTES", "60"))
 MAX_TRACK_SECONDS = int(os.getenv("MAX_TRACK_SECONDS", "600"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs")
+
+# IMPORTANT:
+# Configure JOB_ROOT as a persistent Render disk mount path.
+# Without a persistent disk, local files may be lost on restart.
 JOB_ROOT = Path(os.getenv("JOB_ROOT", "/tmp/donut4u-jobs"))
+JOBS_FILE = JOB_ROOT / "jobs.json"
+
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 MAX_REDIRECTS = 5
 
 SUPPORTED_AUDIO_EXTENSIONS = (
-    ".mp3",
-    ".wav",
-    ".m4a",
-    ".aac",
-    ".ogg",
-    ".opus",
-    ".flac",
+    ".mp3", ".wav", ".m4a", ".aac",
+    ".ogg", ".opus", ".flac",
 )
 
 AUDIO_CONTENT_TYPES = {
@@ -61,8 +62,10 @@ AUDIO_CONTENT_TYPES = {
     "audio/x-flac",
 }
 
+JOB_ROOT.mkdir(parents=True, exist_ok=True)
+
 JOBS = {}
-JOBS_LOCK = threading.Lock()
+JOBS_LOCK = threading.RLock()
 WHISPER_LOCK = threading.Lock()
 WHISPER_INSTANCE = None
 
@@ -71,21 +74,107 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def save_jobs_locked():
+    """Persist job metadata. Caller must hold JOBS_LOCK."""
+    JOB_ROOT.mkdir(parents=True, exist_ok=True)
+
+    fd, temp_name = tempfile.mkstemp(
+        prefix="jobs-",
+        suffix=".tmp",
+        dir=str(JOB_ROOT),
+    )
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(JOBS, output, ensure_ascii=False, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+
+        os.replace(temp_name, JOBS_FILE)
+
+    finally:
+        if os.path.exists(temp_name):
+            try:
+                os.remove(temp_name)
+            except OSError:
+                pass
+
+
+def load_jobs():
+    """Restore job metadata after a restart."""
+    if not JOBS_FILE.is_file():
+        return
+
+    try:
+        with open(JOBS_FILE, "r", encoding="utf-8") as source:
+            data = json.load(source)
+
+        if not isinstance(data, dict):
+            return
+
+        now = time.time()
+
+        with JOBS_LOCK:
+            for job_id, job in data.items():
+                if not isinstance(job, dict):
+                    continue
+
+                directory = Path(
+                    job.get("directory", str(JOB_ROOT / job_id))
+                )
+
+                # Do not trust paths stored in metadata.
+                try:
+                    directory.resolve().relative_to(JOB_ROOT.resolve())
+                except (ValueError, OSError):
+                    continue
+
+                job["directory"] = str(directory)
+
+                if job.get("status") in ("queued", "processing"):
+                    # A background task cannot be assumed to have survived
+                    # the process restart. Mark it failed instead of leaving
+                    # it stuck forever.
+                    job["status"] = "failed"
+                    job["progress"] = "failed"
+                    job["error"] = (
+                        "The server restarted during processing. "
+                        "Please submit the track again."
+                    )
+                    job["updated_at"] = utc_now()
+                    job["updated_at_epoch"] = now
+
+                JOBS[job_id] = job
+
+            save_jobs_locked()
+
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        # Keep the service available if its metadata file is damaged.
+        # Do not silently delete the file or job directories.
+        return
+
+
 def cleanup_expired_jobs():
     cutoff = time.time() - JOB_TTL_MINUTES * 60
     expired = []
 
     with JOBS_LOCK:
         for job_id, job in list(JOBS.items()):
-            if job["status"] in ("queued", "processing"):
+            if job.get("status") in ("queued", "processing"):
                 continue
 
-            if job.get("updated_at_epoch", time.time()) < cutoff:
-                expired.append(job["directory"])
+            updated = job.get("updated_at_epoch", time.time())
+
+            if updated < cutoff:
+                expired.append(job.get("directory"))
                 del JOBS[job_id]
 
+        if expired:
+            save_jobs_locked()
+
     for directory in expired:
-        shutil.rmtree(directory, ignore_errors=True)
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 def get_job_or_404(job_id):
@@ -97,7 +186,7 @@ def get_job_or_404(job_id):
         if not job:
             raise HTTPException(
                 status_code=404,
-                detail="Job not found or expired."
+                detail="Job not found or expired.",
             )
 
         return dict(job)
@@ -105,10 +194,13 @@ def get_job_or_404(job_id):
 
 def update_job(job_id, **changes):
     with JOBS_LOCK:
-        if job_id in JOBS:
-            JOBS[job_id].update(changes)
-            JOBS[job_id]["updated_at"] = utc_now()
-            JOBS[job_id]["updated_at_epoch"] = time.time()
+        if job_id not in JOBS:
+            return
+
+        JOBS[job_id].update(changes)
+        JOBS[job_id]["updated_at"] = utc_now()
+        JOBS[job_id]["updated_at_epoch"] = time.time()
+        save_jobs_locked()
 
 
 # ============================================================
@@ -121,6 +213,7 @@ def validate_public_url(url):
     try:
         parsed = urlparse(url)
         host = parsed.hostname
+        port = parsed.port
     except ValueError as exc:
         raise ValueError("Invalid URL.") from exc
 
@@ -147,7 +240,7 @@ def validate_public_url(url):
     try:
         addresses = socket.getaddrinfo(
             host,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
+            port or (443 if parsed.scheme == "https" else 80),
             type=socket.SOCK_STREAM,
         )
     except (socket.gaierror, OSError, ValueError) as exc:
@@ -175,7 +268,6 @@ def validate_public_url(url):
 def is_direct_audio_url(url):
     try:
         parsed = urlparse(url or "")
-
         return (
             parsed.scheme in ("http", "https")
             and bool(parsed.hostname)
@@ -286,9 +378,7 @@ def web_search(query):
         if not href_match:
             continue
 
-        target = html.unescape(
-            href_match.group(2)
-        ).strip()
+        target = html.unescape(href_match.group(2)).strip()
 
         if target.startswith("//"):
             target = "https:" + target
@@ -302,10 +392,7 @@ def web_search(query):
 
         host = (parsed.hostname or "").lower()
 
-        if (
-            host == "google.com"
-            or host.endswith(".google.com")
-        ):
+        if host == "google.com" or host.endswith(".google.com"):
             if parsed.path == "/url":
                 params = parse_qs(parsed.query)
                 target = (
@@ -330,7 +417,6 @@ def web_search(query):
             continue
 
         heading = heading_match.group(1)
-
         title = html.unescape(
             re.sub(
                 r"\s+",
@@ -373,24 +459,19 @@ def resolve_audio_url(source_url):
 
 # ============================================================
 # AUDIO DOWNLOAD
-# Allows limited redirects and validates audio signatures.
 # ============================================================
 
 def download_track(url, destination):
     current_url = validate_audio_url(url)
     total = 0
 
-    audio_signatures = (
-        b"ID3",
-        b"fLaC",
-        b"OggS",
-    )
-
     def has_audio_signature(data):
         if not data:
             return False
 
-        # MP3 frame sync
+        if data.startswith((b"ID3", b"fLaC", b"OggS")):
+            return True
+
         if (
             len(data) >= 2
             and data[0] == 0xFF
@@ -398,11 +479,6 @@ def download_track(url, destination):
         ):
             return True
 
-        # MP3, FLAC, OGG and OPUS
-        if data.startswith(audio_signatures):
-            return True
-
-        # WAV
         if (
             len(data) >= 12
             and data.startswith(b"RIFF")
@@ -410,11 +486,9 @@ def download_track(url, destination):
         ):
             return True
 
-        # M4A / MP4 container
         if len(data) >= 12 and data[4:8] == b"ftyp":
             return True
 
-        # AAC ADTS frame sync
         if (
             len(data) >= 2
             and data[0] == 0xFF
@@ -431,7 +505,7 @@ def download_track(url, destination):
             follow_redirects=False,
             timeout=httpx.Timeout(120.0, connect=10.0),
             headers={
-                "User-Agent": "Donut4U-Karaoke/2.2.2",
+                "User-Agent": "Donut4U-Karaoke/2.2.3",
                 "Accept": "audio/*,application/octet-stream,*/*",
             },
         ) as response:
@@ -443,16 +517,14 @@ def download_track(url, destination):
                     )
 
                 location = response.headers.get("location")
-
                 if not location:
                     raise ValueError(
                         "Audio redirect did not provide a destination."
                     )
 
-                next_url = urljoin(current_url, location)
-
-                # Validate the redirect destination before following it.
-                current_url = validate_public_url(next_url)
+                current_url = validate_public_url(
+                    urljoin(current_url, location)
+                )
                 continue
 
             response.raise_for_status()
@@ -461,45 +533,38 @@ def download_track(url, destination):
                 "content-type", ""
             ).split(";")[0].strip().lower()
 
-            size = response.headers.get("content-length")
-
-            if size:
+            content_length = response.headers.get("content-length")
+            if content_length:
                 try:
-                    content_length = int(size)
+                    size = int(content_length)
                 except (TypeError, ValueError):
-                    content_length = None
+                    size = None
 
-                if (
-                    content_length is not None
-                    and content_length > MAX_DOWNLOAD_BYTES
-                ):
+                if size is not None and size > MAX_DOWNLOAD_BYTES:
                     raise ValueError(
                         "Audio file exceeds the 100 MB limit."
                     )
 
-            # Verify the downloaded bytes when the server supplies
-            # a generic or unsupported MIME type.
             chunks = response.iter_bytes(1024 * 1024)
             first_chunk = next(chunks, b"")
 
             if not first_chunk:
-                raise ValueError(
-                    "The downloaded audio file is empty."
-                )
+                raise ValueError("The downloaded audio file is empty.")
 
-            if content_type not in AUDIO_CONTENT_TYPES:
-                if not has_audio_signature(first_chunk[:64]):
-                    raise ValueError(
-                        "The server response is not recognized as an "
-                        "audio file. Try another direct audio-file URL."
-                    )
-
-            # Reject an HTML page even if its MIME type claims audio.
             if first_chunk.lstrip().lower().startswith(
                 (b"<!doctype html", b"<html", b"<head", b"<body")
             ):
                 raise ValueError(
                     "The URL returned a webpage instead of an audio file."
+                )
+
+            if (
+                content_type not in AUDIO_CONTENT_TYPES
+                and not has_audio_signature(first_chunk[:64])
+            ):
+                raise ValueError(
+                    "The server response is not recognized as an audio "
+                    "file. Try another direct audio-file URL."
                 )
 
             with open(destination, "wb") as output:
@@ -600,23 +665,20 @@ def process_job(job_id):
             job_id,
             status="processing",
             progress="resolving_audio",
+            error=None,
         )
 
-        source_url = resolve_audio_url(
-            job.get("source_url", "")
-        )
+        source_url = resolve_audio_url(job.get("source_url", ""))
 
         update_job(job_id, progress="downloading_audio")
-
         download_track(source_url, source_path)
 
         update_job(job_id, progress="checking_audio")
-
         duration = get_audio_duration(source_path)
 
         update_job(job_id, progress="separating_vocals")
 
-        subprocess.run(
+        result = subprocess.run(
             [
                 "python", "-m", "demucs",
                 "--two-stems=vocals",
@@ -640,7 +702,8 @@ def process_job(job_id):
 
         if not vocals_path.is_file() or not no_vocals_path.is_file():
             raise RuntimeError(
-                "Vocal separation did not produce both audio stems."
+                "Vocal separation did not produce both audio stems. "
+                + (result.stderr or "")[-1000:]
             )
 
         shutil.move(str(no_vocals_path), str(instrumental_path))
@@ -648,7 +711,6 @@ def process_job(job_id):
         update_job(job_id, progress="transcribing_lyrics")
 
         model = get_whisper_model()
-
         segments, info = model.transcribe(
             str(vocals_path),
             word_timestamps=True,
@@ -686,17 +748,17 @@ def process_job(job_id):
             status="completed",
             progress="completed",
             track_id=job_id,
+            error=None,
         )
 
     except Exception as exc:
-        shutil.rmtree(directory, ignore_errors=True)
-
+        # Keep the job directory and metadata so the error can be inspected.
         update_job(
             job_id,
             status="failed",
             progress="failed",
             error=(
-                str(exc)[:400]
+                str(exc)[:2000]
                 or "Processing failed. Try another direct audio file."
             ),
         )
@@ -735,7 +797,6 @@ def public_catalog_search(
     q: str = Query(min_length=1, max_length=160),
 ):
     cleanup_expired_jobs()
-
     results = web_search(q.strip())
 
     return {
@@ -764,9 +825,7 @@ def create_job_from_url(
     background_tasks: BackgroundTasks,
 ):
     try:
-        source_url = validate_audio_url(
-            payload.get("url", "")
-        )
+        source_url = validate_audio_url(payload.get("url", ""))
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -799,6 +858,7 @@ def create_job_from_url(
             "directory": str(directory),
             "error": None,
         }
+        save_jobs_locked()
 
     background_tasks.add_task(process_job, job_id)
 
@@ -824,7 +884,7 @@ def job_status(job_id: str):
         "artist": job["artist"],
         "status": job["status"],
         "progress": job["progress"],
-        "error": job["error"],
+        "error": job.get("error"),
     }
 
 
@@ -906,6 +966,7 @@ def delete_job(job_id: str):
 
         directory = job["directory"]
         del JOBS[job_id]
+        save_jobs_locked()
 
     shutil.rmtree(directory, ignore_errors=True)
 
@@ -913,3 +974,7 @@ def delete_job(job_id: str):
         "deleted": True,
         "job_id": job_id,
     }
+
+
+# Restore saved job records when the application starts.
+load_jobs()
