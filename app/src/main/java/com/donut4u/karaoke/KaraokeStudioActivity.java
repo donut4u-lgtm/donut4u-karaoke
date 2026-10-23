@@ -68,7 +68,6 @@ public class KaraokeStudioActivity extends Activity {
     private LinearLayout root;
     private LinearLayout resultsContainer;
     private LinearLayout lyricsContainer;
-    private LinearLayout searchPanel;
     private LinearLayout browserPanel;
 
     private EditText searchInput;
@@ -154,14 +153,10 @@ public class KaraokeStudioActivity extends Activity {
         });
 
         searchStatus = text(
-                "Search for songs, artists, websites, and videos.",
+                "Search Google or open a website inside the app.",
                 14, WHITE, false);
         searchStatus.setPadding(0, dp(10), 0, dp(8));
         content.addView(searchStatus, matchWrap());
-
-        resultsContainer = new LinearLayout(this);
-        resultsContainer.setOrientation(LinearLayout.VERTICAL);
-        content.addView(resultsContainer, matchWrap());
 
         browserPanel = new LinearLayout(this);
         browserPanel.setOrientation(LinearLayout.VERTICAL);
@@ -171,7 +166,7 @@ public class KaraokeStudioActivity extends Activity {
 
         section(browserPanel, "2. EMBEDDED WEB BROWSER");
 
-        browserTitle = text("Selected webpage", 16, GREEN, true);
+        browserTitle = text("Song search", 16, GREEN, true);
         browserPanel.addView(browserTitle, matchWrap());
 
         browserAddress = text("", 12, Color.LTGRAY, false);
@@ -246,9 +241,7 @@ public class KaraokeStudioActivity extends Activity {
         });
 
         refreshWeb.setOnClickListener(v -> {
-            if (webView != null) {
-                webView.reload();
-            }
+            if (webView != null) webView.reload();
         });
 
         closeWeb.setOnClickListener(v -> closeBrowser());
@@ -256,9 +249,9 @@ public class KaraokeStudioActivity extends Activity {
         section(content, "3. MAKE KARAOKE");
 
         content.addView(text(
-                "Webpages and videos can be opened in the browser above. "
-                + "To create an instrumental track, select a result whose "
-                + "media the processing server can access.",
+                "Search results open in the browser above. Select a webpage "
+                + "or media URL only if the karaoke processing server can "
+                + "access its media.",
                 13, WHITE, false), matchWrap());
 
         selectedSong = text("No source selected.", 14, WHITE, false);
@@ -316,155 +309,42 @@ public class KaraokeStudioActivity extends Activity {
         initializeAds(adContainer);
     }
 
+    /*
+     * Direct search inside the embedded WebView.
+     * This method does not call the Render catalog-search endpoint.
+     */
     private void searchInternet() {
         String query = searchInput.getText().toString().trim();
 
         if (query.isEmpty()) {
-            searchInput.setError("Enter a search term or URL");
+            searchInput.setError("Enter a song, artist, website, or URL");
             return;
         }
 
         hideKeyboard();
-        searchButton.setEnabled(false);
-        searchStatus.setText("Searching online...");
         resultsContainer.removeAllViews();
 
-        executor.execute(() -> {
-            HttpURLConnection connection = null;
+        String targetUrl;
+        String title;
 
+        if (isHttpUrl(query)) {
+            targetUrl = query;
+            title = "Website";
+        } else {
             try {
                 String encoded = URLEncoder.encode(
                         query, StandardCharsets.UTF_8.name());
 
-                URL url = new URL(
-                        API_BASE + "/v1/catalog-search?q=" + encoded);
-
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(20000);
-                connection.setReadTimeout(30000);
-                connection.setRequestProperty("Accept", "application/json");
-
-                int code = connection.getResponseCode();
-                InputStream stream = code >= 200 && code < 300
-                        ? connection.getInputStream()
-                        : connection.getErrorStream();
-
-                String response = readStream(stream);
-
-                if (code < 200 || code >= 300) {
-                    throw new Exception("Search HTTP " + code
-                            + responseSuffix(response));
-                }
-
-                JSONObject json = new JSONObject(response);
-                JSONArray found = json.optJSONArray("results");
-                if (found == null) found = new JSONArray();
-
-                JSONArray results = found;
-
-                mainHandler.post(() -> {
-                    if (destroyed) return;
-
-                    searchButton.setEnabled(true);
-                    displayResults(results);
-
-                    searchStatus.setText(results.length() == 0
-                            ? "No results returned. Try another search."
-                            : "Found " + results.length()
-                                    + " result(s). Open any valid webpage below.");
-                });
-
+                targetUrl = "https://www.google.com/search?q=" + encoded;
+                title = "Google Song Search";
             } catch (Exception e) {
-                String message = e.getMessage() == null
-                        ? "Search failed" : e.getMessage();
-
-                mainHandler.post(() -> {
-                    if (destroyed) return;
-                    searchButton.setEnabled(true);
-                    searchStatus.setText("Search failed: " + message);
-                });
-
-            } finally {
-                if (connection != null) connection.disconnect();
+                searchStatus.setText("Unable to prepare search.");
+                return;
             }
-        });
-    }
-
-    private void displayResults(JSONArray results) {
-        resultsContainer.removeAllViews();
-
-        int shown = 0;
-
-        for (int i = 0; i < results.length(); i++) {
-            JSONObject result = results.optJSONObject(i);
-            if (result == null) continue;
-
-            String title = firstNonEmpty(
-                    result.optString("title", ""),
-                    result.optString("name", ""),
-                    "Search result");
-
-            String url = firstNonEmpty(
-                    result.optString("url", ""),
-                    result.optString("page_url", ""),
-                    result.optString("link", ""),
-                    result.optString("web_url", ""));
-
-            String description = firstNonEmpty(
-                    result.optString("description", ""),
-                    result.optString("snippet", ""),
-                    result.optString("artist", ""),
-                    result.optString("source", ""));
-
-            if (!isHttpUrl(url)) continue;
-
-            shown++;
-
-            LinearLayout card = new LinearLayout(this);
-            card.setOrientation(LinearLayout.VERTICAL);
-            card.setPadding(dp(12), dp(12), dp(12), dp(12));
-            card.setBackgroundColor(PANEL);
-
-            LinearLayout.LayoutParams cardParams = matchWrap();
-            cardParams.bottomMargin = dp(9);
-            resultsContainer.addView(card, cardParams);
-
-            card.addView(text(title, 17, GREEN, true), matchWrap());
-
-            if (!description.isEmpty()) {
-                TextView descriptionView =
-                        text(description, 13, WHITE, false);
-                descriptionView.setPadding(0, dp(5), 0, dp(5));
-                card.addView(descriptionView, matchWrap());
-            }
-
-            TextView urlView = text(url, 12, Color.LTGRAY, false);
-            urlView.setPadding(0, dp(4), 0, dp(4));
-            card.addView(urlView, matchWrap());
-
-            Button openButton = button("OPEN IN APP WEBVIEW");
-            card.addView(openButton, matchWrap());
-            openButton.setOnClickListener(v -> openBrowser(title, url));
-
-            Button selectButton = button("SELECT FOR KARAOKE PROCESSING");
-            card.addView(selectButton, matchWrap());
-            selectButton.setOnClickListener(v -> {
-                selectedSourceUrl = url;
-                selectedSong.setText("Selected source:\n" + title + "\n" + url);
-                Toast.makeText(this,
-                        "Source selected. Processing works only if the server can access its media.",
-                        Toast.LENGTH_LONG).show();
-            });
         }
 
-        if (shown == 0) {
-            resultsContainer.addView(text(
-                    "No valid HTTP/HTTPS webpage links were returned. "
-                    + "The search API must return results containing a title "
-                    + "and a URL, link, page_url, or web_url field.",
-                    13, WHITE, false), matchWrap());
-        }
+        searchStatus.setText("Opening inside the app...");
+        openBrowser(title, targetUrl);
     }
 
     private boolean isHttpUrl(String value) {
@@ -511,7 +391,7 @@ public class KaraokeStudioActivity extends Activity {
 
         if (!isHttpUrl(selectedSourceUrl)) {
             Toast.makeText(this,
-                    "Select a webpage or media source first.",
+                    "Enter a direct media URL in search first.",
                     Toast.LENGTH_LONG).show();
             return;
         }
@@ -911,7 +791,7 @@ public class KaraokeStudioActivity extends Activity {
         }
 
         Toast.makeText(this,
-                "Select a source and create a karaoke track first.",
+                "Select a direct media URL and create a karaoke track first.",
                 Toast.LENGTH_LONG).show();
     }
 
