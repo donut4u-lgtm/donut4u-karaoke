@@ -3,6 +3,7 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.media.MediaPlayer;
@@ -81,6 +82,7 @@ public class KaraokeStudioActivity extends Activity {
     private Button searchButton;
     private Button playButton;
     private Button makeKaraokeButton;
+    private Button selectPageButton;
 
     private WebView webView;
     private AdView adView;
@@ -158,6 +160,11 @@ public class KaraokeStudioActivity extends Activity {
         searchStatus.setPadding(0, dp(10), 0, dp(8));
         content.addView(searchStatus, matchWrap());
 
+        // FIX: Initialize this before any method can use it.
+        resultsContainer = new LinearLayout(this);
+        resultsContainer.setOrientation(LinearLayout.VERTICAL);
+        content.addView(resultsContainer, matchWrap());
+
         browserPanel = new LinearLayout(this);
         browserPanel.setOrientation(LinearLayout.VERTICAL);
         browserPanel.setPadding(dp(10), dp(10), dp(10), dp(10));
@@ -180,14 +187,10 @@ public class KaraokeStudioActivity extends Activity {
         Button refreshWeb = button("REFRESH");
         Button closeWeb = button("CLOSE");
 
-        browserControls.addView(backWeb, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        browserControls.addView(forwardWeb, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        browserControls.addView(refreshWeb, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        browserControls.addView(closeWeb, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        browserControls.addView(backWeb, weightedWrap());
+        browserControls.addView(forwardWeb, weightedWrap());
+        browserControls.addView(refreshWeb, weightedWrap());
+        browserControls.addView(closeWeb, weightedWrap());
 
         browserPanel.addView(browserControls, matchWrap());
 
@@ -215,6 +218,7 @@ public class KaraokeStudioActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+
                 if (!destroyed && browserAddress != null) {
                     browserAddress.setText(url);
                 }
@@ -241,17 +245,25 @@ public class KaraokeStudioActivity extends Activity {
         });
 
         refreshWeb.setOnClickListener(v -> {
-            if (webView != null) webView.reload();
+            if (webView != null) {
+                webView.reload();
+            }
         });
 
         closeWeb.setOnClickListener(v -> closeBrowser());
 
+        // This selects the current browser address, not the actual
+        // underlying media stream. The server must support that URL.
+        selectPageButton = button("USE CURRENT WEBPAGE AS SOURCE");
+        content.addView(selectPageButton, matchWrap());
+        selectPageButton.setOnClickListener(v -> selectCurrentPage());
+
         section(content, "3. MAKE KARAOKE");
 
         content.addView(text(
-                "Search results open in the browser above. Select a webpage "
-                + "or media URL only if the karaoke processing server can "
-                + "access its media.",
+                "Search results open in the browser above. A webpage URL "
+                        + "may not be a direct media URL. The karaoke server "
+                        + "must support the selected source.",
                 13, WHITE, false), matchWrap());
 
         selectedSong = text("No source selected.", 14, WHITE, false);
@@ -309,20 +321,29 @@ public class KaraokeStudioActivity extends Activity {
         initializeAds(adContainer);
     }
 
+    private LinearLayout.LayoutParams weightedWrap() {
+        return new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+    }
+
     /*
-     * Direct search inside the embedded WebView.
-     * This method does not call the Render catalog-search endpoint.
+     * Search directly in the embedded WebView.
+     * No Render catalog-search request is made here.
      */
     private void searchInternet() {
+        if (searchInput == null || searchStatus == null) {
+            return;
+        }
+
         String query = searchInput.getText().toString().trim();
 
         if (query.isEmpty()) {
-            searchInput.setError("Enter a song, artist, website, or URL");
+            searchInput.setError(
+                    "Enter a song, artist, website, or URL");
             return;
         }
 
         hideKeyboard();
-        resultsContainer.removeAllViews();
 
         String targetUrl;
         String title;
@@ -347,8 +368,42 @@ public class KaraokeStudioActivity extends Activity {
         openBrowser(title, targetUrl);
     }
 
+    private void selectCurrentPage() {
+        if (webView == null) {
+            Toast.makeText(
+                    this, "Browser is unavailable.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String url = webView.getUrl();
+
+        if (!isHttpUrl(url)) {
+            Toast.makeText(
+                    this, "Open a valid webpage first.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (url.contains("google.com/search")) {
+            Toast.makeText(
+                    this,
+                    "Open the actual song or supported media page first.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        selectedSourceUrl = url;
+        selectedSong.setText("Selected source:\n" + selectedSourceUrl);
+
+        Toast.makeText(
+                this,
+                "Webpage selected. The karaoke server must support this URL.",
+                Toast.LENGTH_LONG).show();
+    }
+
     private boolean isHttpUrl(String value) {
-        if (value == null || value.trim().isEmpty()) return false;
+        if (value == null || value.trim().isEmpty()) {
+            return false;
+        }
 
         try {
             Uri uri = Uri.parse(value.trim());
@@ -364,7 +419,8 @@ public class KaraokeStudioActivity extends Activity {
 
     private void openBrowser(String title, String url) {
         if (!isHttpUrl(url)) {
-            Toast.makeText(this, "Invalid webpage URL.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(
+                    this, "Invalid webpage URL.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -378,20 +434,29 @@ public class KaraokeStudioActivity extends Activity {
     }
 
     private void closeBrowser() {
-        if (webView != null) webView.stopLoading();
-        if (browserPanel != null) browserPanel.setVisibility(View.GONE);
+        if (webView != null) {
+            webView.stopLoading();
+        }
+
+        if (browserPanel != null) {
+            browserPanel.setVisibility(View.GONE);
+        }
     }
 
     private void makeKaraoke() {
         if (processingKaraoke) {
-            Toast.makeText(this, "Karaoke processing is already running.",
+            Toast.makeText(
+                    this,
+                    "Karaoke processing is already running.",
                     Toast.LENGTH_SHORT).show();
             return;
         }
 
         if (!isHttpUrl(selectedSourceUrl)) {
-            Toast.makeText(this,
-                    "Enter a direct media URL in search first.",
+            Toast.makeText(
+                    this,
+                    "Search for a song, open its webpage, then select "
+                            + "USE CURRENT WEBPAGE AS SOURCE.",
                     Toast.LENGTH_LONG).show();
             return;
         }
@@ -399,6 +464,8 @@ public class KaraokeStudioActivity extends Activity {
         processingKaraoke = true;
         pollAttempts = 0;
         currentJobId = "";
+        currentJobStatus = "";
+
         makeKaraokeButton.setEnabled(false);
         playbackStatus.setText("Sending source to the karaoke server...");
         lyricsStatus.setText("Waiting for lyrics...");
@@ -426,7 +493,9 @@ public class KaraokeStudioActivity extends Activity {
                 payload.put("title", title);
                 payload.put("artist", "");
 
-                byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+                byte[] body = payload.toString()
+                        .getBytes(StandardCharsets.UTF_8);
+
                 connection.setFixedLengthStreamingMode(body.length);
 
                 try (OutputStream output = connection.getOutputStream()) {
@@ -441,8 +510,8 @@ public class KaraokeStudioActivity extends Activity {
                 String response = readStream(stream);
 
                 if (code < 200 || code >= 300) {
-                    throw new Exception("Server HTTP " + code
-                            + responseSuffix(response));
+                    throw new Exception(
+                            "Server HTTP " + code + responseSuffix(response));
                 }
 
                 JSONObject json = new JSONObject(response);
@@ -455,10 +524,14 @@ public class KaraokeStudioActivity extends Activity {
                 }
 
                 mainHandler.post(() -> {
-                    if (destroyed) return;
+                    if (destroyed) {
+                        return;
+                    }
+
                     currentJobId = jobId;
                     playbackStatus.setText("Processing audio...");
-                    lyricsStatus.setText("Generating instrumental and lyrics...");
+                    lyricsStatus.setText(
+                            "Generating instrumental and lyrics...");
                     pollJobStatus();
                 });
 
@@ -467,25 +540,33 @@ public class KaraokeStudioActivity extends Activity {
                         ? "Unable to start processing" : e.getMessage();
 
                 mainHandler.post(() -> {
-                    if (destroyed) return;
+                    if (destroyed) {
+                        return;
+                    }
+
                     processingKaraoke = false;
                     makeKaraokeButton.setEnabled(true);
                     playbackStatus.setText("Processing failed: " + message);
                 });
 
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
         });
     }
 
     private void pollJobStatus() {
-        if (destroyed || currentJobId.isEmpty()) return;
+        if (destroyed || currentJobId.isEmpty()) {
+            return;
+        }
 
         if (pollAttempts >= MAX_POLL_ATTEMPTS) {
             processingKaraoke = false;
             makeKaraokeButton.setEnabled(true);
-            playbackStatus.setText("Processing took too long. Try again later.");
+            playbackStatus.setText(
+                    "Processing took too long. Try again later.");
             return;
         }
 
@@ -496,7 +577,9 @@ public class KaraokeStudioActivity extends Activity {
             HttpURLConnection connection = null;
 
             try {
-                URL url = new URL(API_BASE + "/v1/jobs/" + Uri.encode(jobId));
+                URL url = new URL(
+                        API_BASE + "/v1/jobs/" + Uri.encode(jobId));
+
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(20000);
@@ -510,8 +593,8 @@ public class KaraokeStudioActivity extends Activity {
                 String response = readStream(stream);
 
                 if (code < 200 || code >= 300) {
-                    throw new Exception("Status HTTP " + code
-                            + responseSuffix(response));
+                    throw new Exception(
+                            "Status HTTP " + code + responseSuffix(response));
                 }
 
                 JSONObject json = new JSONObject(response);
@@ -526,7 +609,9 @@ public class KaraokeStudioActivity extends Activity {
                         status);
 
                 mainHandler.post(() -> {
-                    if (destroyed || !jobId.equals(currentJobId)) return;
+                    if (destroyed || !jobId.equals(currentJobId)) {
+                        return;
+                    }
 
                     currentJobStatus = status;
                     playbackStatus.setText("Karaoke status: " + message);
@@ -536,16 +621,21 @@ public class KaraokeStudioActivity extends Activity {
                     if (isCompleted(normalized)) {
                         processingKaraoke = false;
                         makeKaraokeButton.setEnabled(true);
-                        playbackStatus.setText("Karaoke ready. Loading lyrics...");
+                        playbackStatus.setText(
+                                "Karaoke ready. Loading lyrics...");
                         loadGeneratedLyrics(jobId);
+
                     } else if (normalized.equals("failed")
                             || normalized.equals("error")
                             || normalized.equals("cancelled")) {
                         processingKaraoke = false;
                         makeKaraokeButton.setEnabled(true);
-                        playbackStatus.setText("Processing failed: " + message);
+                        playbackStatus.setText(
+                                "Processing failed: " + message);
+
                     } else {
-                        mainHandler.postDelayed(this::pollJobStatus, 5000);
+                        mainHandler.postDelayed(
+                                this::pollJobStatus, 5000);
                     }
                 });
 
@@ -554,13 +644,19 @@ public class KaraokeStudioActivity extends Activity {
                         ? "Unable to check status" : e.getMessage();
 
                 mainHandler.post(() -> {
-                    if (destroyed || !jobId.equals(currentJobId)) return;
+                    if (destroyed || !jobId.equals(currentJobId)) {
+                        return;
+                    }
+
                     playbackStatus.setText("Checking status: " + message);
-                    mainHandler.postDelayed(this::pollJobStatus, 8000);
+                    mainHandler.postDelayed(
+                            this::pollJobStatus, 8000);
                 });
 
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
         });
     }
@@ -578,8 +674,9 @@ public class KaraokeStudioActivity extends Activity {
             HttpURLConnection connection = null;
 
             try {
-                URL url = new URL(API_BASE + "/v1/jobs/"
-                        + Uri.encode(jobId) + "/lyrics");
+                URL url = new URL(
+                        API_BASE + "/v1/jobs/"
+                                + Uri.encode(jobId) + "/lyrics");
 
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
@@ -594,21 +691,26 @@ public class KaraokeStudioActivity extends Activity {
                 String response = readStream(stream);
 
                 if (code < 200 || code >= 300) {
-                    throw new Exception("Lyrics HTTP " + code
-                            + responseSuffix(response));
+                    throw new Exception(
+                            "Lyrics HTTP " + code + responseSuffix(response));
                 }
 
                 JSONObject json = new JSONObject(response);
                 JSONArray words = json.optJSONArray("words");
                 JSONArray lines = json.optJSONArray("lines");
+
                 String plainLyrics = firstNonEmpty(
                         json.optString("lyrics", ""),
                         json.optString("text", ""), "");
 
                 mainHandler.post(() -> {
-                    if (destroyed || !jobId.equals(currentJobId)) return;
+                    if (destroyed || !jobId.equals(currentJobId)) {
+                        return;
+                    }
+
                     displayLyrics(words, lines, plainLyrics);
-                    playbackStatus.setText("Karaoke processing completed.");
+                    playbackStatus.setText(
+                            "Karaoke processing completed.");
                     loadInstrumental(jobId);
                 });
 
@@ -617,13 +719,19 @@ public class KaraokeStudioActivity extends Activity {
                         ? "Lyrics unavailable" : e.getMessage();
 
                 mainHandler.post(() -> {
-                    if (destroyed || !jobId.equals(currentJobId)) return;
-                    lyricsStatus.setText("Lyrics could not load: " + message);
+                    if (destroyed || !jobId.equals(currentJobId)) {
+                        return;
+                    }
+
+                    lyricsStatus.setText(
+                            "Lyrics could not load: " + message);
                     loadInstrumental(jobId);
                 });
 
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
         });
     }
@@ -637,7 +745,10 @@ public class KaraokeStudioActivity extends Activity {
 
             for (int i = 0; i < words.length(); i++) {
                 JSONObject word = words.optJSONObject(i);
-                if (word == null) continue;
+
+                if (word == null) {
+                    continue;
+                }
 
                 String value = firstNonEmpty(
                         word.optString("text", ""),
@@ -648,6 +759,7 @@ public class KaraokeStudioActivity extends Activity {
                             text(value, 18, WHITE, false), matchWrap());
                 }
             }
+
         } else if (lines != null && lines.length() > 0) {
             lyricsStatus.setText("Generated lyrics:");
 
@@ -670,10 +782,12 @@ public class KaraokeStudioActivity extends Activity {
                     lyricsContainer.addView(lineView, matchWrap());
                 }
             }
+
         } else if (!plainLyrics.isEmpty()) {
             lyricsStatus.setText("Lyrics:");
             lyricsContainer.addView(
                     text(plainLyrics, 17, WHITE, false), matchWrap());
+
         } else {
             lyricsStatus.setText("No lyrics were returned.");
         }
@@ -693,6 +807,7 @@ public class KaraokeStudioActivity extends Activity {
             try {
                 connection = (HttpURLConnection)
                         new URL(instrumentalUrl).openConnection();
+
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(20000);
                 connection.setReadTimeout(60000);
@@ -700,9 +815,10 @@ public class KaraokeStudioActivity extends Activity {
                 int code = connection.getResponseCode();
 
                 if (code < 200 || code >= 300) {
-                    throw new Exception("Instrumental HTTP " + code
-                            + responseSuffix(readStream(
-                                    connection.getErrorStream())));
+                    throw new Exception(
+                            "Instrumental HTTP " + code
+                                    + responseSuffix(readStream(
+                                            connection.getErrorStream())));
                 }
 
                 mainHandler.post(() -> {
@@ -723,7 +839,9 @@ public class KaraokeStudioActivity extends Activity {
                 });
 
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
         });
     }
@@ -740,6 +858,7 @@ public class KaraokeStudioActivity extends Activity {
                     player.release();
                     return;
                 }
+
                 player.start();
                 playButton.setText("PAUSE AUDIO");
                 playbackStatus.setText("Playing instrumental.");
@@ -747,12 +866,14 @@ public class KaraokeStudioActivity extends Activity {
 
             mediaPlayer.setOnCompletionListener(player -> {
                 stopPlayback();
-                playbackStatus.setText("Instrumental playback finished.");
+                playbackStatus.setText(
+                        "Instrumental playback finished.");
             });
 
             mediaPlayer.setOnErrorListener((player, what, extra) -> {
                 stopPlayback();
-                playbackStatus.setText("Unable to play instrumental audio.");
+                playbackStatus.setText(
+                        "Unable to play instrumental audio.");
                 return true;
             });
 
@@ -761,7 +882,8 @@ public class KaraokeStudioActivity extends Activity {
 
         } catch (Exception e) {
             stopPlayback();
-            playbackStatus.setText("Unable to open instrumental audio.");
+            playbackStatus.setText(
+                    "Unable to open instrumental audio.");
         }
     }
 
@@ -777,33 +899,41 @@ public class KaraokeStudioActivity extends Activity {
                     playButton.setText("PAUSE AUDIO");
                     playbackStatus.setText("Playing instrumental.");
                 }
+
             } catch (Exception e) {
                 stopPlayback();
-                playbackStatus.setText("Unable to continue playback.");
+                playbackStatus.setText(
+                        "Unable to continue playback.");
             }
+
             return;
         }
 
-        if (!currentJobId.isEmpty() && isCompleted(
-                currentJobStatus.toLowerCase(Locale.US))) {
+        if (!currentJobId.isEmpty()
+                && isCompleted(currentJobStatus.toLowerCase(Locale.US))) {
             loadInstrumental(currentJobId);
             return;
         }
 
-        Toast.makeText(this,
-                "Select a direct media URL and create a karaoke track first.",
+        Toast.makeText(
+                this,
+                "Select a supported source and create a karaoke track first.",
                 Toast.LENGTH_LONG).show();
     }
 
     private void stopPlayback() {
         if (mediaPlayer != null) {
             try {
-                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
-            } catch (Exception ignored) {}
+                if (mediaPlayer.isPlaying()) {
+                    mediaPlayer.stop();
+                }
+            } catch (Exception ignored) {
+            }
 
             try {
                 mediaPlayer.release();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
 
             mediaPlayer = null;
         }
@@ -815,33 +945,46 @@ public class KaraokeStudioActivity extends Activity {
 
     private String firstNonEmpty(String... values) {
         for (String value : values) {
-            if (value != null && !value.trim().isEmpty()
+            if (value != null
+                    && !value.trim().isEmpty()
                     && !"null".equalsIgnoreCase(value.trim())) {
                 return value.trim();
             }
         }
+
         return "";
     }
 
     private String responseSuffix(String response) {
-        if (response == null || response.trim().isEmpty()) return "";
+        if (response == null || response.trim().isEmpty()) {
+            return "";
+        }
+
         String value = response.trim();
-        if (value.length() > 400) value = value.substring(0, 400);
+
+        if (value.length() > 400) {
+            value = value.substring(0, 400);
+        }
+
         return ": " + value;
     }
 
     private String readStream(InputStream stream) throws Exception {
-        if (stream == null) return "";
+        if (stream == null) {
+            return "";
+        }
 
         StringBuilder result = new StringBuilder();
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             String line;
+
             while ((line = reader.readLine()) != null) {
                 result.append(line).append('\n');
             }
         }
+
         return result.toString();
     }
 
@@ -858,6 +1001,7 @@ public class KaraokeStudioActivity extends Activity {
                     ViewGroup.LayoutParams.WRAP_CONTENT));
 
             adView.loadAd(new AdRequest.Builder().build());
+
         } catch (Exception ignored) {
             // The studio remains usable when ads are unavailable.
         }
@@ -879,6 +1023,7 @@ public class KaraokeStudioActivity extends Activity {
         if (bold) {
             view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         }
+
         return view;
     }
 
@@ -890,12 +1035,13 @@ public class KaraokeStudioActivity extends Activity {
         button.setAllCaps(false);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(GREEN));
+                ColorStateList.valueOf(GREEN));
 
         LinearLayout.LayoutParams params = matchWrap();
         params.topMargin = dp(7);
         params.bottomMargin = dp(3);
         button.setLayoutParams(params);
+
         return button;
     }
 
@@ -914,11 +1060,13 @@ public class KaraokeStudioActivity extends Activity {
         try {
             InputMethodManager manager = (InputMethodManager)
                     getSystemService(Context.INPUT_METHOD_SERVICE);
+
             if (manager != null && searchInput != null) {
                 manager.hideSoftInputFromWindow(
                         searchInput.getWindowToken(), 0);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -930,6 +1078,7 @@ public class KaraokeStudioActivity extends Activity {
             } else {
                 closeBrowser();
             }
+
             return;
         }
 
@@ -939,14 +1088,26 @@ public class KaraokeStudioActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (adView != null) adView.resume();
-        if (webView != null) webView.onResume();
+
+        if (adView != null) {
+            adView.resume();
+        }
+
+        if (webView != null) {
+            webView.onResume();
+        }
     }
 
     @Override
     protected void onPause() {
-        if (adView != null) adView.pause();
-        if (webView != null) webView.onPause();
+        if (adView != null) {
+            adView.pause();
+        }
+
+        if (webView != null) {
+            webView.onPause();
+        }
+
         super.onPause();
     }
 
@@ -970,6 +1131,7 @@ public class KaraokeStudioActivity extends Activity {
 
         executor.shutdownNow();
         mainHandler.removeCallbacksAndMessages(null);
+
         super.onDestroy();
     }
 }
