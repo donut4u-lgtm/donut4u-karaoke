@@ -13,7 +13,7 @@ import socket
 
 from pathlib import Path
 from datetime import datetime, timezone
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urljoin
 
 import httpx
 
@@ -24,7 +24,7 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Donut4U Karaoke Processing API",
-    version="2.2.0"
+    version="2.2.1"
 )
 
 JOB_TTL_MINUTES = int(os.getenv("JOB_TTL_MINUTES", "60"))
@@ -33,6 +33,7 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs")
 JOB_ROOT = Path(os.getenv("JOB_ROOT", "/tmp/donut4u-jobs"))
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+MAX_REDIRECTS = 5
 
 SUPPORTED_AUDIO_EXTENSIONS = (
     ".mp3",
@@ -318,7 +319,6 @@ def web_search(query):
 
         target = html.unescape(target).strip()
 
-        # Reject web pages and video URLs before returning results.
         if not is_direct_audio_url(target):
             continue
 
@@ -361,13 +361,11 @@ def web_search(query):
         if len(results) >= 20:
             break
 
-    # An empty result is valid: do not invent playable songs.
     return results
 
 
 # ============================================================
 # DIRECT AUDIO URL RESOLUTION
-# Never fetch or parse a webpage to find an audio link.
 # ============================================================
 
 def resolve_audio_url(source_url):
@@ -376,62 +374,79 @@ def resolve_audio_url(source_url):
 
 # ============================================================
 # AUDIO DOWNLOAD
+# Supports limited redirects while validating every destination.
 # ============================================================
 
 def download_track(url, destination):
-    url = validate_audio_url(url)
+    current_url = validate_audio_url(url)
     total = 0
 
-    with httpx.stream(
-        "GET",
-        url,
-        follow_redirects=False,
-        timeout=httpx.Timeout(120.0, connect=10.0),
-        headers={"User-Agent": "Donut4U-Karaoke/2.2"},
-    ) as response:
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        with httpx.stream(
+            "GET",
+            current_url,
+            follow_redirects=False,
+            timeout=httpx.Timeout(120.0, connect=10.0),
+            headers={"User-Agent": "Donut4U-Karaoke/2.2.1"},
+        ) as response:
 
-        if response.is_redirect:
-            raise ValueError(
-                "Audio URL redirects are not supported. "
-                "Use the final direct audio-file URL."
-            )
-
-        response.raise_for_status()
-
-        content_type = response.headers.get(
-            "content-type", ""
-        ).split(";")[0].strip().lower()
-
-        if content_type not in AUDIO_CONTENT_TYPES:
-            raise ValueError(
-                "The server did not return a supported audio MIME type."
-            )
-
-        size = response.headers.get("content-length")
-
-        if size:
-            try:
-                if int(size) > MAX_DOWNLOAD_BYTES:
+            if response.is_redirect:
+                if redirect_count >= MAX_REDIRECTS:
                     raise ValueError(
-                        "Audio file exceeds the 100 MB limit."
-                    )
-            except (TypeError, ValueError) as exc:
-                if "100 MB limit" in str(exc):
-                    raise
-
-        with open(destination, "wb") as output:
-            for chunk in response.iter_bytes(1024 * 1024):
-                if not chunk:
-                    continue
-
-                total += len(chunk)
-
-                if total > MAX_DOWNLOAD_BYTES:
-                    raise ValueError(
-                        "Audio file exceeds the 100 MB limit."
+                        "Audio URL exceeded the maximum number of redirects."
                     )
 
-                output.write(chunk)
+                location = response.headers.get("location")
+
+                if not location:
+                    raise ValueError(
+                        "Audio redirect did not provide a destination."
+                    )
+
+                next_url = urljoin(current_url, location)
+
+                # Redirect targets must still be public direct audio URLs.
+                current_url = validate_audio_url(next_url)
+                continue
+
+            response.raise_for_status()
+
+            content_type = response.headers.get(
+                "content-type", ""
+            ).split(";")[0].strip().lower()
+
+            if content_type not in AUDIO_CONTENT_TYPES:
+                raise ValueError(
+                    "The server did not return a supported audio MIME type."
+                )
+
+            size = response.headers.get("content-length")
+
+            if size:
+                try:
+                    if int(size) > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(
+                            "Audio file exceeds the 100 MB limit."
+                        )
+                except (TypeError, ValueError) as exc:
+                    if "100 MB limit" in str(exc):
+                        raise
+
+            with open(destination, "wb") as output:
+                for chunk in response.iter_bytes(1024 * 1024):
+                    if not chunk:
+                        continue
+
+                    total += len(chunk)
+
+                    if total > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(
+                            "Audio file exceeds the 100 MB limit."
+                        )
+
+                    output.write(chunk)
+
+            break
 
     if total == 0:
         raise ValueError("The downloaded audio file is empty.")
@@ -595,7 +610,6 @@ def process_job(job_id):
         )
 
     except Exception as exc:
-        # Keep the job record so the client can read the error.
         shutil.rmtree(directory, ignore_errors=True)
 
         update_job(
