@@ -6,13 +6,18 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -20,11 +25,6 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-
-import androidx.media3.common.MediaItem;
-import androidx.media3.common.PlaybackException;
-import androidx.media3.common.Player;
-import androidx.media3.exoplayer.ExoPlayer;
 
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdSize;
@@ -45,9 +45,7 @@ import org.schabi.newpipe.extractor.localization.ContentCountry;
 import org.schabi.newpipe.extractor.localization.Localization;
 import org.schabi.newpipe.extractor.search.SearchExtractor;
 import org.schabi.newpipe.extractor.search.SearchInfo;
-import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
-import org.schabi.newpipe.extractor.stream.VideoStream;
 import org.schabi.newpipe.extractor.linkhandler.SearchQueryHandler;
 
 import java.io.ByteArrayOutputStream;
@@ -64,6 +62,8 @@ import java.util.Locale;
 import java.util.Map;
 
 public class KaraokeStudioActivity extends Activity {
+
+    private static final String TAG = "Donut4UKaraoke";
 
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/7288125709";
@@ -88,10 +88,8 @@ public class KaraokeStudioActivity extends Activity {
     private Button pauseButton;
     private Button stopButton;
 
-    // FIX: Use SurfaceView for video output.
-    private SurfaceView videoSurfaceView;
-
-    private ExoPlayer player;
+    // Embedded YouTube player replaces direct stream extraction.
+    private WebView videoWebView;
     private AdView adView;
 
     private final List<SongResult> currentResults =
@@ -100,10 +98,12 @@ public class KaraokeStudioActivity extends Activity {
     private String currentTitle = "";
     private String currentArtist = "";
     private String currentVideoUrl = "";
+    private String currentVideoId = "";
 
     private boolean extractorInitialized = false;
     private boolean searching = false;
     private boolean loadingPlayback = false;
+    private boolean pageReady = false;
 
     private static final class SongResult {
         final String title;
@@ -157,12 +157,7 @@ public class KaraokeStudioActivity extends Activity {
             extractorInitialized = true;
 
         } catch (Exception e) {
-            android.util.Log.e(
-                    "Donut4UKaraoke",
-                    "NewPipe initialization failed",
-                    e
-            );
-
+            Log.e(TAG, "NewPipe initialization failed", e);
             setStatus("Search initialization failed.");
         }
     }
@@ -251,9 +246,41 @@ public class KaraokeStudioActivity extends Activity {
         );
         root.addView(nowPlayingText, matchWrap());
 
-        // FIX: SurfaceView replaces TextureView.
-        videoSurfaceView = new SurfaceView(this);
-        videoSurfaceView.setBackgroundColor(Color.BLACK);
+        // YouTube video is displayed inside this WebView.
+        videoWebView = new WebView(this);
+        videoWebView.setBackgroundColor(Color.BLACK);
+        videoWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+
+        WebSettings webSettings = videoWebView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setMediaPlaybackRequiresUserGesture(false);
+        webSettings.setLoadsImagesAutomatically(true);
+        webSettings.setSupportMultipleWindows(false);
+
+        videoWebView.setWebChromeClient(new WebChromeClient());
+
+        videoWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(
+                    WebView view,
+                    String url
+            ) {
+                super.onPageFinished(view, url);
+
+                if (url != null && url.startsWith("about:blank")) {
+                    return;
+                }
+
+                pageReady = true;
+
+                if (!currentVideoId.isEmpty()) {
+                    setStatus(
+                            "YouTube player loaded. If playback has not started, tap PLAY."
+                    );
+                }
+            }
+        });
 
         LinearLayout.LayoutParams videoParams =
                 new LinearLayout.LayoutParams(
@@ -262,7 +289,7 @@ public class KaraokeStudioActivity extends Activity {
                 );
         videoParams.topMargin = dp(10);
         videoParams.bottomMargin = dp(6);
-        root.addView(videoSurfaceView, videoParams);
+        root.addView(videoWebView, videoParams);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -279,26 +306,37 @@ public class KaraokeStudioActivity extends Activity {
         root.addView(controls, matchWrap());
 
         playButton.setOnClickListener(v -> {
-            if (player != null) {
-                player.play();
-            } else if (!currentVideoUrl.isEmpty()) {
-                loadAndPlay(
-                        currentVideoUrl,
-                        currentTitle,
-                        currentArtist
-                );
-            } else {
+            if (currentVideoId.isEmpty()) {
                 Toast.makeText(
                         this,
                         "Choose a song first.",
                         Toast.LENGTH_SHORT
                 ).show();
+                return;
+            }
+
+            if (videoWebView != null && pageReady) {
+                videoWebView.evaluateJavascript(
+                        "if(window.player){player.playVideo();}",
+                        null
+                );
+                setStatus("Playing in the embedded YouTube player.");
+            } else {
+                loadAndPlay(
+                        currentVideoUrl,
+                        currentTitle,
+                        currentArtist
+                );
             }
         });
 
         pauseButton.setOnClickListener(v -> {
-            if (player != null) {
-                player.pause();
+            if (videoWebView != null && pageReady) {
+                videoWebView.evaluateJavascript(
+                        "if(window.player){player.pauseVideo();}",
+                        null
+                );
+                setStatus("Playback paused.");
             }
         });
 
@@ -469,9 +507,7 @@ public class KaraokeStudioActivity extends Activity {
 
             } catch (Exception e) {
                 error = e.getMessage();
-                android.util.Log.e(
-                        "Donut4UKaraoke", "YouTube search failed", e
-                );
+                Log.e(TAG, "YouTube search failed", e);
             }
 
             final List<SongResult> results = found;
@@ -486,17 +522,16 @@ public class KaraokeStudioActivity extends Activity {
                             "No results loaded. The source may be " +
                             "temporarily unavailable. Try again later."
                     );
+
                     if (failure != null && !failure.trim().isEmpty()) {
-                        android.util.Log.e(
-                                "Donut4UKaraoke",
-                                "Search detail: " + failure
-                        );
+                        Log.e(TAG, "Search detail: " + failure);
                     }
                     return;
                 }
 
                 currentResults.addAll(results);
                 setStatus(results.size() + " song results found.");
+
                 for (SongResult result : results) {
                     addSongResult(result);
                 }
@@ -526,11 +561,13 @@ public class KaraokeStudioActivity extends Activity {
 
         String[] words =
                 query.toLowerCase(Locale.ROOT).split("\\s+");
+
         for (String word : words) {
             if (word.length() > 2 && content.contains(word)) {
                 score += 3;
             }
         }
+
         return score;
     }
 
@@ -548,6 +585,7 @@ public class KaraokeStudioActivity extends Activity {
         card.addView(songTitle, matchWrap());
 
         String details = result.uploader;
+
         if (result.durationSeconds > 0) {
             details += " • " + formatDuration(result.durationSeconds);
         }
@@ -555,496 +593,3 @@ public class KaraokeStudioActivity extends Activity {
         TextView metadata = text(details, 12, MUTED, false);
         LinearLayout.LayoutParams metaParams = matchWrap();
         metaParams.topMargin = dp(4);
-        card.addView(metadata, metaParams);
-
-        Button play = button("PLAY IN DONUT4U");
-        LinearLayout.LayoutParams playParams = matchWrap();
-        playParams.topMargin = dp(8);
-        card.addView(play, playParams);
-
-        play.setOnClickListener(v ->
-                loadAndPlay(result.url, result.title, result.uploader)
-        );
-    }
-
-    private void loadAndPlay(String url, String title, String artist) {
-        if (loadingPlayback) return;
-
-        loadingPlayback = true;
-        currentVideoUrl = url;
-        currentTitle = title;
-        currentArtist = artist;
-        nowPlayingText.setText("Loading: " + title);
-        setStatus("Preparing video and audio…");
-
-        new Thread(() -> {
-            String extractedVideoUrl = null;
-            String errorMessage = null;
-
-            try {
-                StreamInfo info = StreamInfo.getInfo(url);
-                List<VideoStream> streams = info.getVideoStreams();
-
-                if (streams != null && !streams.isEmpty()) {
-                    VideoStream best = null;
-                    int bestHeight = -1;
-
-                    for (VideoStream stream : streams) {
-                        if (stream == null
-                                || stream.isVideoOnly()
-                                || !stream.isUrl()) {
-                            continue;
-                        }
-
-                        String content = stream.getContent();
-                        if (content == null
-                                || !(content.startsWith("https://")
-                                || content.startsWith("http://"))) {
-                            continue;
-                        }
-
-                        int height = stream.getHeight();
-                        if (best == null || height > bestHeight) {
-                            best = stream;
-                            bestHeight = height;
-                        }
-                    }
-
-                    if (best != null) {
-                        extractedVideoUrl = best.getContent();
-                    }
-                }
-
-                if (extractedVideoUrl == null) {
-                    errorMessage =
-                            "No compatible combined video-and-audio stream was found.";
-                }
-
-            } catch (Exception e) {
-                errorMessage = e.getMessage();
-                android.util.Log.e(
-                        "Donut4UKaraoke", "Video extraction failed", e
-                );
-            }
-
-            final String videoUrl = extractedVideoUrl;
-            final String failure = errorMessage;
-
-            mainHandler.post(() -> {
-                loadingPlayback = false;
-
-                if (videoUrl == null || videoUrl.isEmpty()) {
-                    setStatus(
-                            "Video is unavailable for this result. " +
-                            "Try another song."
-                    );
-                    if (failure != null) {
-                        android.util.Log.e(
-                                "Donut4UKaraoke",
-                                "Video extraction detail: " + failure
-                        );
-                    }
-                    return;
-                }
-
-                startVideo(videoUrl, title, artist);
-                lookupLyrics(title, artist);
-            });
-        }).start();
-    }
-
-    private void startVideo(
-            String videoUrl,
-            String title,
-            String artist
-    ) {
-        try {
-            if (player != null) {
-                player.clearVideoSurfaceView(videoSurfaceView);
-                player.release();
-                player = null;
-            }
-
-            player = new ExoPlayer.Builder(this).build();
-
-            // FIX: Connect ExoPlayer to the SurfaceView.
-            player.setVideoSurfaceView(videoSurfaceView);
-
-            player.addListener(new Player.Listener() {
-                @Override
-                public void onPlayerError(PlaybackException error) {
-                    setStatus(
-                            "Playback failed. Please try another result."
-                    );
-                    android.util.Log.e(
-                            "Donut4UKaraoke", "Video playback failed", error
-                    );
-                }
-
-                @Override
-                public void onPlaybackStateChanged(int state) {
-                    if (state == Player.STATE_READY) {
-                        setStatus("Ready to sing.");
-                    } else if (state == Player.STATE_ENDED) {
-                        setStatus("Song finished.");
-                    }
-                }
-            });
-
-            player.setMediaItem(MediaItem.fromUri(videoUrl));
-            player.prepare();
-            player.play();
-
-            nowPlayingText.setText(
-                    title + (artist.isEmpty() ? "" : "\n" + artist)
-            );
-            setStatus("Playing video and audio in Donut4U Karaoke.");
-
-        } catch (Exception e) {
-            setStatus("Unable to start video playback.");
-            android.util.Log.e(
-                    "Donut4UKaraoke", "Media3 video playback error", e
-            );
-        }
-    }
-
-    private void lookupLyrics(String title, String artist) {
-        lyricsText.setText("Looking for lyrics…");
-
-        new Thread(() -> {
-            String foundLyrics = null;
-
-            try {
-                String query = title;
-                if (artist != null && !artist.trim().isEmpty()) {
-                    query = title + " " + artist;
-                }
-
-                String encoded = URLEncoder.encode(
-                        query, StandardCharsets.UTF_8.name()
-                );
-                String apiUrl =
-                        "https://lrclib.net/api/search?q=" + encoded;
-
-                String response = httpGet(apiUrl);
-                JSONArray array = new JSONArray(response);
-
-                for (int i = 0; i < array.length(); i++) {
-                    JSONObject item = array.optJSONObject(i);
-                    if (item == null) continue;
-
-                    String plain = item.optString("plainLyrics", "");
-                    String synced = item.optString("syncedLyrics", "");
-
-                    if (!plain.trim().isEmpty()) {
-                        foundLyrics = plain;
-                        break;
-                    }
-                    if (!synced.trim().isEmpty()) {
-                        foundLyrics = synced;
-                        break;
-                    }
-                }
-
-            } catch (Exception e) {
-                android.util.Log.w(
-                        "Donut4UKaraoke", "Lyrics unavailable", e
-                );
-            }
-
-            final String lyrics = foundLyrics;
-            mainHandler.post(() -> {
-                if (lyrics == null || lyrics.trim().isEmpty()) {
-                    lyricsText.setText(
-                            "Lyrics are not available for this song."
-                    );
-                } else {
-                    lyricsText.setText(lyrics);
-                }
-            });
-        }).start();
-    }
-
-    private String httpGet(String address) throws Exception {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection)
-                    new URL(address).openConnection();
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(15000);
-            connection.setReadTimeout(20000);
-            connection.setRequestProperty(
-                    "User-Agent", "Donut4U-Karaoke/1.0"
-            );
-            connection.setRequestProperty("Accept", "application/json");
-
-            int code = connection.getResponseCode();
-            InputStream input =
-                    code >= 200 && code < 300
-                            ? connection.getInputStream()
-                            : connection.getErrorStream();
-
-            String body = readFully(input);
-            if (code < 200 || code >= 300) {
-                throw new IOException("HTTP " + code);
-            }
-            return body;
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
-    }
-
-    private String readFully(InputStream input) throws IOException {
-        if (input == null) return "";
-
-        try (InputStream in = input;
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = in.read(buffer)) != -1) {
-                out.write(buffer, 0, count);
-            }
-            return out.toString(StandardCharsets.UTF_8.name());
-        }
-    }
-
-    private void stopPlayback() {
-        if (player != null) {
-            player.clearVideoSurfaceView(videoSurfaceView);
-            player.stop();
-            player.release();
-            player = null;
-        }
-
-        currentVideoUrl = "";
-        currentTitle = "";
-        currentArtist = "";
-
-        if (nowPlayingText != null) {
-            nowPlayingText.setText("No song selected");
-        }
-
-        if (lyricsText != null) {
-            lyricsText.setText("Lyrics will appear here when available.");
-        }
-
-        setStatus("Playback stopped.");
-    }
-
-    private void initializeAds() {
-        try {
-            MobileAds.initialize(this, initializationStatus -> {});
-            if (adView != null) {
-                adView.loadAd(new AdRequest.Builder().build());
-            }
-        } catch (Exception e) {
-            android.util.Log.w(
-                    "Donut4UKaraoke", "Ads initialization failed", e
-            );
-        }
-    }
-
-    private void setStatus(String message) {
-        if (statusText != null) statusText.setText(message);
-    }
-
-    private TextView text(
-            String value, int size, int color, boolean bold
-    ) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(size);
-        view.setTextColor(color);
-        view.setGravity(Gravity.CENTER_VERTICAL);
-        if (bold) {
-            view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        }
-        return view;
-    }
-
-    private Button button(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextColor(Color.BLACK);
-        button.setAllCaps(false);
-        button.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(ACCENT)
-        );
-        return button;
-    }
-
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-    }
-
-    private LinearLayout.LayoutParams weightedWrap() {
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(
-                        0,
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        1
-                );
-        params.setMargins(dp(2), 0, dp(2), 0);
-        return params;
-    }
-
-    private int dp(int value) {
-        return (int) (
-                value *
-                getResources().getDisplayMetrics().density + 0.5f
-        );
-    }
-
-    private String formatDuration(long seconds) {
-        if (seconds < 0) return "Duration unknown";
-
-        long minutes = seconds / 60;
-        long remainder = seconds % 60;
-
-        return String.format(
-                Locale.getDefault(), "%d:%02d", minutes, remainder
-        );
-    }
-
-    private String safe(String value) {
-        return value == null ? "" : value.trim();
-    }
-
-    private void hideKeyboard() {
-        try {
-            InputMethodManager manager =
-                    (InputMethodManager) getSystemService(
-                            Context.INPUT_METHOD_SERVICE
-                    );
-            View focus = getCurrentFocus();
-
-            if (manager != null && focus != null) {
-                manager.hideSoftInputFromWindow(
-                        focus.getWindowToken(), 0
-                );
-                focus.clearFocus();
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (adView != null) adView.resume();
-    }
-
-    @Override
-    protected void onPause() {
-        if (adView != null) adView.pause();
-        super.onPause();
-    }
-
-    @Override
-    protected void onDestroy() {
-        if (adView != null) {
-            adView.destroy();
-            adView = null;
-        }
-
-        if (player != null) {
-            player.clearVideoSurfaceView(videoSurfaceView);
-            player.release();
-            player = null;
-        }
-
-        mainHandler.removeCallbacksAndMessages(null);
-        super.onDestroy();
-    }
-
-    private static final class AndroidDownloader extends Downloader {
-
-        @Override
-        public Response execute(Request request)
-                throws IOException, ReCaptchaException {
-
-            HttpURLConnection connection = null;
-
-            try {
-                URL url = new URL(request.url());
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod(request.httpMethod());
-                connection.setConnectTimeout(20000);
-                connection.setReadTimeout(25000);
-                connection.setInstanceFollowRedirects(true);
-                connection.setRequestProperty(
-                        "User-Agent",
-                        "Mozilla/5.0 (Linux; Android 13) " +
-                        "AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36"
-                );
-
-                Map<String, List<String>> headers = request.headers();
-                if (headers != null) {
-                    for (Map.Entry<String, List<String>> entry
-                            : headers.entrySet()) {
-                        String name = entry.getKey();
-                        List<String> values = entry.getValue();
-                        if (name == null || values == null) continue;
-
-                        for (String value : values) {
-                            if (value != null) {
-                                connection.addRequestProperty(name, value);
-                            }
-                        }
-                    }
-                }
-
-                byte[] data = request.dataToSend();
-                if (data != null
-                        && ("POST".equalsIgnoreCase(request.httpMethod())
-                        || "PUT".equalsIgnoreCase(request.httpMethod()))) {
-                    connection.setDoOutput(true);
-                    try (java.io.OutputStream output =
-                                 connection.getOutputStream()) {
-                        output.write(data);
-                    }
-                }
-
-                int code = connection.getResponseCode();
-                String message = connection.getResponseMessage();
-                Map<String, List<String>> responseHeaders =
-                        connection.getHeaderFields();
-
-                InputStream input =
-                        code >= 200 && code < 400
-                                ? connection.getInputStream()
-                                : connection.getErrorStream();
-
-                String body = readResponse(input);
-                return new Response(
-                        code,
-                        message,
-                        responseHeaders,
-                        body,
-                        connection.getURL().toString()
-                );
-
-            } finally {
-                if (connection != null) connection.disconnect();
-            }
-        }
-
-        private String readResponse(InputStream input)
-                throws IOException {
-            if (input == null) return "";
-
-            try (InputStream in = input;
-                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-                byte[] buffer = new byte[8192];
-                int count;
-                while ((count = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, count);
-                }
-                return out.toString(StandardCharsets.UTF_8.name());
-            }
-        }
-    }
-}
