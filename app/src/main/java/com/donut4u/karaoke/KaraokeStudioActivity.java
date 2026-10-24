@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -14,6 +15,9 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.CookieManager;
+import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -63,7 +67,6 @@ import java.util.Map;
 public class KaraokeStudioActivity extends Activity {
 
     private static final String TAG = "Donut4UKaraoke";
-
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/7288125709";
 
@@ -73,8 +76,7 @@ public class KaraokeStudioActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.rgb(195, 195, 205);
 
-    private final Handler mainHandler =
-            new Handler(Looper.getMainLooper());
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private LinearLayout root;
     private LinearLayout resultsContainer;
@@ -89,14 +91,14 @@ public class KaraokeStudioActivity extends Activity {
     private boolean extractorInitialized;
     private boolean searching;
     private boolean pageReady;
+    private boolean activityDestroyed;
 
     private String currentTitle = "";
     private String currentArtist = "";
     private String currentVideoUrl = "";
     private String currentVideoId = "";
 
-    private final List<SongResult> currentResults =
-            new ArrayList<>();
+    private final List<SongResult> currentResults = new ArrayList<>();
 
     private static final class SongResult {
         final String title;
@@ -124,8 +126,7 @@ public class KaraokeStudioActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        FirebaseUser user =
-                FirebaseAuth.getInstance().getCurrentUser();
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
 
         if (user == null || !user.isEmailVerified()) {
             Toast.makeText(
@@ -148,7 +149,7 @@ public class KaraokeStudioActivity extends Activity {
             extractorInitialized = true;
         } catch (Exception e) {
             Log.e(TAG, "NewPipe initialization failed", e);
-            setStatus("Song search could not initialize.");
+            setStatus("Song search could not initialize. Check your connection.");
         }
 
         try {
@@ -226,9 +227,7 @@ public class KaraokeStudioActivity extends Activity {
 
         addSectionTitle("KARAOKE PLAYER");
 
-        nowPlayingText = text(
-                "No song selected", 16, WHITE, true
-        );
+        nowPlayingText = text("No song selected", 16, WHITE, true);
         root.addView(nowPlayingText, matchWrap());
 
         videoWebView = new WebView(this);
@@ -241,25 +240,57 @@ public class KaraokeStudioActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setLoadsImagesAutomatically(true);
         settings.setSupportMultipleWindows(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setMixedContentMode(
+                WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        );
 
-        videoWebView.setWebChromeClient(new WebChromeClient());
+        CookieManager cookies = CookieManager.getInstance();
+        cookies.setAcceptCookie(true);
+        cookies.setAcceptThirdPartyCookies(videoWebView, true);
+
+        videoWebView.addJavascriptInterface(new PlayerBridge(), "DonutBridge");
+
+        videoWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage message) {
+                Log.d(TAG, "YouTube: " + message.message());
+                return true;
+            }
+        });
 
         videoWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(
+                    WebView view, String url, android.graphics.Bitmap favicon
+            ) {
+                super.onPageStarted(view, url, favicon);
+                pageReady = false;
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
 
                 if (url == null || "about:blank".equals(url)) {
                     pageReady = false;
-                    return;
                 }
 
-                pageReady = true;
+                // Do not mark the YouTube player ready here.
+                // The actual player-ready callback sets pageReady.
+            }
 
-                if (!currentVideoId.isEmpty()) {
-                    setStatus(
-                            "Player loaded. If playback does not start, tap PLAY."
-                    );
+            @Override
+            public void onReceivedError(
+                    WebView view,
+                    android.webkit.WebResourceRequest request,
+                    android.webkit.WebResourceError error
+            ) {
+                super.onReceivedError(view, request, error);
+
+                if (request.isForMainFrame()) {
+                    setStatus("Player page failed to load. Check your internet.");
+                    Log.e(TAG, "WebView error: " + error.getDescription());
                 }
             }
         });
@@ -295,22 +326,21 @@ public class KaraokeStudioActivity extends Activity {
 
             if (pageReady && videoWebView != null) {
                 videoWebView.evaluateJavascript(
-                        "if(window.player){player.playVideo();}", null
+                        "if(window.player){player.playVideo();}",
+                        null
                 );
-                setStatus("Play command sent to YouTube.");
+                setStatus("Play command sent.");
             } else {
-                loadAndPlay(
-                        currentVideoUrl, currentTitle, currentArtist
-                );
+                setStatus("Player is still loading. Please wait.");
             }
         });
 
         pauseButton.setOnClickListener(v -> {
             if (videoWebView != null && pageReady) {
                 videoWebView.evaluateJavascript(
-                        "if(window.player){player.pauseVideo();}", null
+                        "if(window.player){player.pauseVideo();}",
+                        null
                 );
-                setStatus("Pause command sent.");
             }
         });
 
@@ -375,9 +405,7 @@ public class KaraokeStudioActivity extends Activity {
             FirebaseAuth.getInstance().signOut();
 
             Intent intent = new Intent();
-            intent.setClassName(
-                    this, "com.donut4u.karaoke.AuthActivity"
-            );
+            intent.setClassName(this, "com.donut4u.karaoke.AuthActivity");
             intent.addFlags(
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
                             | Intent.FLAG_ACTIVITY_NEW_TASK
@@ -398,6 +426,45 @@ public class KaraokeStudioActivity extends Activity {
         adView.setAdSize(AdSize.BANNER);
         adView.setAdUnitId(AD_UNIT_ID);
         root.addView(adView, matchWrap());
+    }
+
+    private final class PlayerBridge {
+        @JavascriptInterface
+        public void onReady() {
+            mainHandler.post(() -> {
+                if (activityDestroyed) return;
+                pageReady = true;
+                setStatus("YouTube player ready. Tap PLAY if needed.");
+            });
+        }
+
+        @JavascriptInterface
+        public void onError(String code) {
+            mainHandler.post(() -> {
+                if (activityDestroyed) return;
+                pageReady = false;
+                setStatus(
+                        "YouTube could not play this video (error "
+                                + code + "). Try another result."
+                );
+                Log.e(TAG, "YouTube player error: " + code);
+            });
+        }
+
+        @JavascriptInterface
+        public void onState(String state) {
+            mainHandler.post(() -> {
+                if (activityDestroyed) return;
+
+                if ("1".equals(state)) {
+                    setStatus("Playing: " + currentTitle);
+                } else if ("2".equals(state)) {
+                    setStatus("Playback paused.");
+                } else if ("0".equals(state)) {
+                    setStatus("Song finished.");
+                }
+            });
+        }
     }
 
     private void addSectionTitle(String label) {
@@ -437,10 +504,8 @@ public class KaraokeStudioActivity extends Activity {
 
             try {
                 StreamingService service = NewPipe.getService("YouTube");
-
                 SearchQueryHandler handler =
                         service.getSearchQHFactory().fromQuery(query);
-
                 SearchExtractor extractor =
                         service.getSearchExtractor(handler);
 
@@ -452,7 +517,6 @@ public class KaraokeStudioActivity extends Activity {
                     if (!(item instanceof StreamInfoItem)) continue;
 
                     StreamInfoItem stream = (StreamInfoItem) item;
-
                     String songTitle = safe(stream.getName());
                     String songUrl = safe(stream.getUrl());
                     String uploader = safe(stream.getUploaderName());
@@ -469,10 +533,8 @@ public class KaraokeStudioActivity extends Activity {
                 }
 
                 Collections.sort(
-                        found,
-                        (a, b) -> Integer.compare(b.score, a.score)
+                        found, (a, b) -> Integer.compare(b.score, a.score)
                 );
-
             } catch (Exception e) {
                 failure = e.getMessage();
                 Log.e(TAG, "YouTube search failed", e);
@@ -487,13 +549,10 @@ public class KaraokeStudioActivity extends Activity {
 
                 if (results.isEmpty()) {
                     setStatus(
-                            "No results found. The source may be unavailable. " +
-                            "Please try again later."
+                            error == null
+                                    ? "No results found. Try another search."
+                                    : "Search failed: " + error
                     );
-
-                    if (error != null) {
-                        Log.e(TAG, "Search detail: " + error);
-                    }
                     return;
                 }
 
@@ -507,9 +566,7 @@ public class KaraokeStudioActivity extends Activity {
         }).start();
     }
 
-    private int scoreResult(
-            String title, String uploader, String query
-    ) {
+    private int scoreResult(String title, String uploader, String query) {
         String content =
                 (title + " " + uploader).toLowerCase(Locale.ROOT);
         int score = 0;
@@ -526,9 +583,7 @@ public class KaraokeStudioActivity extends Activity {
         if (content.contains("official music video")) score -= 15;
 
         for (String word : query.toLowerCase(Locale.ROOT).split("\\s+")) {
-            if (word.length() > 2 && content.contains(word)) {
-                score += 3;
-            }
+            if (word.length() > 2 && content.contains(word)) score += 3;
         }
 
         return score;
@@ -571,7 +626,7 @@ public class KaraokeStudioActivity extends Activity {
         String videoId = extractYouTubeVideoId(url);
 
         if (videoId.isEmpty()) {
-            setStatus("This result does not have a usable YouTube link.");
+            setStatus("Invalid YouTube link. Choose another result.");
             return;
         }
 
@@ -582,32 +637,40 @@ public class KaraokeStudioActivity extends Activity {
         pageReady = false;
 
         nowPlayingText.setText(
-                currentTitle +
-                        (currentArtist.isEmpty() ? "" : "\n" + currentArtist)
+                currentTitle
+                        + (currentArtist.isEmpty() ? "" : "\n" + currentArtist)
         );
         lyricsText.setText("Looking for lyrics…");
-        setStatus("Loading the embedded YouTube player…");
+        setStatus("Opening YouTube player…");
 
         String html =
                 "<!DOCTYPE html><html><head>" +
-                "<meta name=\"viewport\" content=\"width=device-width," +
-                "initial-scale=1,maximum-scale=1\">" +
+                "<meta name='viewport' content='width=device-width," +
+                "initial-scale=1,maximum-scale=1'>" +
                 "<style>html,body,#player{margin:0;padding:0;width:100%;" +
                 "height:100%;background:#000;overflow:hidden}</style>" +
-                "</head><body><div id=\"player\"></div><script>" +
+                "</head><body><div id='player'></div><script>" +
                 "var player;" +
                 "function onYouTubeIframeAPIReady(){" +
-                "player=new YT.Player('player',{width:'100%',height:'100%'," +
+                "player=new YT.Player('player',{" +
+                "width:'100%',height:'100%'," +
                 "videoId:'" + videoId + "'," +
-                "playerVars:{playsinline:1,controls:1,rel:0}," +
-                "events:{onReady:function(e){e.target.playVideo();}," +
-                "onError:function(e){console.log('YouTube error '+e.data);}" +
-                "}});}" +
-                "</script><script src=\"https://www.youtube.com/iframe_api\">" +
-                "</script></body></html>";
+                "playerVars:{autoplay:1,playsinline:1,controls:1,rel:0," +
+                "origin:'https://www.youtube.com'}," +
+                "events:{" +
+                "onReady:function(e){DonutBridge.onReady();e.target.playVideo();}," +
+                "onStateChange:function(e){DonutBridge.onState(String(e.data));}," +
+                "onError:function(e){DonutBridge.onError(String(e.data));}" +
+                "}" +
+                "});" +
+                "}" +
+                "</script>" +
+                "<script src='https://www.youtube.com/iframe_api'></script>" +
+                "</body></html>";
 
+        videoWebView.stopLoading();
         videoWebView.loadDataWithBaseURL(
-                "https://www.youtube.com",
+                "https://www.youtube.com/",
                 html,
                 "text/html",
                 "UTF-8",
@@ -623,7 +686,6 @@ public class KaraokeStudioActivity extends Activity {
         try {
             Uri uri = Uri.parse(url);
             String host = uri.getHost();
-
             if (host == null) return "";
 
             if (host.equalsIgnoreCase("youtu.be")) {
@@ -680,9 +742,7 @@ public class KaraokeStudioActivity extends Activity {
                         break;
                     }
 
-                    if (!synced.trim().isEmpty()) {
-                        lyrics = synced;
-                    }
+                    if (!synced.trim().isEmpty()) lyrics = synced;
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Lyrics lookup failed", e);
@@ -691,7 +751,7 @@ public class KaraokeStudioActivity extends Activity {
             final String finalLyrics = lyrics;
 
             mainHandler.post(() -> {
-                if (lyricsText == null) return;
+                if (activityDestroyed || lyricsText == null) return;
 
                 if (finalLyrics == null || finalLyrics.trim().isEmpty()) {
                     lyricsText.setText(
@@ -708,8 +768,8 @@ public class KaraokeStudioActivity extends Activity {
         HttpURLConnection connection = null;
 
         try {
-            connection =
-                    (HttpURLConnection) new URL(address).openConnection();
+            connection = (HttpURLConnection)
+                    new URL(address).openConnection();
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(12000);
             connection.setReadTimeout(12000);
@@ -719,7 +779,6 @@ public class KaraokeStudioActivity extends Activity {
             connection.setRequestProperty("Accept", "application/json");
 
             int code = connection.getResponseCode();
-
             InputStream stream = code >= 400
                     ? connection.getErrorStream()
                     : connection.getInputStream();
@@ -774,9 +833,7 @@ public class KaraokeStudioActivity extends Activity {
     }
 
     private void setStatus(String message) {
-        if (statusText != null) {
-            statusText.setText(message);
-        }
+        if (statusText != null) statusText.setText(message);
     }
 
     private TextView text(
@@ -788,10 +845,7 @@ public class KaraokeStudioActivity extends Activity {
         view.setTextColor(color);
         view.setGravity(Gravity.CENTER_VERTICAL);
 
-        if (bold) {
-            view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        }
-
+        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return view;
     }
 
@@ -801,9 +855,7 @@ public class KaraokeStudioActivity extends Activity {
         view.setTextColor(Color.BLACK);
         view.setAllCaps(false);
         view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        view.setBackgroundTintList(
-                ColorStateList.valueOf(ACCENT)
-        );
+        view.setBackgroundTintList(ColorStateList.valueOf(ACCENT));
         return view;
     }
 
@@ -830,10 +882,7 @@ public class KaraokeStudioActivity extends Activity {
 
     private String formatDuration(long seconds) {
         return String.format(
-                Locale.ROOT,
-                "%d:%02d",
-                seconds / 60,
-                seconds % 60
+                Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60
         );
     }
 
@@ -850,9 +899,7 @@ public class KaraokeStudioActivity extends Activity {
             View focus = getCurrentFocus();
 
             if (manager != null && focus != null) {
-                manager.hideSoftInputFromWindow(
-                        focus.getWindowToken(), 0
-                );
+                manager.hideSoftInputFromWindow(focus.getWindowToken(), 0);
                 focus.clearFocus();
             }
         } catch (Exception e) {
@@ -863,6 +910,7 @@ public class KaraokeStudioActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (videoWebView != null) videoWebView.onResume();
         if (adView != null) adView.resume();
     }
 
@@ -871,10 +919,10 @@ public class KaraokeStudioActivity extends Activity {
         if (adView != null) adView.pause();
 
         if (videoWebView != null) {
-            videoWebView.onPause();
             videoWebView.evaluateJavascript(
                     "if(window.player){player.pauseVideo();}", null
             );
+            videoWebView.onPause();
         }
 
         super.onPause();
@@ -882,6 +930,8 @@ public class KaraokeStudioActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        activityDestroyed = true;
+
         if (adView != null) {
             adView.destroy();
             adView = null;
@@ -889,6 +939,7 @@ public class KaraokeStudioActivity extends Activity {
 
         if (videoWebView != null) {
             videoWebView.stopLoading();
+            videoWebView.removeJavascriptInterface("DonutBridge");
             videoWebView.loadUrl("about:blank");
             videoWebView.removeAllViews();
             videoWebView.destroy();
@@ -918,9 +969,7 @@ public class KaraokeStudioActivity extends Activity {
 
                 for (Map.Entry<String, List<String>> header
                         : request.headers().entrySet()) {
-
-                    if (header.getKey() == null
-                            || header.getValue() == null) {
+                    if (header.getKey() == null || header.getValue() == null) {
                         continue;
                     }
 
@@ -937,7 +986,6 @@ public class KaraokeStudioActivity extends Activity {
 
                 if (data != null && data.length > 0) {
                     connection.setDoOutput(true);
-
                     try (java.io.OutputStream output =
                                  connection.getOutputStream()) {
                         output.write(data);
@@ -945,7 +993,6 @@ public class KaraokeStudioActivity extends Activity {
                 }
 
                 int code = connection.getResponseCode();
-
                 InputStream stream = code >= 400
                         ? connection.getErrorStream()
                         : connection.getInputStream();
@@ -959,20 +1006,15 @@ public class KaraokeStudioActivity extends Activity {
                         body,
                         connection.getURL().toString()
                 );
-
             } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
+                if (connection != null) connection.disconnect();
             }
         }
 
         private static String readStream(InputStream input)
                 throws IOException {
             try (InputStream in = input;
-                 ByteArrayOutputStream output =
-                         new ByteArrayOutputStream()) {
-
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
                 byte[] buffer = new byte[8192];
                 int count;
 
