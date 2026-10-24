@@ -1,4 +1,5 @@
 
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -8,15 +9,23 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.LoadAdError;
+import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.DatabaseReference;
@@ -28,11 +37,16 @@ import java.util.UUID;
 
 public class AuthActivity extends Activity {
 
+    private static final String TAG = "Donut4UAuthAds";
+
     private static final int DARK = Color.rgb(13, 20, 17);
     private static final int PANEL = Color.rgb(25, 37, 31);
     private static final int GREEN = Color.rgb(0, 190, 115);
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.rgb(190, 205, 196);
+
+    private static final String BANNER_AD_UNIT_ID =
+            "ca-app-pub-5625332026157890/7288125709";
 
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
@@ -45,6 +59,7 @@ public class AuthActivity extends Activity {
     private EditText passwordInput;
     private TextView statusText;
     private ProgressBar progressBar;
+    private AdView adView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,6 +75,7 @@ public class AuthActivity extends Activity {
 
         if (user != null && user.isEmailVerified()) {
             setLoading(true, "Checking your account...");
+
             user.reload().addOnCompleteListener(this, task -> {
                 FirebaseUser refreshed = auth.getCurrentUser();
 
@@ -73,11 +89,20 @@ public class AuthActivity extends Activity {
     }
 
     private void buildScreen() {
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundColor(DARK);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(dp(24), dp(24), dp(24), dp(24));
         root.setBackgroundColor(DARK);
+
+        scrollView.addView(root, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+        ));
 
         TextView title = new TextView(this);
         title.setText("Donut4u karaoke");
@@ -85,7 +110,7 @@ public class AuthActivity extends Activity {
         title.setTextSize(27);
         title.setTypeface(null, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
-        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(title, fullWidthWrap());
 
         TextView subtitle = new TextView(this);
         subtitle.setText("Welcome back");
@@ -93,13 +118,13 @@ public class AuthActivity extends Activity {
         subtitle.setTextSize(16);
         subtitle.setGravity(Gravity.CENTER);
         subtitle.setPadding(0, dp(8), 0, dp(20));
-        root.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(subtitle, fullWidthWrap());
 
         TextView emailLabel = new TextView(this);
         emailLabel.setText("Email address");
         emailLabel.setTextColor(WHITE);
         emailLabel.setTextSize(14);
-        root.addView(emailLabel, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(emailLabel, fullWidthWrap());
 
         emailInput = new EditText(this);
         emailInput.setSingleLine(true);
@@ -113,8 +138,7 @@ public class AuthActivity extends Activity {
         emailInput.setPadding(dp(12), 0, dp(12), 0);
         emailInput.setBackgroundColor(PANEL);
 
-        LinearLayout.LayoutParams fieldParams =
-                new LinearLayout.LayoutParams(-1, dp(54));
+        LinearLayout.LayoutParams fieldParams = fullWidth(dp(54));
         fieldParams.bottomMargin = dp(14);
         root.addView(emailInput, fieldParams);
 
@@ -122,7 +146,7 @@ public class AuthActivity extends Activity {
         passwordLabel.setText("Password");
         passwordLabel.setTextColor(WHITE);
         passwordLabel.setTextSize(14);
-        root.addView(passwordLabel, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(passwordLabel, fullWidthWrap());
 
         passwordInput = new EditText(this);
         passwordInput.setSingleLine(true);
@@ -136,8 +160,7 @@ public class AuthActivity extends Activity {
         passwordInput.setPadding(dp(12), 0, dp(12), 0);
         passwordInput.setBackgroundColor(PANEL);
 
-        LinearLayout.LayoutParams passwordParams =
-                new LinearLayout.LayoutParams(-1, dp(54));
+        LinearLayout.LayoutParams passwordParams = fullWidth(dp(54));
         passwordParams.bottomMargin = dp(16);
         root.addView(passwordInput, passwordParams);
 
@@ -163,18 +186,33 @@ public class AuthActivity extends Activity {
         advertisement.setTextSize(12);
         advertisement.setGravity(Gravity.CENTER);
         advertisement.setPadding(0, dp(16), 0, dp(8));
-        root.addView(advertisement, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(advertisement, fullWidthWrap());
+
+        // Real AdMob banner, not just an Advertisement label.
+        LinearLayout bannerContainer = new LinearLayout(this);
+        bannerContainer.setOrientation(LinearLayout.VERTICAL);
+        bannerContainer.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        LinearLayout.LayoutParams bannerContainerParams =
+                fullWidthWrap();
+        bannerContainerParams.topMargin = dp(4);
+        bannerContainerParams.bottomMargin = dp(8);
+
+        root.addView(bannerContainer, bannerContainerParams);
+        loadBannerAd(bannerContainer);
 
         progressBar = new ProgressBar(this);
         progressBar.setVisibility(View.GONE);
-        root.addView(progressBar, new LinearLayout.LayoutParams(-2, dp(42)));
+        root.addView(progressBar, new LinearLayout.LayoutParams(
+                dp(42), dp(42)
+        ));
 
         statusText = new TextView(this);
         statusText.setTextColor(MUTED);
         statusText.setTextSize(13);
         statusText.setGravity(Gravity.CENTER);
         statusText.setPadding(0, dp(8), 0, dp(8));
-        root.addView(statusText, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(statusText, fullWidthWrap());
 
         TextView information = new TextView(this);
         information.setText("Email verification is required.");
@@ -182,18 +220,70 @@ public class AuthActivity extends Activity {
         information.setTextSize(12);
         information.setGravity(Gravity.CENTER);
         information.setPadding(0, dp(8), 0, 0);
-        root.addView(information, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(information, fullWidthWrap());
 
-        setContentView(root);
+        setContentView(scrollView);
+    }
+
+    private void loadBannerAd(LinearLayout container) {
+        try {
+            MobileAds.initialize(
+                    getApplicationContext(),
+                    initializationStatus ->
+                            Log.d(TAG, "Mobile Ads SDK initialized")
+            );
+
+            adView = new AdView(this);
+            adView.setAdUnitId(BANNER_AD_UNIT_ID);
+
+            int screenWidthDp = (int) (
+                    getResources().getDisplayMetrics().widthPixels
+                            / getResources().getDisplayMetrics().density
+            );
+
+            int horizontalPaddingDp = 48;
+            int availableWidthDp = Math.max(
+                    320, screenWidthDp - horizontalPaddingDp
+            );
+
+            AdSize adaptiveSize =
+                    AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(
+                            this, availableWidthDp
+                    );
+
+            adView.setAdSize(adaptiveSize);
+
+            adView.setAdListener(new AdListener() {
+                @Override
+                public void onAdLoaded() {
+                    Log.d(TAG, "Sign-in banner loaded successfully");
+                }
+
+                @Override
+                public void onAdFailedToLoad(LoadAdError error) {
+                    Log.e(TAG, "Sign-in banner failed: "
+                            + error.getCode() + " - "
+                            + error.getMessage());
+                }
+            });
+
+            container.addView(adView, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            ));
+
+            adView.loadAd(new AdRequest.Builder().build());
+
+        } catch (Exception e) {
+            Log.e(TAG, "Could not create sign-in banner", e);
+        }
     }
 
     private void signIn() {
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
-        if (!validate(email, password, false)) {
-            return;
-        }
+        if (!validate(email, password, false)) return;
 
         setLoading(true, "Signing in...");
 
@@ -257,9 +347,7 @@ public class AuthActivity extends Activity {
 
         sessionRef.updateChildren(session)
                 .addOnCompleteListener(this, task -> {
-                    if (isFinishing() || isDestroyed()) {
-                        return;
-                    }
+                    if (isFinishing() || isDestroyed()) return;
 
                     if (task.isSuccessful()) {
                         openMainScreen();
@@ -293,9 +381,7 @@ public class AuthActivity extends Activity {
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
-        if (!validate(email, password, true)) {
-            return;
-        }
+        if (!validate(email, password, true)) return;
 
         setLoading(true, "Creating your account...");
 
@@ -311,7 +397,9 @@ public class AuthActivity extends Activity {
 
                     if (user == null) {
                         setLoading(false, "");
-                        showMessage("Account created, but user details are unavailable.");
+                        showMessage(
+                                "Account created, but user details are unavailable."
+                        );
                         return;
                     }
 
@@ -339,9 +427,7 @@ public class AuthActivity extends Activity {
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
-        if (!validate(email, password, false)) {
-            return;
-        }
+        if (!validate(email, password, false)) return;
 
         setLoading(true, "Checking account...");
 
@@ -457,7 +543,9 @@ public class AuthActivity extends Activity {
         }
 
         if (creatingAccount && password.length() < 6) {
-            passwordInput.setError("Password must contain at least 6 characters.");
+            passwordInput.setError(
+                    "Password must contain at least 6 characters."
+            );
             passwordInput.requestFocus();
             return false;
         }
@@ -470,17 +558,9 @@ public class AuthActivity extends Activity {
             progressBar.setVisibility(loading ? View.VISIBLE : View.GONE);
         }
 
-        if (statusText != null) {
-            statusText.setText(message);
-        }
-
-        if (emailInput != null) {
-            emailInput.setEnabled(!loading);
-        }
-
-        if (passwordInput != null) {
-            passwordInput.setEnabled(!loading);
-        }
+        if (statusText != null) statusText.setText(message);
+        if (emailInput != null) emailInput.setEnabled(!loading);
+        if (passwordInput != null) passwordInput.setEnabled(!loading);
     }
 
     private void showError(Exception exception, String fallback) {
@@ -496,10 +576,7 @@ public class AuthActivity extends Activity {
     }
 
     private void showMessage(String message) {
-        if (statusText != null) {
-            statusText.setText(message);
-        }
-
+        if (statusText != null) statusText.setText(message);
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
@@ -527,15 +604,48 @@ public class AuthActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(-1, dp(50));
+        LinearLayout.LayoutParams params = fullWidth(dp(50));
         params.bottomMargin = dp(8);
         return params;
+    }
+
+    private LinearLayout.LayoutParams fullWidth(int height) {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, height
+        );
+    }
+
+    private LinearLayout.LayoutParams fullWidthWrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
     }
 
     private int dp(float value) {
         return (int) (
                 value * getResources().getDisplayMetrics().density + 0.5f
         );
+    }
+
+    @Override
+    protected void onPause() {
+        if (adView != null) adView.pause();
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (adView != null) adView.resume();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (adView != null) {
+            adView.destroy();
+            adView = null;
+        }
+        super.onDestroy();
     }
 }
