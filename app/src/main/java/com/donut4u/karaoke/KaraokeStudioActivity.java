@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -66,8 +67,10 @@ import java.util.Map;
 public class KaraokeStudioActivity extends Activity {
 
     private static final String TAG = "Donut4UKaraoke";
+
+    // INSERT RED: NEW ADMOB BANNER AD UNIT ID
     private static final String AD_UNIT_ID =
-            "ca-app-pub-5625332026157890/7288125709";
+            "ca-app-pub-5625332026157890/2970292504";
 
     private static final int BG = Color.rgb(18, 18, 24);
     private static final int PANEL = Color.rgb(35, 35, 46);
@@ -274,8 +277,6 @@ public class KaraokeStudioActivity extends Activity {
                 if (url == null || "about:blank".equals(url)) {
                     pageReady = false;
                 }
-
-                // The actual YouTube player-ready callback sets pageReady.
             }
 
             @Override
@@ -420,6 +421,7 @@ public class KaraokeStudioActivity extends Activity {
         adLabelParams.topMargin = dp(12);
         root.addView(adLabel, adLabelParams);
 
+        // INSERT RED: BANNER VIEW USES THE NEW AD UNIT ID ABOVE.
         adView = new AdView(this);
         adView.setAdSize(AdSize.BANNER);
         adView.setAdUnitId(AD_UNIT_ID);
