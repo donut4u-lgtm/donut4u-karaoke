@@ -74,8 +74,10 @@ public class OnlineSongActivity extends Activity {
     private static final String FACEBOOK_URL =
             "https://www.facebook.com/share/17zkgf3o8j/";
 
+    // 🔴 INSERTED: Correct banner ad unit for YouTube / Find My Song.
+    // 🔴 Do not change the separate App Open ad unit in MainActivity.
     private static final String AD_UNIT_ID =
-            "ca-app-pub-5625332026157890/7288125709";
+            "ca-app-pub-5625332026157890/2970292504";
 
     private static final long CACHE_DURATION =
             24L * 60L * 60L * 1000L;
@@ -129,8 +131,6 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        // Check for updates for verified, signed-in users.
-        // If the check fails, normal app use continues.
         AppUpdateChecker.checkForUpdates(this);
 
         installationId = getInstallationId();
