@@ -1,9 +1,9 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -54,7 +54,6 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -84,26 +83,20 @@ public class KaraokeStudioActivity extends Activity {
     private TextView nowPlayingText;
     private TextView lyricsText;
     private ProgressBar progressBar;
-    private Button playButton;
-    private Button pauseButton;
-    private Button stopButton;
-
-    // Embedded YouTube player replaces direct stream extraction.
     private WebView videoWebView;
     private AdView adView;
 
-    private final List<SongResult> currentResults =
-            new ArrayList<>();
+    private boolean extractorInitialized;
+    private boolean searching;
+    private boolean pageReady;
 
     private String currentTitle = "";
     private String currentArtist = "";
     private String currentVideoUrl = "";
     private String currentVideoId = "";
 
-    private boolean extractorInitialized = false;
-    private boolean searching = false;
-    private boolean loadingPlayback = false;
-    private boolean pageReady = false;
+    private final List<SongResult> currentResults =
+            new ArrayList<>();
 
     private static final class SongResult {
         final String title;
@@ -145,7 +138,6 @@ public class KaraokeStudioActivity extends Activity {
         }
 
         buildInterface();
-        initializeAds();
 
         try {
             NewPipe.init(
@@ -153,12 +145,19 @@ public class KaraokeStudioActivity extends Activity {
                     Localization.DEFAULT,
                     ContentCountry.DEFAULT
             );
-
             extractorInitialized = true;
-
         } catch (Exception e) {
             Log.e(TAG, "NewPipe initialization failed", e);
-            setStatus("Search initialization failed.");
+            setStatus("Song search could not initialize.");
+        }
+
+        try {
+            MobileAds.initialize(this, status -> { });
+            if (adView != null) {
+                adView.loadAd(new AdRequest.Builder().build());
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "AdMob initialization failed", e);
         }
     }
 
@@ -175,9 +174,7 @@ public class KaraokeStudioActivity extends Activity {
         scroll.addView(root);
         setContentView(scroll);
 
-        TextView title = text(
-                "DONUT4U KARAOKE", 25, ACCENT, true
-        );
+        TextView title = text("DONUT4U KARAOKE", 25, ACCENT, true);
         title.setGravity(Gravity.CENTER);
         root.addView(title, matchWrap());
 
@@ -187,7 +184,7 @@ public class KaraokeStudioActivity extends Activity {
         subtitle.setGravity(Gravity.CENTER);
 
         LinearLayout.LayoutParams subtitleParams = matchWrap();
-        subtitleParams.bottomMargin = dp(18);
+        subtitleParams.bottomMargin = dp(14);
         root.addView(subtitle, subtitleParams);
 
         addSectionTitle("FIND MY SONG");
@@ -202,26 +199,15 @@ public class KaraokeStudioActivity extends Activity {
         searchInput.setBackgroundColor(PANEL);
         root.addView(searchInput, matchWrap());
 
-        TextView searchHelp = text(
-                "Search for karaoke, instrumental, minus-one, or sing-along tracks.",
-                13, MUTED, false
-        );
-
-        LinearLayout.LayoutParams helpParams = matchWrap();
-        helpParams.topMargin = dp(5);
-        helpParams.bottomMargin = dp(8);
-        root.addView(searchHelp, helpParams);
-
         Button searchButton = button("SEARCH SONGS");
-        root.addView(searchButton, matchWrap());
+        LinearLayout.LayoutParams searchParams = matchWrap();
+        searchParams.topMargin = dp(8);
+        root.addView(searchButton, searchParams);
         searchButton.setOnClickListener(v -> searchSongs());
 
         progressBar = new ProgressBar(this);
         progressBar.setVisibility(View.GONE);
-
-        LinearLayout.LayoutParams progressParams = matchWrap();
-        progressParams.topMargin = dp(8);
-        root.addView(progressBar, progressParams);
+        root.addView(progressBar, matchWrap());
 
         statusText = text(
                 "Enter a song title or artist to begin.",
@@ -230,7 +216,6 @@ public class KaraokeStudioActivity extends Activity {
 
         LinearLayout.LayoutParams statusParams = matchWrap();
         statusParams.topMargin = dp(8);
-        statusParams.bottomMargin = dp(12);
         root.addView(statusText, statusParams);
 
         addSectionTitle("ONLINE SONG RESULTS");
@@ -246,29 +231,26 @@ public class KaraokeStudioActivity extends Activity {
         );
         root.addView(nowPlayingText, matchWrap());
 
-        // YouTube video is displayed inside this WebView.
         videoWebView = new WebView(this);
         videoWebView.setBackgroundColor(Color.BLACK);
         videoWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
-        WebSettings webSettings = videoWebView.getSettings();
-        webSettings.setJavaScriptEnabled(true);
-        webSettings.setDomStorageEnabled(true);
-        webSettings.setMediaPlaybackRequiresUserGesture(false);
-        webSettings.setLoadsImagesAutomatically(true);
-        webSettings.setSupportMultipleWindows(false);
+        WebSettings settings = videoWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setLoadsImagesAutomatically(true);
+        settings.setSupportMultipleWindows(false);
 
         videoWebView.setWebChromeClient(new WebChromeClient());
 
         videoWebView.setWebViewClient(new WebViewClient() {
             @Override
-            public void onPageFinished(
-                    WebView view,
-                    String url
-            ) {
+            public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
 
-                if (url != null && url.startsWith("about:blank")) {
+                if (url == null || "about:blank".equals(url)) {
+                    pageReady = false;
                     return;
                 }
 
@@ -276,7 +258,7 @@ public class KaraokeStudioActivity extends Activity {
 
                 if (!currentVideoId.isEmpty()) {
                     setStatus(
-                            "YouTube player loaded. If playback has not started, tap PLAY."
+                            "Player loaded. If playback does not start, tap PLAY."
                     );
                 }
             }
@@ -287,18 +269,16 @@ public class KaraokeStudioActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         dp(220)
                 );
-        videoParams.topMargin = dp(10);
-        videoParams.bottomMargin = dp(6);
+        videoParams.topMargin = dp(8);
         root.addView(videoWebView, videoParams);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        controls.setPadding(0, dp(10), 0, dp(10));
 
-        playButton = button("PLAY");
-        pauseButton = button("PAUSE");
-        stopButton = button("STOP");
+        Button playButton = button("PLAY");
+        Button pauseButton = button("PAUSE");
+        Button stopButton = button("STOP");
 
         controls.addView(playButton, weightedWrap());
         controls.addView(pauseButton, weightedWrap());
@@ -308,24 +288,19 @@ public class KaraokeStudioActivity extends Activity {
         playButton.setOnClickListener(v -> {
             if (currentVideoId.isEmpty()) {
                 Toast.makeText(
-                        this,
-                        "Choose a song first.",
-                        Toast.LENGTH_SHORT
+                        this, "Choose a song first.", Toast.LENGTH_SHORT
                 ).show();
                 return;
             }
 
-            if (videoWebView != null && pageReady) {
+            if (pageReady && videoWebView != null) {
                 videoWebView.evaluateJavascript(
-                        "if(window.player){player.playVideo();}",
-                        null
+                        "if(window.player){player.playVideo();}", null
                 );
-                setStatus("Playing in the embedded YouTube player.");
+                setStatus("Play command sent to YouTube.");
             } else {
                 loadAndPlay(
-                        currentVideoUrl,
-                        currentTitle,
-                        currentArtist
+                        currentVideoUrl, currentTitle, currentArtist
                 );
             }
         });
@@ -333,10 +308,9 @@ public class KaraokeStudioActivity extends Activity {
         pauseButton.setOnClickListener(v -> {
             if (videoWebView != null && pageReady) {
                 videoWebView.evaluateJavascript(
-                        "if(window.player){player.pauseVideo();}",
-                        null
+                        "if(window.player){player.pauseVideo();}", null
                 );
-                setStatus("Playback paused.");
+                setStatus("Pause command sent.");
             }
         });
 
@@ -354,11 +328,11 @@ public class KaraokeStudioActivity extends Activity {
 
         addSectionTitle("SUPPORT DONUT4U KARAOKE");
 
-        TextView donateMessage = text(
+        TextView donationText = text(
                 "Help keep running and growing DONATE",
                 15, MUTED, false
         );
-        root.addView(donateMessage, matchWrap());
+        root.addView(donationText, matchWrap());
 
         Button donateButton = button("DONATE");
         root.addView(donateButton, matchWrap());
@@ -382,8 +356,8 @@ public class KaraokeStudioActivity extends Activity {
                 new android.app.AlertDialog.Builder(this)
                         .setTitle("Question and Answer")
                         .setMessage(
-                                "For help, please use the official " +
-                                "Donut4U Karaoke Questions and Suggestions channel."
+                                "Please use the official Donut4U Karaoke " +
+                                "Questions and Suggestions channel for help."
                         )
                         .setPositiveButton("OK", null)
                         .show()
@@ -402,29 +376,23 @@ public class KaraokeStudioActivity extends Activity {
 
             Intent intent = new Intent();
             intent.setClassName(
-                    this,
-                    "com.donut4u.karaoke.AuthActivity"
+                    this, "com.donut4u.karaoke.AuthActivity"
             );
             intent.addFlags(
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP |
-                    Intent.FLAG_ACTIVITY_NEW_TASK |
-                    Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            | Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
             );
             startActivity(intent);
             finish();
         });
 
-        View bottomSpace = new View(this);
-        root.addView(
-                bottomSpace,
-                new LinearLayout.LayoutParams(1, dp(12))
-        );
-
-        TextView adLabel = text(
-                "Advertisement", 11, MUTED, false
-        );
+        TextView adLabel = text("Advertisement", 11, MUTED, false);
         adLabel.setGravity(Gravity.CENTER);
-        root.addView(adLabel, matchWrap());
+
+        LinearLayout.LayoutParams adLabelParams = matchWrap();
+        adLabelParams.topMargin = dp(12);
+        root.addView(adLabel, adLabelParams);
 
         adView = new AdView(this);
         adView.setAdSize(AdSize.BANNER);
@@ -453,7 +421,7 @@ public class KaraokeStudioActivity extends Activity {
         hideKeyboard();
 
         if (!extractorInitialized) {
-            setStatus("Search is not ready. Please restart the app.");
+            setStatus("Search is not initialized. Restart the app and retry.");
             return;
         }
 
@@ -461,15 +429,14 @@ public class KaraokeStudioActivity extends Activity {
         progressBar.setVisibility(View.VISIBLE);
         resultsContainer.removeAllViews();
         currentResults.clear();
-        setStatus("Searching YouTube for song results…");
+        setStatus("Searching for songs…");
 
         new Thread(() -> {
             List<SongResult> found = new ArrayList<>();
-            String error = null;
+            String failure = null;
 
             try {
-                StreamingService service =
-                        NewPipe.getService("YouTube");
+                StreamingService service = NewPipe.getService("YouTube");
 
                 SearchQueryHandler handler =
                         service.getSearchQHFactory().fromQuery(query);
@@ -484,19 +451,20 @@ public class KaraokeStudioActivity extends Activity {
                         : info.getRelatedItems()) {
                     if (!(item instanceof StreamInfoItem)) continue;
 
-                    StreamInfoItem streamItem = (StreamInfoItem) item;
-                    String title = safe(streamItem.getName());
-                    String url = safe(streamItem.getUrl());
-                    String uploader = safe(streamItem.getUploaderName());
+                    StreamInfoItem stream = (StreamInfoItem) item;
 
-                    if (title.isEmpty() || url.isEmpty()) continue;
+                    String songTitle = safe(stream.getName());
+                    String songUrl = safe(stream.getUrl());
+                    String uploader = safe(stream.getUploaderName());
+
+                    if (songTitle.isEmpty() || songUrl.isEmpty()) continue;
 
                     found.add(new SongResult(
-                            title,
+                            songTitle,
                             uploader,
-                            url,
-                            streamItem.getDuration(),
-                            scoreResult(title, uploader, query)
+                            songUrl,
+                            stream.getDuration(),
+                            scoreResult(songTitle, uploader, query)
                     ));
                 }
 
@@ -506,12 +474,12 @@ public class KaraokeStudioActivity extends Activity {
                 );
 
             } catch (Exception e) {
-                error = e.getMessage();
+                failure = e.getMessage();
                 Log.e(TAG, "YouTube search failed", e);
             }
 
             final List<SongResult> results = found;
-            final String failure = error;
+            final String error = failure;
 
             mainHandler.post(() -> {
                 searching = false;
@@ -519,12 +487,12 @@ public class KaraokeStudioActivity extends Activity {
 
                 if (results.isEmpty()) {
                     setStatus(
-                            "No results loaded. The source may be " +
-                            "temporarily unavailable. Try again later."
+                            "No results found. The source may be unavailable. " +
+                            "Please try again later."
                     );
 
-                    if (failure != null && !failure.trim().isEmpty()) {
-                        Log.e(TAG, "Search detail: " + failure);
+                    if (error != null) {
+                        Log.e(TAG, "Search detail: " + error);
                     }
                     return;
                 }
@@ -540,9 +508,7 @@ public class KaraokeStudioActivity extends Activity {
     }
 
     private int scoreResult(
-            String title,
-            String uploader,
-            String query
+            String title, String uploader, String query
     ) {
         String content =
                 (title + " " + uploader).toLowerCase(Locale.ROOT);
@@ -559,10 +525,7 @@ public class KaraokeStudioActivity extends Activity {
         if (content.contains("official audio")) score -= 10;
         if (content.contains("official music video")) score -= 15;
 
-        String[] words =
-                query.toLowerCase(Locale.ROOT).split("\\s+");
-
-        for (String word : words) {
+        for (String word : query.toLowerCase(Locale.ROOT).split("\\s+")) {
             if (word.length() > 2 && content.contains(word)) {
                 score += 3;
             }
@@ -585,7 +548,6 @@ public class KaraokeStudioActivity extends Activity {
         card.addView(songTitle, matchWrap());
 
         String details = result.uploader;
-
         if (result.durationSeconds > 0) {
             details += " • " + formatDuration(result.durationSeconds);
         }
@@ -593,3 +555,433 @@ public class KaraokeStudioActivity extends Activity {
         TextView metadata = text(details, 12, MUTED, false);
         LinearLayout.LayoutParams metaParams = matchWrap();
         metaParams.topMargin = dp(4);
+        card.addView(metadata, metaParams);
+
+        Button playButton = button("PLAY THIS SONG");
+        LinearLayout.LayoutParams playParams = matchWrap();
+        playParams.topMargin = dp(8);
+        card.addView(playButton, playParams);
+
+        playButton.setOnClickListener(v ->
+                loadAndPlay(result.url, result.title, result.uploader)
+        );
+    }
+
+    private void loadAndPlay(String url, String title, String artist) {
+        String videoId = extractYouTubeVideoId(url);
+
+        if (videoId.isEmpty()) {
+            setStatus("This result does not have a usable YouTube link.");
+            return;
+        }
+
+        currentTitle = safe(title);
+        currentArtist = safe(artist);
+        currentVideoUrl = safe(url);
+        currentVideoId = videoId;
+        pageReady = false;
+
+        nowPlayingText.setText(
+                currentTitle +
+                        (currentArtist.isEmpty() ? "" : "\n" + currentArtist)
+        );
+        lyricsText.setText("Looking for lyrics…");
+        setStatus("Loading the embedded YouTube player…");
+
+        String html =
+                "<!DOCTYPE html><html><head>" +
+                "<meta name=\"viewport\" content=\"width=device-width," +
+                "initial-scale=1,maximum-scale=1\">" +
+                "<style>html,body,#player{margin:0;padding:0;width:100%;" +
+                "height:100%;background:#000;overflow:hidden}</style>" +
+                "</head><body><div id=\"player\"></div><script>" +
+                "var player;" +
+                "function onYouTubeIframeAPIReady(){" +
+                "player=new YT.Player('player',{width:'100%',height:'100%'," +
+                "videoId:'" + videoId + "'," +
+                "playerVars:{playsinline:1,controls:1,rel:0}," +
+                "events:{onReady:function(e){e.target.playVideo();}," +
+                "onError:function(e){console.log('YouTube error '+e.data);}" +
+                "}});}" +
+                "</script><script src=\"https://www.youtube.com/iframe_api\">" +
+                "</script></body></html>";
+
+        videoWebView.loadDataWithBaseURL(
+                "https://www.youtube.com",
+                html,
+                "text/html",
+                "UTF-8",
+                null
+        );
+
+        lookupLyrics(currentTitle, currentArtist);
+    }
+
+    private String extractYouTubeVideoId(String url) {
+        if (url == null || url.trim().isEmpty()) return "";
+
+        try {
+            Uri uri = Uri.parse(url);
+            String host = uri.getHost();
+
+            if (host == null) return "";
+
+            if (host.equalsIgnoreCase("youtu.be")) {
+                String path = uri.getPath();
+                if (path != null && path.length() > 1) {
+                    return path.substring(1).split("/")[0];
+                }
+            }
+
+            if (host.toLowerCase(Locale.ROOT).contains("youtube.com")) {
+                String id = uri.getQueryParameter("v");
+                if (id != null && !id.trim().isEmpty()) return id.trim();
+
+                String path = uri.getPath();
+                if (path != null) {
+                    String[] parts = path.split("/");
+                    for (int i = 0; i < parts.length - 1; i++) {
+                        if ("embed".equals(parts[i])
+                                || "shorts".equals(parts[i])) {
+                            return parts[i + 1];
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not parse YouTube URL", e);
+        }
+
+        return "";
+    }
+
+    private void lookupLyrics(String title, String artist) {
+        new Thread(() -> {
+            String lyrics = null;
+
+            try {
+                String endpoint =
+                        "https://lrclib.net/api/search?track_name=" +
+                        URLEncoder.encode(safe(title), "UTF-8") +
+                        "&artist_name=" +
+                        URLEncoder.encode(safe(artist), "UTF-8");
+
+                JSONArray results = new JSONArray(httpGet(endpoint));
+
+                for (int i = 0; i < results.length(); i++) {
+                    JSONObject item = results.optJSONObject(i);
+                    if (item == null) continue;
+
+                    String plain = item.optString("plainLyrics", "");
+                    String synced = item.optString("syncedLyrics", "");
+
+                    if (!plain.trim().isEmpty()) {
+                        lyrics = plain;
+                        break;
+                    }
+
+                    if (!synced.trim().isEmpty()) {
+                        lyrics = synced;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Lyrics lookup failed", e);
+            }
+
+            final String finalLyrics = lyrics;
+
+            mainHandler.post(() -> {
+                if (lyricsText == null) return;
+
+                if (finalLyrics == null || finalLyrics.trim().isEmpty()) {
+                    lyricsText.setText(
+                            "Lyrics are not available for this song."
+                    );
+                } else {
+                    lyricsText.setText(finalLyrics);
+                }
+            });
+        }).start();
+    }
+
+    private String httpGet(String address) throws IOException {
+        HttpURLConnection connection = null;
+
+        try {
+            connection =
+                    (HttpURLConnection) new URL(address).openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(12000);
+            connection.setReadTimeout(12000);
+            connection.setRequestProperty(
+                    "User-Agent", "Donut4U-Karaoke/1.0"
+            );
+            connection.setRequestProperty("Accept", "application/json");
+
+            int code = connection.getResponseCode();
+
+            InputStream stream = code >= 400
+                    ? connection.getErrorStream()
+                    : connection.getInputStream();
+
+            String body = stream == null ? "" : readFully(stream);
+
+            if (code < 200 || code >= 300) {
+                throw new IOException("HTTP " + code);
+            }
+
+            return body;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private String readFully(InputStream input) throws IOException {
+        try (InputStream in = input;
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+
+            while ((count = in.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+
+            return output.toString("UTF-8");
+        }
+    }
+
+    private void stopPlayback() {
+        pageReady = false;
+        currentVideoId = "";
+        currentVideoUrl = "";
+        currentTitle = "";
+        currentArtist = "";
+
+        if (videoWebView != null) {
+            videoWebView.stopLoading();
+            videoWebView.loadUrl("about:blank");
+        }
+
+        if (nowPlayingText != null) {
+            nowPlayingText.setText("No song selected");
+        }
+
+        if (lyricsText != null) {
+            lyricsText.setText("Lyrics will appear here when available.");
+        }
+
+        setStatus("Playback stopped.");
+    }
+
+    private void setStatus(String message) {
+        if (statusText != null) {
+            statusText.setText(message);
+        }
+    }
+
+    private TextView text(
+            String value, float size, int color, boolean bold
+    ) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+
+        if (bold) {
+            view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        }
+
+        return view;
+    }
+
+    private Button button(String label) {
+        Button view = new Button(this);
+        view.setText(label);
+        view.setTextColor(Color.BLACK);
+        view.setAllCaps(false);
+        view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        view.setBackgroundTintList(
+                ColorStateList.valueOf(ACCENT)
+        );
+        return view;
+    }
+
+    private LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+    }
+
+    private LinearLayout.LayoutParams weightedWrap() {
+        return new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+    }
+
+    private int dp(float value) {
+        return (int) (
+                value * getResources().getDisplayMetrics().density + 0.5f
+        );
+    }
+
+    private String formatDuration(long seconds) {
+        return String.format(
+                Locale.ROOT,
+                "%d:%02d",
+                seconds / 60,
+                seconds % 60
+        );
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private void hideKeyboard() {
+        try {
+            InputMethodManager manager =
+                    (InputMethodManager) getSystemService(
+                            Context.INPUT_METHOD_SERVICE
+                    );
+            View focus = getCurrentFocus();
+
+            if (manager != null && focus != null) {
+                manager.hideSoftInputFromWindow(
+                        focus.getWindowToken(), 0
+                );
+                focus.clearFocus();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not hide keyboard", e);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (adView != null) adView.resume();
+    }
+
+    @Override
+    protected void onPause() {
+        if (adView != null) adView.pause();
+
+        if (videoWebView != null) {
+            videoWebView.onPause();
+            videoWebView.evaluateJavascript(
+                    "if(window.player){player.pauseVideo();}", null
+            );
+        }
+
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (adView != null) {
+            adView.destroy();
+            adView = null;
+        }
+
+        if (videoWebView != null) {
+            videoWebView.stopLoading();
+            videoWebView.loadUrl("about:blank");
+            videoWebView.removeAllViews();
+            videoWebView.destroy();
+            videoWebView = null;
+        }
+
+        mainHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
+    }
+
+    private static final class AndroidDownloader extends Downloader {
+
+        @Override
+        public Response execute(Request request)
+                throws IOException, ReCaptchaException {
+
+            HttpURLConnection connection = null;
+
+            try {
+                connection = (HttpURLConnection)
+                        new URL(request.url()).openConnection();
+
+                connection.setRequestMethod(request.httpMethod());
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(20000);
+                connection.setInstanceFollowRedirects(true);
+
+                for (Map.Entry<String, List<String>> header
+                        : request.headers().entrySet()) {
+
+                    if (header.getKey() == null
+                            || header.getValue() == null) {
+                        continue;
+                    }
+
+                    for (String value : header.getValue()) {
+                        if (value != null) {
+                            connection.addRequestProperty(
+                                    header.getKey(), value
+                            );
+                        }
+                    }
+                }
+
+                byte[] data = request.dataToSend();
+
+                if (data != null && data.length > 0) {
+                    connection.setDoOutput(true);
+
+                    try (java.io.OutputStream output =
+                                 connection.getOutputStream()) {
+                        output.write(data);
+                    }
+                }
+
+                int code = connection.getResponseCode();
+
+                InputStream stream = code >= 400
+                        ? connection.getErrorStream()
+                        : connection.getInputStream();
+
+                String body = stream == null ? "" : readStream(stream);
+
+                return new Response(
+                        code,
+                        connection.getResponseMessage(),
+                        connection.getHeaderFields(),
+                        body,
+                        connection.getURL().toString()
+                );
+
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }
+
+        private static String readStream(InputStream input)
+                throws IOException {
+            try (InputStream in = input;
+                 ByteArrayOutputStream output =
+                         new ByteArrayOutputStream()) {
+
+                byte[] buffer = new byte[8192];
+                int count;
+
+                while ((count = in.read(buffer)) != -1) {
+                    output.write(buffer, 0, count);
+                }
+
+                return output.toString("UTF-8");
+            }
+        }
+    }
+}
