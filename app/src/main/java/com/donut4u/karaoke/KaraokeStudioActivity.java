@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -24,6 +23,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -67,8 +67,6 @@ public class KaraokeStudioActivity extends Activity {
 
     private static final String TAG = "Donut4UKaraoke";
 
-    // REAL DONUT4U KARAOKE STAGE 2 ADMOB BANNER ID.
-    // Google demo/test ad unit has been removed.
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/2970292504";
 
@@ -156,7 +154,6 @@ public class KaraokeStudioActivity extends Activity {
             );
         }
 
-        // Initialize AdMob and request the real Stage 2 banner.
         try {
             MobileAds.initialize(this, initializationStatus -> {
                 if (activityDestroyed || adView == null) {
@@ -370,8 +367,7 @@ public class KaraokeStudioActivity extends Activity {
 
         stopButton.setOnClickListener(v -> stopPlayback());
 
-        // Separate lyrics section removed as requested.
-        // Lyrics are not fetched or displayed by this activity.
+        // Lyrics section intentionally removed.
 
         addSectionTitle("SUPPORT DONUT4U KARAOKE");
 
@@ -383,32 +379,11 @@ public class KaraokeStudioActivity extends Activity {
 
         Button donateButton = button("DONATE");
         root.addView(donateButton, matchWrap());
-
-        donateButton.setOnClickListener(v ->
-                new android.app.AlertDialog.Builder(this)
-                        .setTitle("Support Donut4U Karaoke")
-                        .setMessage(
-                                "Thank you for supporting Donut4U Karaoke. " +
-                                "Please use the official donation details " +
-                                "provided by the app owner."
-                        )
-                        .setPositiveButton("OK", null)
-                        .show()
-        );
+        donateButton.setOnClickListener(v -> showDonationQr());
 
         Button questionButton = button("QUESTION AND ANSWER");
         root.addView(questionButton, matchWrap());
-
-        questionButton.setOnClickListener(v ->
-                new android.app.AlertDialog.Builder(this)
-                        .setTitle("Question and Answer")
-                        .setMessage(
-                                "Please use the official Donut4U Karaoke " +
-                                "Questions and Suggestions channel for help."
-                        )
-                        .setPositiveButton("OK", null)
-                        .show()
-        );
+        questionButton.setOnClickListener(v -> openQuestionsFacebook());
 
         Button backButton = button("BACK TO STAGE");
         root.addView(backButton, matchWrap());
@@ -434,7 +409,6 @@ public class KaraokeStudioActivity extends Activity {
             finish();
         });
 
-        // Real AdMob Stage 2 advertisement.
         TextView adLabel = text("Advertisement", 12, MUTED, false);
         adLabel.setGravity(Gravity.CENTER);
 
@@ -477,13 +451,73 @@ public class KaraokeStudioActivity extends Activity {
         });
 
         LinearLayout.LayoutParams adParams =
-                new LinearLayout.LayoutParams(
-                        dp(300),
-                        dp(250)
-                );
+                new LinearLayout.LayoutParams(dp(300), dp(250));
         adParams.gravity = Gravity.CENTER_HORIZONTAL;
         adParams.topMargin = dp(6);
         root.addView(adView, adParams);
+    }
+
+    private void showDonationQr() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(8), dp(16), dp(8));
+        content.setBackgroundColor(Color.WHITE);
+
+        TextView instruction = new TextView(this);
+        instruction.setText(
+                "Open GCash on another phone and scan this QR code.\n\n"
+                        + "Thank you for supporting Donut4U Karaoke!"
+        );
+        instruction.setTextColor(Color.BLACK);
+        instruction.setTextSize(16);
+        instruction.setGravity(Gravity.CENTER);
+
+        LinearLayout.LayoutParams instructionParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+        instructionParams.bottomMargin = dp(12);
+        content.addView(instruction, instructionParams);
+
+        ImageView qrImage = new ImageView(this);
+        qrImage.setImageResource(R.drawable.gcash_qr);
+        qrImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        qrImage.setAdjustViewBounds(true);
+        qrImage.setContentDescription("GCash donation QR code");
+
+        LinearLayout.LayoutParams qrParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(300)
+                );
+        qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+        content.addView(qrImage, qrParams);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Support Donut4U Karaoke")
+                .setView(content)
+                .setPositiveButton("CLOSE", null)
+                .show();
+    }
+
+    private void openQuestionsFacebook() {
+        String facebookUrl =
+                "https://www.facebook.com/share/17zkgf3o8j/";
+
+        try {
+            startActivity(new Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse(facebookUrl)
+            ));
+        } catch (Exception e) {
+            Log.e(TAG, "Could not open Facebook", e);
+            Toast.makeText(
+                    this,
+                    "Unable to open Facebook. Please try again.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
     }
 
     private final class PlayerBridge {
