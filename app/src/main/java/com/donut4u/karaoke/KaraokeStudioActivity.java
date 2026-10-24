@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -30,9 +29,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.ads.AdListener;
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.LoadAdError;
 import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -68,8 +69,7 @@ public class KaraokeStudioActivity extends Activity {
 
     private static final String TAG = "Donut4UKaraoke";
 
-    // INSERT RED: GOOGLE DEMO BANNER AD UNIT FOR DEVELOPMENT TESTING.
-    // Replace with the real banner ID before the production release.
+    // INSERT RED: GOOGLE DEMO BANNER FOR TESTING ONLY.
     private static final String AD_UNIT_ID =
             "ca-app-pub-3940256099942544/9214589741";
 
@@ -87,6 +87,7 @@ public class KaraokeStudioActivity extends Activity {
     private TextView statusText;
     private TextView nowPlayingText;
     private TextView lyricsText;
+    private TextView adStatusText;
     private ProgressBar progressBar;
     private WebView videoWebView;
     private AdView adView;
@@ -152,16 +153,36 @@ public class KaraokeStudioActivity extends Activity {
             extractorInitialized = true;
         } catch (Exception e) {
             Log.e(TAG, "NewPipe initialization failed", e);
-            setStatus("Song search could not initialize. Check your connection.");
+            setStatus(
+                    "Song search could not initialize. Check your connection."
+            );
         }
 
+        // INSERT RED: Initialize AdMob before requesting the test banner.
         try {
-            MobileAds.initialize(this, status -> { });
-            if (adView != null) {
-                adView.loadAd(new AdRequest.Builder().build());
-            }
+            MobileAds.initialize(this, status -> {
+                if (activityDestroyed || adView == null) {
+                    return;
+                }
+
+                adView.post(() -> {
+                    if (activityDestroyed || adView == null) {
+                        return;
+                    }
+
+                    if (adStatusText != null) {
+                        adStatusText.setText("Requesting test banner...");
+                    }
+
+                    adView.loadAd(new AdRequest.Builder().build());
+                });
+            });
         } catch (Exception e) {
             Log.e(TAG, "AdMob initialization failed", e);
+
+            if (adStatusText != null) {
+                adStatusText.setText("AdMob initialization failed.");
+            }
         }
     }
 
@@ -289,7 +310,9 @@ public class KaraokeStudioActivity extends Activity {
                 super.onReceivedError(view, request, error);
 
                 if (request.isForMainFrame()) {
-                    setStatus("Player page failed to load. Check your internet.");
+                    setStatus(
+                            "Player page failed to load. Check your internet."
+                    );
                     Log.e(TAG, "WebView error: " + error.getDescription());
                 }
             }
@@ -415,6 +438,7 @@ public class KaraokeStudioActivity extends Activity {
             finish();
         });
 
+        // INSERT RED: Advertisement label and diagnostic status.
         TextView adLabel = text("Advertisement", 11, MUTED, false);
         adLabel.setGravity(Gravity.CENTER);
 
@@ -422,10 +446,43 @@ public class KaraokeStudioActivity extends Activity {
         adLabelParams.topMargin = dp(12);
         root.addView(adLabel, adLabelParams);
 
-        // INSERT RED: GOOGLE DEMO BANNER VIEW FOR TESTING ONLY.
+        adStatusText = text("Loading test banner...", 12, MUTED, false);
+        adStatusText.setGravity(Gravity.CENTER);
+        root.addView(adStatusText, matchWrap());
+
+        // INSERT RED: Google demo banner for testing only.
         adView = new AdView(this);
         adView.setAdSize(AdSize.BANNER);
         adView.setAdUnitId(AD_UNIT_ID);
+
+        adView.setAdListener(new AdListener() {
+            @Override
+            public void onAdLoaded() {
+                runOnUiThread(() -> {
+                    if (adStatusText != null) {
+                        adStatusText.setText(
+                                "Test banner loaded successfully."
+                        );
+                    }
+                });
+                Log.i(TAG, "Test banner loaded successfully.");
+            }
+
+            @Override
+            public void onAdFailedToLoad(LoadAdError error) {
+                String message = "Banner failed. Code "
+                        + error.getCode() + ": " + error.getMessage();
+
+                runOnUiThread(() -> {
+                    if (adStatusText != null) {
+                        adStatusText.setText(message);
+                    }
+                });
+
+                Log.e(TAG, message);
+            }
+        });
+
         root.addView(adView, matchWrap());
     }
 
