@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -276,8 +275,7 @@ public class KaraokeStudioActivity extends Activity {
                     pageReady = false;
                 }
 
-                // Do not mark the YouTube player ready here.
-                // The actual player-ready callback sets pageReady.
+                // The actual YouTube player-ready callback sets pageReady.
             }
 
             @Override
@@ -647,6 +645,7 @@ public class KaraokeStudioActivity extends Activity {
                 "<!DOCTYPE html><html><head>" +
                 "<meta name='viewport' content='width=device-width," +
                 "initial-scale=1,maximum-scale=1'>" +
+                "<meta name='referrer' content='strict-origin-when-cross-origin'>" +
                 "<style>html,body,#player{margin:0;padding:0;width:100%;" +
                 "height:100%;background:#000;overflow:hidden}</style>" +
                 "</head><body><div id='player'></div><script>" +
@@ -656,7 +655,7 @@ public class KaraokeStudioActivity extends Activity {
                 "width:'100%',height:'100%'," +
                 "videoId:'" + videoId + "'," +
                 "playerVars:{autoplay:1,playsinline:1,controls:1,rel:0," +
-                "origin:'https://www.youtube.com'}," +
+                "origin:'https://donut4u-karaoke.onrender.com'}," +
                 "events:{" +
                 "onReady:function(e){DonutBridge.onReady();e.target.playVideo();}," +
                 "onStateChange:function(e){DonutBridge.onState(String(e.data));}," +
@@ -670,7 +669,7 @@ public class KaraokeStudioActivity extends Activity {
 
         videoWebView.stopLoading();
         videoWebView.loadDataWithBaseURL(
-                "https://www.youtube.com/",
+                "https://donut4u-karaoke.onrender.com/",
                 html,
                 "text/html",
                 "UTF-8",
