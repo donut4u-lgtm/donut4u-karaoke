@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -18,11 +19,10 @@ import com.google.android.gms.ads.AdError;
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
-import com.google.android.gms.ads.AppOpenAd;
 import com.google.android.gms.ads.FullScreenContentCallback;
 import com.google.android.gms.ads.LoadAdError;
 import com.google.android.gms.ads.MobileAds;
-import com.google.android.gms.ads.appopen.AppOpenAdLoadCallback;
+import com.google.android.gms.ads.appopen.AppOpenAd;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
@@ -33,11 +33,11 @@ public class MainActivity extends Activity {
     private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
 
-    // Existing banner ad unit. Do not change.
+    // Existing banner ad unit ID.
     private static final String BANNER_AD_UNIT_ID =
             "ca-app-pub-5625332026157890/7288125709";
 
-    // New App Open ad unit.
+    // App Open ad unit ID.
     private static final String APP_OPEN_AD_UNIT_ID =
             "ca-app-pub-5625332026157890/8915386770";
 
@@ -68,8 +68,6 @@ public class MainActivity extends Activity {
             FirebaseAuth.getInstance().signOut();
         }
 
-        // Prepare the Home screen for users who are not signed in.
-        // Verified users continue to OnlineSongActivity after the ad attempt.
         if (!verifiedUserAtLaunch) {
             showWelcomeScreen();
         }
@@ -77,11 +75,9 @@ public class MainActivity extends Activity {
         // Keep the existing update checker.
         AppUpdateChecker.checkForUpdates(this);
 
-        // Initialize Google Mobile Ads.
         MobileAds.initialize(this, initializationStatus ->
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) {
-                        continueAfterAd();
                         return;
                     }
 
@@ -92,8 +88,25 @@ public class MainActivity extends Activity {
     }
 
     private void loadBannerAd() {
-        if (adView != null || verifiedUserAtLaunch
-                || isFinishing() || isDestroyed()) {
+        if (adView != null
+                || verifiedUserAtLaunch
+                || isFinishing()
+                || isDestroyed()) {
+            return;
+        }
+
+        View content = findViewById(android.R.id.content);
+
+        if (!(content instanceof ViewGroup)) {
+            return;
+        }
+
+        View bannerContainer =
+                ((ViewGroup) content).findViewWithTag(
+                        "donut4u_banner_container"
+                );
+
+        if (!(bannerContainer instanceof LinearLayout)) {
             return;
         }
 
@@ -101,36 +114,19 @@ public class MainActivity extends Activity {
         adView.setAdSize(AdSize.BANNER);
         adView.setAdUnitId(BANNER_AD_UNIT_ID);
 
-        // The banner container is created in showWelcomeScreen().
-        // Find it by its tag and add the banner.
-        android.view.View container =
-                findViewById(android.R.id.content);
+        ((LinearLayout) bannerContainer).addView(
+                adView,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+        );
 
-        if (container instanceof ViewGroup) {
-            ViewGroup root = (ViewGroup) container;
-            android.view.View bannerContainer =
-                    root.findViewWithTag("donut4u_banner_container");
-
-            if (bannerContainer instanceof LinearLayout) {
-                ((LinearLayout) bannerContainer).addView(
-                        adView,
-                        new LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                        )
-                );
-
-                adView.loadAd(new AdRequest.Builder().build());
-            } else {
-                adView.destroy();
-                adView = null;
-            }
-        }
+        adView.loadAd(new AdRequest.Builder().build());
     }
 
     private void loadAppOpenAd() {
         if (isFinishing() || isDestroyed()) {
-            continueAfterAd();
             return;
         }
 
@@ -140,13 +136,14 @@ public class MainActivity extends Activity {
                 this,
                 APP_OPEN_AD_UNIT_ID,
                 request,
-                new AppOpenAdLoadCallback() {
+                new AppOpenAd.AppOpenAdLoadCallback() {
+
                     @Override
                     public void onAdLoaded(AppOpenAd ad) {
                         appOpenAd = ad;
 
                         if (isFinishing() || isDestroyed()) {
-                            continueAfterAd();
+                            appOpenAd = null;
                             return;
                         }
 
@@ -154,10 +151,11 @@ public class MainActivity extends Activity {
                     }
 
                     @Override
-                    public void onAdFailedToLoad(LoadAdError error) {
+                    public void onAdFailedToLoad(
+                            LoadAdError error) {
                         appOpenAd = null;
 
-                        // Never block the app if no ad is available.
+                        // Continue without an ad if loading fails.
                         continueAfterAd();
                     }
                 }
@@ -165,7 +163,9 @@ public class MainActivity extends Activity {
     }
 
     private void showAppOpenAd() {
-        if (appOpenAd == null || isFinishing() || isDestroyed()) {
+        if (appOpenAd == null
+                || isFinishing()
+                || isDestroyed()) {
             continueAfterAd();
             return;
         }
@@ -178,6 +178,12 @@ public class MainActivity extends Activity {
 
         appOpenAd.setFullScreenContentCallback(
                 new FullScreenContentCallback() {
+
+                    @Override
+                    public void onAdShowedFullScreenContent() {
+                        appOpenAdShowing = true;
+                    }
+
                     @Override
                     public void onAdDismissedFullScreenContent() {
                         appOpenAd = null;
@@ -187,15 +193,10 @@ public class MainActivity extends Activity {
 
                     @Override
                     public void onAdFailedToShowFullScreenContent(
-                            AdError adError) {
+                            AdError error) {
                         appOpenAd = null;
                         appOpenAdShowing = false;
                         continueAfterAd();
-                    }
-
-                    @Override
-                    public void onAdShowedFullScreenContent() {
-                        // The App Open ad is now visible.
                     }
                 }
         );
@@ -204,7 +205,9 @@ public class MainActivity extends Activity {
     }
 
     private void continueAfterAd() {
-        if (continuedAfterAd || isFinishing() || isDestroyed()) {
+        if (continuedAfterAd
+                || isFinishing()
+                || isDestroyed()) {
             return;
         }
 
@@ -286,20 +289,26 @@ public class MainActivity extends Activity {
         adContainer.setTag("donut4u_banner_container");
         adContainer.setOrientation(LinearLayout.VERTICAL);
         adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(roundDrawable(PANEL, dp(10)));
-        adContainer.setPadding(dp(4), dp(12), dp(4), dp(12));
+        adContainer.setBackground(
+                roundDrawable(PANEL, dp(10))
+        );
+        adContainer.setPadding(
+                dp(4), dp(12), dp(4), dp(12)
+        );
 
-        LinearLayout.LayoutParams adContainerParams = fullWidthWrap();
-        adContainerParams.bottomMargin = dp(20);
-        root.addView(adContainer, adContainerParams);
+        LinearLayout.LayoutParams adParams = fullWidthWrap();
+        adParams.bottomMargin = dp(20);
+        root.addView(adContainer, adParams);
 
         Button donateButton = makeButton("Donate");
         addButton(root, donateButton, 10);
-        donateButton.setOnClickListener(v -> showDonationMessage());
+        donateButton.setOnClickListener(v ->
+                showDonationMessage());
 
         Button questionButton = makeButton("Question");
         addButton(root, questionButton, 10);
-        questionButton.setOnClickListener(v -> showQuestionDialog());
+        questionButton.setOnClickListener(v ->
+                showQuestionDialog());
 
         setContentView(scrollView);
     }
@@ -307,8 +316,8 @@ public class MainActivity extends Activity {
     private void addButton(
             LinearLayout root,
             Button button,
-            int bottomMargin
-    ) {
+            int bottomMargin) {
+
         LinearLayout.LayoutParams params = fullWidth(dp(52));
         params.bottomMargin = dp(bottomMargin);
         root.addView(button, params);
@@ -317,10 +326,12 @@ public class MainActivity extends Activity {
     private void shareApp() {
         Intent shareIntent = new Intent(Intent.ACTION_SEND);
         shareIntent.setType("text/plain");
+
         shareIntent.putExtra(
                 Intent.EXTRA_SUBJECT,
                 "Donut4U Karaoke"
         );
+
         shareIntent.putExtra(
                 Intent.EXTRA_TEXT,
                 "Try Donut4U Karaoke! Download the app here:\n"
@@ -363,6 +374,7 @@ public class MainActivity extends Activity {
                 MainActivity.this,
                 AuthActivity.class
         );
+
         intent.putExtra("create_mode", createMode);
         startActivity(intent);
     }
@@ -380,7 +392,10 @@ public class MainActivity extends Activity {
         return button;
     }
 
-    private GradientDrawable roundDrawable(int color, int radius) {
+    private GradientDrawable roundDrawable(
+            int color,
+            int radius) {
+
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
