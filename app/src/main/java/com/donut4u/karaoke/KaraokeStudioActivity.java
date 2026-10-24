@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -38,8 +39,6 @@ import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.StreamingService;
 import org.schabi.newpipe.extractor.downloader.Downloader;
@@ -58,7 +57,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -69,9 +67,10 @@ public class KaraokeStudioActivity extends Activity {
 
     private static final String TAG = "Donut4UKaraoke";
 
-    // INSERT RED: GOOGLE DEMO BANNER FOR TESTING ONLY.
+    // REAL DONUT4U KARAOKE STAGE 2 ADMOB BANNER ID.
+    // Google demo/test ad unit has been removed.
     private static final String AD_UNIT_ID =
-            "ca-app-pub-3940256099942544/9214589741";
+            "ca-app-pub-5625332026157890/2970292504";
 
     private static final int BG = Color.rgb(18, 18, 24);
     private static final int PANEL = Color.rgb(35, 35, 46);
@@ -86,7 +85,6 @@ public class KaraokeStudioActivity extends Activity {
     private EditText searchInput;
     private TextView statusText;
     private TextView nowPlayingText;
-    private TextView lyricsText;
     private TextView adStatusText;
     private ProgressBar progressBar;
     private WebView videoWebView;
@@ -158,9 +156,9 @@ public class KaraokeStudioActivity extends Activity {
             );
         }
 
-        // INSERT RED: Initialize AdMob before requesting the test banner.
+        // Initialize AdMob and request the real Stage 2 banner.
         try {
-            MobileAds.initialize(this, status -> {
+            MobileAds.initialize(this, initializationStatus -> {
                 if (activityDestroyed || adView == null) {
                     return;
                 }
@@ -171,7 +169,7 @@ public class KaraokeStudioActivity extends Activity {
                     }
 
                     if (adStatusText != null) {
-                        adStatusText.setText("Requesting test banner...");
+                        adStatusText.setText("Loading advertisement...");
                     }
 
                     adView.loadAd(new AdRequest.Builder().build());
@@ -273,7 +271,9 @@ public class KaraokeStudioActivity extends Activity {
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(videoWebView, true);
 
-        videoWebView.addJavascriptInterface(new PlayerBridge(), "DonutBridge");
+        videoWebView.addJavascriptInterface(
+                new PlayerBridge(), "DonutBridge"
+        );
 
         videoWebView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -286,7 +286,9 @@ public class KaraokeStudioActivity extends Activity {
         videoWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(
-                    WebView view, String url, android.graphics.Bitmap favicon
+                    WebView view,
+                    String url,
+                    android.graphics.Bitmap favicon
             ) {
                 super.onPageStarted(view, url, favicon);
                 pageReady = false;
@@ -361,23 +363,15 @@ public class KaraokeStudioActivity extends Activity {
         pauseButton.setOnClickListener(v -> {
             if (videoWebView != null && pageReady) {
                 videoWebView.evaluateJavascript(
-                        "if(window.player){player.pauseVideo();}",
-                        null
+                        "if(window.player){player.pauseVideo();}", null
                 );
             }
         });
 
         stopButton.setOnClickListener(v -> stopPlayback());
 
-        addSectionTitle("LYRICS");
-
-        lyricsText = text(
-                "Lyrics will appear here when available.",
-                15, WHITE, false
-        );
-        lyricsText.setPadding(dp(12), dp(12), dp(12), dp(12));
-        lyricsText.setBackgroundColor(PANEL);
-        root.addView(lyricsText, matchWrap());
+        // Separate lyrics section removed as requested.
+        // Lyrics are not fetched or displayed by this activity.
 
         addSectionTitle("SUPPORT DONUT4U KARAOKE");
 
@@ -428,7 +422,9 @@ public class KaraokeStudioActivity extends Activity {
             FirebaseAuth.getInstance().signOut();
 
             Intent intent = new Intent();
-            intent.setClassName(this, "com.donut4u.karaoke.AuthActivity");
+            intent.setClassName(
+                    this, "com.donut4u.karaoke.AuthActivity"
+            );
             intent.addFlags(
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
                             | Intent.FLAG_ACTIVITY_NEW_TASK
@@ -438,21 +434,20 @@ public class KaraokeStudioActivity extends Activity {
             finish();
         });
 
-        // INSERT RED: Advertisement label and diagnostic status.
-        TextView adLabel = text("Advertisement", 11, MUTED, false);
+        // Real AdMob Stage 2 advertisement.
+        TextView adLabel = text("Advertisement", 12, MUTED, false);
         adLabel.setGravity(Gravity.CENTER);
 
         LinearLayout.LayoutParams adLabelParams = matchWrap();
-        adLabelParams.topMargin = dp(12);
+        adLabelParams.topMargin = dp(16);
         root.addView(adLabel, adLabelParams);
 
-        adStatusText = text("Loading test banner...", 12, MUTED, false);
+        adStatusText = text("Loading advertisement...", 12, MUTED, false);
         adStatusText.setGravity(Gravity.CENTER);
         root.addView(adStatusText, matchWrap());
 
-        // INSERT RED: Google demo banner for testing only.
         adView = new AdView(this);
-        adView.setAdSize(AdSize.BANNER);
+        adView.setAdSize(AdSize.MEDIUM_RECTANGLE);
         adView.setAdUnitId(AD_UNIT_ID);
 
         adView.setAdListener(new AdListener() {
@@ -460,17 +455,15 @@ public class KaraokeStudioActivity extends Activity {
             public void onAdLoaded() {
                 runOnUiThread(() -> {
                     if (adStatusText != null) {
-                        adStatusText.setText(
-                                "Test banner loaded successfully."
-                        );
+                        adStatusText.setText("Advertisement loaded.");
                     }
                 });
-                Log.i(TAG, "Test banner loaded successfully.");
+                Log.i(TAG, "Real Stage 2 banner loaded.");
             }
 
             @Override
             public void onAdFailedToLoad(LoadAdError error) {
-                String message = "Banner failed. Code "
+                String message = "Advertisement unavailable. Code "
                         + error.getCode() + ": " + error.getMessage();
 
                 runOnUiThread(() -> {
@@ -483,7 +476,14 @@ public class KaraokeStudioActivity extends Activity {
             }
         });
 
-        root.addView(adView, matchWrap());
+        LinearLayout.LayoutParams adParams =
+                new LinearLayout.LayoutParams(
+                        dp(300),
+                        dp(250)
+                );
+        adParams.gravity = Gravity.CENTER_HORIZONTAL;
+        adParams.topMargin = dp(6);
+        root.addView(adView, adParams);
     }
 
     private final class PlayerBridge {
@@ -554,7 +554,7 @@ public class KaraokeStudioActivity extends Activity {
         progressBar.setVisibility(View.VISIBLE);
         resultsContainer.removeAllViews();
         currentResults.clear();
-        setStatus("Searching for songs…");
+        setStatus("Searching for songs...");
 
         new Thread(() -> {
             List<SongResult> found = new ArrayList<>();
@@ -698,8 +698,7 @@ public class KaraokeStudioActivity extends Activity {
                 currentTitle
                         + (currentArtist.isEmpty() ? "" : "\n" + currentArtist)
         );
-        lyricsText.setText("Looking for lyrics…");
-        setStatus("Opening YouTube player…");
+        setStatus("Opening YouTube player...");
 
         String html =
                 "<!DOCTYPE html><html><head>" +
@@ -735,8 +734,6 @@ public class KaraokeStudioActivity extends Activity {
                 "UTF-8",
                 null
         );
-
-        lookupLyrics(currentTitle, currentArtist);
     }
 
     private String extractYouTubeVideoId(String url) {
@@ -776,98 +773,6 @@ public class KaraokeStudioActivity extends Activity {
         return "";
     }
 
-    private void lookupLyrics(String title, String artist) {
-        new Thread(() -> {
-            String lyrics = null;
-
-            try {
-                String endpoint =
-                        "https://lrclib.net/api/search?track_name=" +
-                        URLEncoder.encode(safe(title), "UTF-8") +
-                        "&artist_name=" +
-                        URLEncoder.encode(safe(artist), "UTF-8");
-
-                JSONArray results = new JSONArray(httpGet(endpoint));
-
-                for (int i = 0; i < results.length(); i++) {
-                    JSONObject item = results.optJSONObject(i);
-                    if (item == null) continue;
-
-                    String plain = item.optString("plainLyrics", "");
-                    String synced = item.optString("syncedLyrics", "");
-
-                    if (!plain.trim().isEmpty()) {
-                        lyrics = plain;
-                        break;
-                    }
-
-                    if (!synced.trim().isEmpty()) lyrics = synced;
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Lyrics lookup failed", e);
-            }
-
-            final String finalLyrics = lyrics;
-
-            mainHandler.post(() -> {
-                if (activityDestroyed || lyricsText == null) return;
-
-                if (finalLyrics == null || finalLyrics.trim().isEmpty()) {
-                    lyricsText.setText(
-                            "Lyrics are not available for this song."
-                    );
-                } else {
-                    lyricsText.setText(finalLyrics);
-                }
-            });
-        }).start();
-    }
-
-    private String httpGet(String address) throws IOException {
-        HttpURLConnection connection = null;
-
-        try {
-            connection = (HttpURLConnection)
-                    new URL(address).openConnection();
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(12000);
-            connection.setReadTimeout(12000);
-            connection.setRequestProperty(
-                    "User-Agent", "Donut4U-Karaoke/1.0"
-            );
-            connection.setRequestProperty("Accept", "application/json");
-
-            int code = connection.getResponseCode();
-            InputStream stream = code >= 400
-                    ? connection.getErrorStream()
-                    : connection.getInputStream();
-
-            String body = stream == null ? "" : readFully(stream);
-
-            if (code < 200 || code >= 300) {
-                throw new IOException("HTTP " + code);
-            }
-
-            return body;
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
-    }
-
-    private String readFully(InputStream input) throws IOException {
-        try (InputStream in = input;
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int count;
-
-            while ((count = in.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
-            }
-
-            return output.toString("UTF-8");
-        }
-    }
-
     private void stopPlayback() {
         pageReady = false;
         currentVideoId = "";
@@ -882,10 +787,6 @@ public class KaraokeStudioActivity extends Activity {
 
         if (nowPlayingText != null) {
             nowPlayingText.setText("No song selected");
-        }
-
-        if (lyricsText != null) {
-            lyricsText.setText("Lyrics will appear here when available.");
         }
 
         setStatus("Playback stopped.");
