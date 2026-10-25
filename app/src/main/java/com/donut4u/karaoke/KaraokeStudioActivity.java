@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -317,10 +318,11 @@ public class KaraokeStudioActivity extends Activity {
             }
         });
 
+        // PLAYER HEIGHT INCREASED FROM 220dp TO 280dp.
         LinearLayout.LayoutParams videoParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(220)
+                        dp(280)
                 );
         videoParams.topMargin = dp(8);
         root.addView(videoWebView, videoParams);
@@ -366,8 +368,6 @@ public class KaraokeStudioActivity extends Activity {
         });
 
         stopButton.setOnClickListener(v -> stopPlayback());
-
-        // Lyrics section intentionally removed.
 
         addSectionTitle("SUPPORT DONUT4U KARAOKE");
 
