@@ -17,6 +17,19 @@
             android:value="ca-app-pub-5625332026157890~7539407143" />
 
         <activity
+            android:name=".Stage3PlayerActivity"
+            android:exported="false"
+            android:hardwareAccelerated="true" />
+
+        <activity
+            android:name=".Stage3QueueActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".Stage3SongbookActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".KaraokeStudioActivity"
             android:exported="false"
             android:hardwareAccelerated="true" />
