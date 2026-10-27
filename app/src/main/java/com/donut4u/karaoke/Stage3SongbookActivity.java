@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -10,6 +9,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
@@ -34,6 +34,7 @@ public class Stage3SongbookActivity extends Activity {
 
     private static final int REQUEST_IMPORT_SONGS = 3103;
     private static final int REQUEST_IMPORT_SONGLIST = 3104;
+    private static final int REQUEST_IMPORT_SONGHUB_FOLDER = 3105;
 
     private final ArrayList<Song> songs = new ArrayList<>();
 
@@ -96,9 +97,8 @@ public class Stage3SongbookActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(12));
         root.addView(subtitle);
 
-        // SongHub entry point.
-        Button songHubButton = makeButton("OPEN SONGHUB KARAOKE");
-        songHubButton.setOnClickListener(v -> openSongHub());
+        Button songHubButton = makeButton("CONNECT SONGHUB LIBRARY");
+        songHubButton.setOnClickListener(v -> chooseSongHubFolder());
         root.addView(songHubButton, buttonParams());
 
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
@@ -179,43 +179,158 @@ public class Stage3SongbookActivity extends Activity {
 
         searchInput.addTextChangedListener(
                 new android.text.TextWatcher() {
-            @Override
-            public void beforeTextChanged(
-                    CharSequence s, int start, int count, int after) {
-            }
+                    @Override
+                    public void beforeTextChanged(
+                            CharSequence s, int start, int count, int after) {
+                    }
 
-            @Override
-            public void onTextChanged(
-                    CharSequence s, int start, int before, int count) {
-                renderSongs(s.toString());
-            }
+                    @Override
+                    public void onTextChanged(
+                            CharSequence s, int start, int before, int count) {
+                        renderSongs(s.toString());
+                    }
 
-            @Override
-            public void afterTextChanged(android.text.Editable s) {
-            }
-        });
+                    @Override
+                    public void afterTextChanged(android.text.Editable s) {
+                    }
+                });
     }
 
-    /**
-     * Opens the official SongHub releases page.
-     * This does not embed SongHub's catalogue inside Donut4U.
+    /*
+     * Opens Android's folder picker so the user can select
+     * a SongHub library folder stored on the device.
      */
-    private void openSongHub() {
+    private void chooseSongHubFolder() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
         try {
-            Intent intent = new Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(
-                            "https://github.com/jpdcs/SongHub-Android/releases"
-                    )
+            startActivityForResult(
+                    intent,
+                    REQUEST_IMPORT_SONGHUB_FOLDER
             );
-            startActivity(intent);
         } catch (Exception e) {
             Toast.makeText(
                     this,
-                    "Could not open SongHub.",
+                    "Unable to open folder picker.",
                     Toast.LENGTH_LONG
             ).show();
         }
+    }
+
+    private int importSongHubFolder(Uri treeUri) {
+        int imported = 0;
+
+        try {
+            getContentResolver().takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+            );
+
+            imported = scanSongHubFolder(treeUri, treeUri);
+
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "Folder scan failed: "
+                            + (e.getMessage() == null
+                            ? "Unknown error" : e.getMessage()),
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+
+        return imported;
+    }
+
+    /*
+     * Recursively scans the selected folder and its subfolders.
+     * Only extensions accepted by isSupported() are imported.
+     */
+    private int scanSongHubFolder(Uri treeUri, Uri folderUri) {
+        int imported = 0;
+
+        try {
+            String documentId =
+                    DocumentsContract.getDocumentId(folderUri);
+
+            Uri childrenUri =
+                    DocumentsContract.buildChildDocumentsUriUsingTree(
+                            treeUri,
+                            documentId
+                    );
+
+            String[] columns = {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+            };
+
+            try (Cursor cursor = getContentResolver().query(
+                    childrenUri,
+                    columns,
+                    null,
+                    null,
+                    null
+            )) {
+                if (cursor == null) {
+                    return 0;
+                }
+
+                int idColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+
+                int nameColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+
+                int mimeColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_MIME_TYPE);
+
+                if (idColumn < 0 || nameColumn < 0 || mimeColumn < 0) {
+                    return 0;
+                }
+
+                while (cursor.moveToNext()) {
+                    String childId = cursor.getString(idColumn);
+                    String name = cursor.getString(nameColumn);
+                    String mime = cursor.getString(mimeColumn);
+
+                    Uri childUri =
+                            DocumentsContract.buildDocumentUriUsingTree(
+                                    treeUri,
+                                    childId
+                            );
+
+                    if (DocumentsContract.Document.MIME_TYPE_DIR
+                            .equals(mime)) {
+
+                        imported += scanSongHubFolder(
+                                treeUri,
+                                childUri
+                        );
+
+                    } else if (name != null
+                            && isSupported(getExtension(name))) {
+
+                        if (importSong(
+                                childUri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )) {
+                            imported++;
+                        }
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage3Songbook",
+                    "Could not scan folder: " + folderUri,
+                    e
+            );
+        }
+
+        return imported;
     }
 
     private Button makeButton(String text) {
@@ -257,7 +372,7 @@ public class Stage3SongbookActivity extends Activity {
     private void chooseSongbookFile() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.setType("*/*");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
                 "application/vnd.ms-excel",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "application/octet-stream"
@@ -278,6 +393,28 @@ public class Stage3SongbookActivity extends Activity {
     protected void onActivityResult(
             int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQUEST_IMPORT_SONGHUB_FOLDER) {
+            if (resultCode != RESULT_OK
+                    || data == null
+                    || data.getData() == null) {
+                return;
+            }
+
+            int imported = importSongHubFolder(data.getData());
+
+            saveSongs();
+            renderSongs(searchInput == null
+                    ? "" : searchInput.getText().toString());
+
+            Toast.makeText(
+                    this,
+                    imported + " supported song file(s) imported.",
+                    Toast.LENGTH_LONG
+            ).show();
+
+            return;
+        }
 
         if (resultCode != RESULT_OK || data == null) {
             return;
