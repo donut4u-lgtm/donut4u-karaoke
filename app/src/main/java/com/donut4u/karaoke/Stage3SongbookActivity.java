@@ -96,6 +96,11 @@ public class Stage3SongbookActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(12));
         root.addView(subtitle);
 
+        // SongHub entry point.
+        Button songHubButton = makeButton("OPEN SONGHUB KARAOKE");
+        songHubButton.setOnClickListener(v -> openSongHub());
+        root.addView(songHubButton, buttonParams());
+
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
@@ -191,6 +196,28 @@ public class Stage3SongbookActivity extends Activity {
         });
     }
 
+    /**
+     * Opens the official SongHub releases page.
+     * This does not embed SongHub's catalogue inside Donut4U.
+     */
+    private void openSongHub() {
+        try {
+            Intent intent = new Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse(
+                            "https://github.com/jpdcs/SongHub-Android/releases"
+                    )
+            );
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "Could not open SongHub.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
     private Button makeButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -210,7 +237,6 @@ public class Stage3SongbookActivity extends Activity {
         return params;
     }
 
-    // Import playable media files such as MIDI, KAR, MP3 and WAV.
     private void chooseSongs() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.setType("*/*");
@@ -228,7 +254,6 @@ public class Stage3SongbookActivity extends Activity {
         }
     }
 
-    // Import song numbers, titles and artists from an Excel spreadsheet.
     private void chooseSongbookFile() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.setType("*/*");
@@ -337,18 +362,13 @@ public class Stage3SongbookActivity extends Activity {
                     continue;
                 }
 
-                // This is catalogue metadata, not a playable media URI.
                 String catalogUri = "songbook-xls://catalog/"
                         + Uri.encode(number) + "/"
                         + Uri.encode(title) + "/"
                         + Uri.encode(artist);
 
                 songs.add(new Song(
-                        number,
-                        displayTitle,
-                        catalogUri,
-                        "CATALOG"
-                ));
+                        number, displayTitle, catalogUri, "CATALOG"));
 
                 imported++;
             }
@@ -373,8 +393,6 @@ public class Stage3SongbookActivity extends Activity {
                     .setTitle("Spreadsheet import failed")
                     .setMessage(
                             "Could not read this XLS/XLSX file.\n\n"
-                                    + "Check that it is a valid Excel "
-                                    + "spreadsheet and try again.\n\n"
                                     + "Details: "
                                     + (e.getMessage() == null
                                     ? "Unknown error" : e.getMessage()))
@@ -457,7 +475,6 @@ public class Stage3SongbookActivity extends Activity {
                         uri, permissionFlags);
             }
         } catch (Exception ignored) {
-            // Some providers do not support persistent access.
         }
 
         String type = getType(extension);
@@ -667,7 +684,7 @@ public class Stage3SongbookActivity extends Activity {
         if (shown == 0) {
             TextView empty = new TextView(this);
             empty.setText(songs.isEmpty()
-                    ? "No songs imported yet.\nImport media files or an XLS/XLSX songlist."
+                    ? "No songs imported yet."
                     : "No matching songs found.");
             empty.setTextColor(Color.LTGRAY);
             empty.setTextSize(15);
@@ -773,10 +790,7 @@ public class Stage3SongbookActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Songbook entry")
                 .setMessage(
-                        "This XLS/XLSX entry contains song information "
-                                + "only. To play it, import the matching "
-                                + "MIDI/KAR or audio/video file using "
-                                + "IMPORT SONGS FROM DEVICE.")
+                        "This entry contains song information only.")
                 .setPositiveButton("OK", null)
                 .show();
     }
