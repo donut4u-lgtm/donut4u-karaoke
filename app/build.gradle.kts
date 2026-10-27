@@ -94,5 +94,9 @@ dependencies {
     implementation("androidx.media3:media3-common:1.8.0")
 
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
+
+    // Stage 3: native FluidSynth SoundFont synthesizer library.
+    implementation("net.volcanomobile.fluidsynth-android:fluidsynth-android:2.4.6")
+
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 }
