@@ -30,7 +30,6 @@ public class Stage3SongbookActivity extends Activity {
 
     private static final String PREFS = "donut4u_stage3_songbook";
     private static final String SONGS_KEY = "songs_json";
-
     private static final int REQUEST_IMPORT_SONGS = 3103;
 
     private final ArrayList<Song> songs = new ArrayList<>();
@@ -38,7 +37,6 @@ public class Stage3SongbookActivity extends Activity {
     private LinearLayout songList;
     private EditText searchInput;
     private TextView countLabel;
-
     private SharedPreferences preferences;
     private int nextNumber = 10000;
 
@@ -61,7 +59,6 @@ public class Stage3SongbookActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         Stage3SongQueue.initialize(this);
-
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
 
         loadSongs();
@@ -70,7 +67,8 @@ public class Stage3SongbookActivity extends Activity {
     }
 
     private int dp(float value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+        return (int) (value *
+                getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void buildScreen() {
@@ -85,8 +83,7 @@ public class Stage3SongbookActivity extends Activity {
         title.setTextSize(25);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
-        root.addView(title, new LinearLayout.LayoutParams(
-                -1, dp(42)));
+        root.addView(title, new LinearLayout.LayoutParams(-1, dp(42)));
 
         TextView subtitle = new TextView(this);
         subtitle.setText("STAGE 3 • SONGBOOK");
@@ -99,6 +96,25 @@ public class Stage3SongbookActivity extends Activity {
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
+
+        // NEW: Open the AI Karaoke Maker.
+        Button makeKaraokeButton =
+                makeButton("MAKE KARAOKE FILE (AI)");
+        makeKaraokeButton.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3KaraokeMakerActivity.class
+                ));
+            } catch (Exception e) {
+                Toast.makeText(
+                        Stage3SongbookActivity.this,
+                        "Could not open Karaoke Maker.",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+        });
+        root.addView(makeKaraokeButton, buttonParams());
 
         Button queueButton = makeButton("OPEN SONG QUEUE");
         queueButton.setOnClickListener(v -> {
@@ -149,7 +165,8 @@ public class Stage3SongbookActivity extends Activity {
 
         setContentView(root);
 
-        searchInput.addTextChangedListener(new android.text.TextWatcher() {
+        searchInput.addTextChangedListener(
+                new android.text.TextWatcher() {
             @Override
             public void beforeTextChanged(
                     CharSequence s, int start, int count, int after) {
@@ -162,8 +179,7 @@ public class Stage3SongbookActivity extends Activity {
             }
 
             @Override
-            public void afterTextChanged(
-                    android.text.Editable s) {
+            public void afterTextChanged(android.text.Editable s) {
             }
         });
     }
@@ -269,11 +285,13 @@ public class Stage3SongbookActivity extends Activity {
                     & (Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 
-            getContentResolver().takePersistableUriPermission(
-                    uri, permissionFlags
-            );
+            if ((permissionFlags
+                    & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+                getContentResolver().takePersistableUriPermission(
+                        uri, permissionFlags);
+            }
         } catch (Exception ignored) {
-            // Some document providers do not grant persistable access.
+            // Some providers do not support persistent access.
         }
 
         String type = getType(extension);
@@ -289,17 +307,11 @@ public class Stage3SongbookActivity extends Activity {
 
         try {
             cursor = getContentResolver().query(
-                    uri,
-                    null,
-                    null,
-                    null,
-                    null
-            );
+                    uri, null, null, null, null);
 
             if (cursor != null && cursor.moveToFirst()) {
                 int index = cursor.getColumnIndex(
                         OpenableColumns.DISPLAY_NAME);
-
                 if (index >= 0) {
                     name = cursor.getString(index);
                 }
@@ -314,11 +326,9 @@ public class Stage3SongbookActivity extends Activity {
         if (name == null || name.trim().isEmpty()) {
             name = uri.getLastPathSegment();
         }
-
         if (name == null || name.trim().isEmpty()) {
             name = "Untitled song";
         }
-
         return name;
     }
 
@@ -327,7 +337,6 @@ public class Stage3SongbookActivity extends Activity {
         if (dot < 0 || dot == name.length() - 1) {
             return "";
         }
-
         return name.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
@@ -358,18 +367,14 @@ public class Stage3SongbookActivity extends Activity {
             case "midi":
             case "kar":
                 return "MIDI/KAR";
-
             case "lrc":
                 return "LYRICS";
-
             case "sf2":
                 return "SOUNDFONT";
-
             case "mp4":
             case "mkv":
             case "webm":
                 return "VIDEO";
-
             default:
                 return "AUDIO";
         }
@@ -377,10 +382,8 @@ public class Stage3SongbookActivity extends Activity {
 
     private String generateNumber() {
         String candidate;
-
         do {
-            candidate = String.format(
-                    Locale.US, "%05d", nextNumber);
+            candidate = String.format(Locale.US, "%05d", nextNumber);
             nextNumber++;
 
             if (nextNumber > 99999) {
@@ -402,7 +405,6 @@ public class Stage3SongbookActivity extends Activity {
 
     private void loadSongs() {
         songs.clear();
-
         String saved = preferences.getString(SONGS_KEY, "[]");
 
         try {
@@ -597,41 +599,28 @@ public class Stage3SongbookActivity extends Activity {
         switch (extension) {
             case "mid":
             case "midi":
-                return "audio/midi";
-
             case "kar":
                 return "audio/midi";
-
             case "mp3":
                 return "audio/mpeg";
-
             case "wav":
                 return "audio/wav";
-
             case "ogg":
                 return "audio/ogg";
-
             case "m4a":
                 return "audio/mp4";
-
             case "aac":
                 return "audio/aac";
-
             case "mp4":
                 return "video/mp4";
-
             case "mkv":
                 return "video/x-matroska";
-
             case "webm":
                 return "video/webm";
-
             case "lrc":
                 return "text/plain";
-
             case "sf2":
                 return "application/octet-stream";
-
             default:
                 return "*/*";
         }
