@@ -2,6 +2,7 @@
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -78,6 +79,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
@@ -95,8 +100,8 @@ dependencies {
 
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
 
-    // Stage 3: native FluidSynth SoundFont synthesizer library.
-    implementation("net.volcanomobile.fluidsynth-android:fluidsynth-android:2.4.6")
+    // Stage 3: MIDI/KAR playback through a SoundFont.
+    implementation("dev.kotlinds:fluidsynth-kmp:1.1.1")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 }
