@@ -3,6 +3,7 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -24,9 +25,7 @@ public class Stage3QueueActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         Stage3SongQueue.initialize(this);
-
         buildScreen();
         refreshQueue();
     }
@@ -96,8 +95,8 @@ public class Stage3QueueActivity extends Activity {
         root.addView(scroll,
                 new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        Button nextButton = makeButton("SELECT NEXT SONG");
-        nextButton.setOnClickListener(v -> selectNextSong());
+        Button nextButton = makeButton("PLAY NEXT SONG");
+        nextButton.setOnClickListener(v -> playNextSong());
         root.addView(nextButton, buttonParams());
 
         Button clearButton = makeButton("CLEAR QUEUE");
@@ -115,7 +114,7 @@ public class Stage3QueueActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
+        button.setTextSize(13);
         button.setAllCaps(false);
         button.setBackgroundTintList(
                 android.content.res.ColorStateList.valueOf(
@@ -198,18 +197,13 @@ public class Stage3QueueActivity extends Activity {
             LinearLayout actions = new LinearLayout(this);
             actions.setOrientation(LinearLayout.HORIZONTAL);
 
-            Button selectButton = makeButton("SELECT");
-            selectButton.setTextSize(11);
+            Button selectButton = makeButton("PLAY");
             selectButton.setOnClickListener(v -> {
                 Stage3SongQueue.setNowPlaying(song);
-                refreshQueue();
-                Toast.makeText(this,
-                        "Selected: " + song.title,
-                        Toast.LENGTH_SHORT).show();
+                openPlayer();
             });
 
             Button upButton = makeButton("UP");
-            upButton.setTextSize(11);
             upButton.setEnabled(position > 0);
             upButton.setOnClickListener(v -> {
                 Stage3SongQueue.move(position, position - 1);
@@ -217,7 +211,6 @@ public class Stage3QueueActivity extends Activity {
             });
 
             Button downButton = makeButton("DOWN");
-            downButton.setTextSize(11);
             downButton.setEnabled(position < songs.size() - 1);
             downButton.setOnClickListener(v -> {
                 Stage3SongQueue.move(position, position + 1);
@@ -225,12 +218,11 @@ public class Stage3QueueActivity extends Activity {
             });
 
             Button removeButton = makeButton("REMOVE");
-            removeButton.setTextSize(11);
             removeButton.setOnClickListener(v -> {
                 Stage3SongQueue.removeAt(position);
                 refreshQueue();
                 Toast.makeText(this,
-                        "Song removed from queue.",
+                        "Song removed.",
                         Toast.LENGTH_SHORT).show();
             });
 
@@ -244,6 +236,33 @@ public class Stage3QueueActivity extends Activity {
         }
     }
 
+    private void playNextSong() {
+        Stage3SongQueue.QueuedSong next =
+                Stage3SongQueue.playNext();
+
+        if (next == null) {
+            Toast.makeText(this,
+                    "The queue is empty.",
+                    Toast.LENGTH_SHORT).show();
+            refreshQueue();
+            return;
+        }
+
+        openPlayer();
+    }
+
+    private void openPlayer() {
+        try {
+            startActivity(new Intent(
+                    Stage3QueueActivity.this,
+                    Stage3PlayerActivity.class));
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    "Could not open the player.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void addAction(
             LinearLayout parent, Button button, float weight) {
         LinearLayout.LayoutParams params =
@@ -252,29 +271,11 @@ public class Stage3QueueActivity extends Activity {
         parent.addView(button, params);
     }
 
-    private void selectNextSong() {
-        Stage3SongQueue.QueuedSong next =
-                Stage3SongQueue.playNext();
-
-        if (next == null) {
-            Toast.makeText(this,
-                    "The queue is empty.",
-                    Toast.LENGTH_SHORT).show();
-        } else {
-            Toast.makeText(this,
-                    "Selected: " + next.title +
-                    ". In-app playback is not connected yet.",
-                    Toast.LENGTH_LONG).show();
-        }
-
-        refreshQueue();
-    }
-
     private void confirmClearQueue() {
         new AlertDialog.Builder(this)
                 .setTitle("Clear queue?")
                 .setMessage(
-                        "This removes all queued songs and the current selection.")
+                        "Remove all queued songs and the current selection?")
                 .setNegativeButton("CANCEL", null)
                 .setPositiveButton("CLEAR", (dialog, which) -> {
                     Stage3SongQueue.stopAndClear();
