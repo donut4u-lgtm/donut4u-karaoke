@@ -107,5 +107,9 @@ dependencies {
     // Stage 3: MIDI/KAR playback through a SoundFont.
     implementation("dev.kotlinds:fluidsynth-kmp:1.1.1")
 
+    // Stage 3: Excel XLS/XLSX songbook import.
+    implementation("org.apache.poi:poi:5.2.5")
+    implementation("org.apache.poi:poi-ooxml:5.2.5")
+
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 }
