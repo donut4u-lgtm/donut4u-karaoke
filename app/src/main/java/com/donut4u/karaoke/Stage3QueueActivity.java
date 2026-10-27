@@ -7,14 +7,13 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.ArrayList;
+import java.util.List;
 
 public class Stage3QueueActivity extends Activity {
 
@@ -33,8 +32,8 @@ public class Stage3QueueActivity extends Activity {
     }
 
     private int dp(float value) {
-        return (int) (value
-                * getResources().getDisplayMetrics().density + 0.5f);
+        return (int) (value *
+                getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void buildScreen() {
@@ -49,7 +48,8 @@ public class Stage3QueueActivity extends Activity {
         heading.setTextSize(24);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
-        root.addView(heading, new LinearLayout.LayoutParams(-1, dp(42)));
+        root.addView(heading,
+                new LinearLayout.LayoutParams(-1, dp(42)));
 
         TextView subtitle = new TextView(this);
         subtitle.setText("STAGE 3 • PLAY QUEUE");
@@ -77,7 +77,8 @@ public class Stage3QueueActivity extends Activity {
         nowPlayingLabel.setPadding(0, dp(6), 0, 0);
         nowCard.addView(nowPlayingLabel);
 
-        root.addView(nowCard, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(nowCard,
+                new LinearLayout.LayoutParams(-1, -2));
 
         countLabel = new TextView(this);
         countLabel.setTextColor(Color.rgb(140, 255, 180));
@@ -92,11 +93,12 @@ public class Stage3QueueActivity extends Activity {
         queueList.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(queueList);
 
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        root.addView(scroll,
+                new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        Button playNextButton = makeButton("SELECT NEXT SONG");
-        playNextButton.setOnClickListener(v -> selectNextSong());
-        root.addView(playNextButton, buttonParams());
+        Button nextButton = makeButton("SELECT NEXT SONG");
+        nextButton.setOnClickListener(v -> selectNextSong());
+        root.addView(nextButton, buttonParams());
 
         Button clearButton = makeButton("CLEAR QUEUE");
         clearButton.setOnClickListener(v -> confirmClearQueue());
@@ -142,11 +144,11 @@ public class Stage3QueueActivity extends Activity {
             nowPlayingLabel.setText("No song selected");
         } else {
             nowPlayingLabel.setText(
-                    current.number + " • " + current.title
-                            + "\nType: " + current.type);
+                    current.number + " • " + current.title +
+                    "\nType: " + current.type);
         }
 
-        ArrayList<Stage3SongQueue.QueuedSong> songs =
+        List<Stage3SongQueue.QueuedSong> songs =
                 Stage3SongQueue.getQueue();
 
         countLabel.setText("QUEUED SONGS: " + songs.size());
@@ -260,8 +262,8 @@ public class Stage3QueueActivity extends Activity {
                     Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this,
-                    "Selected: " + next.title
-                            + ". Actual in-app playback is not connected yet.",
+                    "Selected: " + next.title +
+                    ". In-app playback is not connected yet.",
                     Toast.LENGTH_LONG).show();
         }
 
