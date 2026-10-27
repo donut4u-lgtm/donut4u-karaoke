@@ -30,7 +30,7 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Donut4U Karaoke Processing API",
-    version="2.4.0",
+    version="2.5.0",
 )
 
 JOB_TTL_MINUTES = int(os.getenv("JOB_TTL_MINUTES", "60"))
@@ -265,7 +265,10 @@ def get_job_or_404(job_id):
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Job not found or expired.")
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found or expired."
+            )
         return dict(job)
 
 
@@ -384,7 +387,6 @@ def validate_audio_url(url):
 # ============================================================
 
 def google_search_fallback(query):
-    """Return one Google results page when scraped results are unavailable."""
     query = (query or "").strip()
     if not query:
         return []
@@ -491,7 +493,6 @@ def web_search(query):
             "open_in_webview": True,
         })
 
-    # DuckDuckGo may return an anti-bot page or no usable links.
     if not results:
         return google_search_fallback(query)
 
@@ -519,7 +520,7 @@ def download_track(url, destination):
             current_url,
             follow_redirects=False,
             timeout=httpx.Timeout(120.0, connect=10.0),
-            headers={"User-Agent": "Donut4U-Karaoke/2.4.0"},
+            headers={"User-Agent": "Donut4U-Karaoke/2.5.0"},
         ) as response:
             if response.is_redirect:
                 raise ValueError(
@@ -770,6 +771,90 @@ def process_job(job_id):
 
 
 # ============================================================
+# KARAOKE VIDEO HELPERS
+# ============================================================
+
+def srt_timestamp(seconds):
+    milliseconds = max(0, int(round(float(seconds) * 1000)))
+    hours = milliseconds // 3600000
+    minutes = (milliseconds // 60000) % 60
+    secs = (milliseconds // 1000) % 60
+    millis = milliseconds % 1000
+
+    return (
+        f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+    )
+
+
+def create_karaoke_srt(lyrics_path, srt_path):
+    try:
+        with open(lyrics_path, "r", encoding="utf-8") as source:
+            data = json.load(source)
+    except (OSError, ValueError) as exc:
+        raise ValueError("Could not read the detected lyrics.") from exc
+
+    words = data.get("words", [])
+
+    if not isinstance(words, list) or not words:
+        raise ValueError(
+            "No lyrics were detected, so a lyric video cannot be created."
+        )
+
+    groups = []
+    current = []
+
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+
+        text = str(word.get("text", "")).strip()
+        if not text:
+            continue
+
+        try:
+            start = max(0.0, float(word.get("start", 0)))
+            end = max(start + 0.15, float(word.get("end", start + 0.3)))
+        except (TypeError, ValueError):
+            continue
+
+        current.append((start, end, text))
+
+        if len(current) >= 7 or re.search(r"[.!?,;:]$", text):
+            groups.append(current)
+            current = []
+
+    if current:
+        groups.append(current)
+
+    if not groups:
+        raise ValueError("No usable lyric timestamps were detected.")
+
+    with open(srt_path, "w", encoding="utf-8") as output:
+        for index, group in enumerate(groups, start=1):
+            start = group[0][0]
+            end = max(group[-1][1], start + 0.5)
+            text = " ".join(item[2] for item in group)
+            text = text.replace("-->", "—>")
+
+            output.write(
+                f"{index}\n"
+                f"{srt_timestamp(start)} --> {srt_timestamp(end)}\n"
+                f"{text}\n\n"
+            )
+
+
+def escape_subtitle_filter_path(path):
+    value = str(path.resolve())
+    value = value.replace("\\", "\\\\\\\\")
+    value = value.replace(":", "\\\\:")
+    value = value.replace("'", "\\\\'")
+    value = value.replace(",", "\\\\,")
+    value = value.replace("[", "\\\\[")
+    value = value.replace("]", "\\\\]")
+    return value
+
+
+# ============================================================
 # API ENDPOINTS
 # ============================================================
 
@@ -880,7 +965,10 @@ def create_job_from_upload(
                 output.write(chunk)
 
         if total == 0:
-            raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is empty."
+            )
 
         update_job(
             job["job_id"],
@@ -932,11 +1020,18 @@ def get_instrumental(job_id: str):
     job = get_job_or_404(job_id)
 
     if job["status"] != "completed":
-        raise HTTPException(status_code=409, detail="Processing is not complete.")
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
 
     path = Path(job["directory"]) / "instrumental.wav"
+
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="Instrumental file not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Instrumental file not found."
+        )
 
     return FileResponse(
         path,
@@ -945,19 +1040,202 @@ def get_instrumental(job_id: str):
     )
 
 
+@app.get("/v1/jobs/{job_id}/instrumental-mp3")
+def get_instrumental_mp3(job_id: str):
+    job = get_job_or_404(job_id)
+
+    if job["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
+
+    directory = Path(job["directory"])
+    wav_file = directory / "instrumental.wav"
+    mp3_file = directory / "instrumental.mp3"
+
+    if not wav_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Instrumental WAV file not found."
+        )
+
+    if not mp3_file.is_file():
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error",
+                    "-i", str(wav_file),
+                    "-vn", "-codec:a", "libmp3lame",
+                    "-b:a", "192k",
+                    str(mp3_file),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="MP3 conversion timed out."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(exc.stderr or "MP3 conversion failed.")[-1200:]
+            ) from exc
+
+    return FileResponse(
+        mp3_file,
+        media_type="audio/mpeg",
+        filename="donut4u_instrumental.mp3",
+    )
+
+
 @app.get("/v1/jobs/{job_id}/lyrics")
 def get_lyrics(job_id: str):
     job = get_job_or_404(job_id)
 
     if job["status"] != "completed":
-        raise HTTPException(status_code=409, detail="Processing is not complete.")
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
 
     path = Path(job["directory"]) / "lyrics.json"
+
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="Lyrics file not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Lyrics file not found."
+        )
 
     with open(path, "r", encoding="utf-8") as source:
         return json.load(source)
+
+
+@app.post("/v1/jobs/{job_id}/video")
+def render_karaoke_video(job_id: str):
+    job = get_job_or_404(job_id)
+
+    if job["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
+
+    directory = Path(job["directory"])
+    instrumental = directory / "instrumental.wav"
+    lyrics = directory / "lyrics.json"
+    subtitles = directory / "karaoke-lyrics.srt"
+    video = directory / "karaoke-video.mp4"
+
+    if video.is_file() and video.stat().st_size > 0:
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "video_url": f"/v1/jobs/{job_id}/video",
+        }
+
+    if not instrumental.is_file() or not lyrics.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Instrumental audio or lyrics file is missing."
+        )
+
+    try:
+        duration = get_audio_duration(instrumental)
+        create_karaoke_srt(lyrics, subtitles)
+
+        subtitle_path = escape_subtitle_filter_path(subtitles)
+        video_filter = (
+            f"subtitles='{subtitle_path}':"
+            "force_style='FontName=DejaVu Sans,FontSize=30,"
+            "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+            "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=55'"
+        )
+
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "lavfi",
+                "-i",
+                f"color=c=black:s=1280x720:r=30:d={duration}",
+                "-i", str(instrumental),
+                "-vf", video_filter,
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-t", str(duration),
+                "-movflags", "+faststart",
+                str(video),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1200,
+            check=True,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc)
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        video.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=504,
+            detail="Video rendering timed out."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        video.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail=(exc.stderr or "Video rendering failed.")[-1500:]
+        ) from exc
+
+    if not video.is_file() or video.stat().st_size == 0:
+        raise HTTPException(
+            status_code=500,
+            detail="The MP4 file was not created."
+        )
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "video_url": f"/v1/jobs/{job_id}/video",
+        "filename": video.name,
+    }
+
+
+@app.get("/v1/jobs/{job_id}/video")
+def get_karaoke_video(job_id: str):
+    job = get_job_or_404(job_id)
+
+    if job["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="Processing is not complete."
+        )
+
+    video = Path(job["directory"]) / "karaoke-video.mp4"
+
+    if not video.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Karaoke video has not been rendered yet."
+        )
+
+    return FileResponse(
+        video,
+        media_type="video/mp4",
+        filename="donut4u_karaoke.mp4",
+    )
 
 
 @app.delete("/v1/jobs/{job_id}")
@@ -966,12 +1244,15 @@ def delete_job(job_id: str):
         job = JOBS.get(job_id)
 
         if not job:
-            raise HTTPException(status_code=404, detail="Job not found.")
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found."
+            )
 
         if job["status"] in ("queued", "processing"):
             raise HTTPException(
                 status_code=409,
-                detail="Cannot delete while queued or processing.",
+                detail="Cannot delete while queued or processing."
             )
 
         directory = job["directory"]
