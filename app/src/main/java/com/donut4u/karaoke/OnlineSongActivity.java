@@ -74,8 +74,6 @@ public class OnlineSongActivity extends Activity {
     private static final String FACEBOOK_URL =
             "https://www.facebook.com/share/17zkgf3o8j/";
 
-    // 🔴 INSERTED: Correct banner ad unit for YouTube / Find My Song.
-    // 🔴 Do not change the separate App Open ad unit in MainActivity.
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/2970292504";
 
@@ -447,6 +445,22 @@ public class OnlineSongActivity extends Activity {
             startActivity(new Intent(
                     OnlineSongActivity.this,
                     KaraokeStudioActivity.class));
+        });
+
+        Button stage3Button = makeButton("🎤 STAGE 3 — SONGBOOK");
+        LinearLayout.LayoutParams stage3Params = fullWidth(dp(50));
+        stage3Params.topMargin = dp(10);
+        root.addView(stage3Button, stage3Params);
+
+        stage3Button.setOnClickListener(v -> {
+            if (!sessionValid || closing) {
+                toast("Please wait while your session is checked.");
+                return;
+            }
+
+            startActivity(new Intent(
+                    OnlineSongActivity.this,
+                    Stage3SongbookActivity.class));
         });
 
         Button switchAccountButton =
