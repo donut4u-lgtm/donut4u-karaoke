@@ -2,6 +2,7 @@
 package com.donut4u.karaoke;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
@@ -23,43 +24,35 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
 import java.util.Locale;
 
 public class Stage3SongbookActivity extends Activity {
 
-    private static final int BG = Color.rgb(16, 19, 21);
-    private static final int PANEL = Color.rgb(35, 39, 42);
-    private static final int GREEN = Color.rgb(0, 210, 105);
-    private static final int WHITE = Color.WHITE;
-    private static final int MUTED = Color.rgb(185, 194, 189);
-
-    private static final int PICK_FILES = 3101;
-
     private static final String PREFS = "donut4u_stage3_songbook";
     private static final String SONGS_KEY = "songs_json";
 
-    private LinearLayout root;
-    private LinearLayout songList;
-    private EditText searchBox;
-    private TextView countText;
-    private TextView emptyText;
+    private static final int REQUEST_IMPORT_SONGS = 3103;
 
-    private final List<Song> songs = new ArrayList<>();
+    private final ArrayList<Song> songs = new ArrayList<>();
+
+    private LinearLayout songList;
+    private EditText searchInput;
+    private TextView countLabel;
+
+    private SharedPreferences preferences;
+    private int nextNumber = 10000;
 
     private static class Song {
         String number;
         String title;
-        String type;
         String uri;
+        String type;
 
-        Song(String number, String title, String type, String uri) {
+        Song(String number, String title, String uri, String type) {
             this.number = number;
             this.title = title;
-            this.type = type;
             this.uri = uri;
+            this.type = type;
         }
     }
 
@@ -67,67 +60,96 @@ public class Stage3SongbookActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
+        Stage3SongQueue.initialize(this);
+
+        preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
 
         loadSongs();
-        buildInterface();
-        renderSongs();
+        buildScreen();
+        renderSongs("");
     }
 
-    private void buildInterface() {
+    private int dp(float value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void buildScreen() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(16), dp(16), dp(12));
+        root.setBackgroundColor(Color.rgb(10, 20, 15));
+
+        TextView title = new TextView(this);
+        title.setText("DONUT4U KARAOKE");
+        title.setTextColor(Color.rgb(80, 255, 150));
+        title.setTextSize(25);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        root.addView(title, new LinearLayout.LayoutParams(
+                -1, dp(42)));
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("STAGE 3 • SONGBOOK");
+        subtitle.setTextColor(Color.WHITE);
+        subtitle.setTextSize(16);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(0, 0, 0, dp(12));
+        root.addView(subtitle);
+
+        Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
+        importButton.setOnClickListener(v -> chooseSongs());
+        root.addView(importButton, buttonParams());
+
+        Button queueButton = makeButton("OPEN SONG QUEUE");
+        queueButton.setOnClickListener(v -> {
+            Stage3SongQueue.initialize(this);
+            try {
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3QueueActivity.class
+                ));
+            } catch (Exception e) {
+                Toast.makeText(this,
+                        "Could not open the song queue.",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        root.addView(queueButton, buttonParams());
+
+        searchInput = new EditText(this);
+        searchInput.setSingleLine(true);
+        searchInput.setHint("Search song number or title");
+        searchInput.setHintTextColor(Color.LTGRAY);
+        searchInput.setTextColor(Color.WHITE);
+        searchInput.setTextSize(16);
+        searchInput.setPadding(dp(12), 0, dp(12), 0);
+        searchInput.setBackgroundColor(Color.rgb(35, 48, 40));
+        root.addView(searchInput, new LinearLayout.LayoutParams(
+                -1, dp(48)));
+
+        countLabel = new TextView(this);
+        countLabel.setTextColor(Color.rgb(140, 255, 180));
+        countLabel.setTextSize(13);
+        countLabel.setPadding(0, dp(10), 0, dp(8));
+        root.addView(countLabel);
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
 
-        root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(18), dp(16), dp(24));
-        root.setBackgroundColor(BG);
+        songList = new LinearLayout(this);
+        songList.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(songList);
 
-        scroll.addView(root);
-        setContentView(scroll);
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                -1, 0, 1f));
 
-        TextView title = text("DONUT4U KARAOKE", 25, GREEN, true);
-        title.setGravity(Gravity.CENTER);
-        root.addView(title, matchWrap());
+        Button backButton = makeButton("BACK");
+        backButton.setOnClickListener(v -> finish());
+        root.addView(backButton, buttonParams());
 
-        TextView subtitle = text(
-                "STAGE 3 • SONGBOOK & LOCAL LIBRARY",
-                13, MUTED, true
-        );
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(8), 0, dp(20));
-        root.addView(subtitle, matchWrap());
+        setContentView(root);
 
-        Button importButton = button("+ IMPORT SONG FILES");
-        root.addView(importButton, fullWidth(dp(52)));
-        importButton.setOnClickListener(v -> chooseFiles());
-
-        Button queueButton = button("OPEN SONG QUEUE");
-        LinearLayout.LayoutParams queueParams = fullWidth(dp(48));
-        queueParams.topMargin = dp(8);
-        root.addView(queueButton, queueParams);
-        queueButton.setOnClickListener(v -> openQueue());
-
-        TextView supported = text(
-                "Supported: MIDI, KAR, MP3, LRC, MP4, MKV, WebM and SF2",
-                12, MUTED, false
-        );
-        supported.setPadding(dp(4), dp(8), dp(4), dp(16));
-        root.addView(supported, matchWrap());
-
-        searchBox = new EditText(this);
-        searchBox.setSingleLine(true);
-        searchBox.setTextColor(WHITE);
-        searchBox.setHintTextColor(MUTED);
-        searchBox.setHint("Search title, artist or song number");
-        searchBox.setTextSize(16);
-        searchBox.setPadding(dp(12), 0, dp(12), 0);
-        searchBox.setBackgroundColor(PANEL);
-        root.addView(searchBox, fullWidth(dp(50)));
-
-        searchBox.addTextChangedListener(new android.text.TextWatcher() {
+        searchInput.addTextChangedListener(new android.text.TextWatcher() {
             @Override
             public void beforeTextChanged(
                     CharSequence s, int start, int count, int after) {
@@ -136,95 +158,90 @@ public class Stage3SongbookActivity extends Activity {
             @Override
             public void onTextChanged(
                     CharSequence s, int start, int before, int count) {
-                renderSongs();
+                renderSongs(s.toString());
             }
 
             @Override
-            public void afterTextChanged(android.text.Editable s) {
+            public void afterTextChanged(
+                    android.text.Editable s) {
             }
         });
-
-        countText = text("0 SONGS", 14, GREEN, true);
-        countText.setPadding(0, dp(18), 0, dp(10));
-        root.addView(countText, matchWrap());
-
-        songList = new LinearLayout(this);
-        songList.setOrientation(LinearLayout.VERTICAL);
-        root.addView(songList, matchWrap());
-
-        emptyText = text(
-                "Your songbook is ready.\n\n"
-                        + "Tap IMPORT SONG FILES to add songs from your phone.\n"
-                        + "Tap ADD TO QUEUE to prepare a song.",
-                15, MUTED, false
-        );
-        emptyText.setGravity(Gravity.CENTER);
-        emptyText.setPadding(dp(12), dp(30), dp(12), dp(30));
-        root.addView(emptyText, matchWrap());
-
-        Button backButton = button("BACK");
-        LinearLayout.LayoutParams backParams = fullWidth(dp(48));
-        backParams.topMargin = dp(20);
-        root.addView(backButton, backParams);
-        backButton.setOnClickListener(v -> finish());
     }
 
-    private void chooseFiles() {
+    private Button makeButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setAllCaps(false);
+        button.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(
+                        Color.rgb(20, 125, 65)));
+        return button;
+    }
+
+    private LinearLayout.LayoutParams buttonParams() {
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, dp(48));
+        params.bottomMargin = dp(8);
+        return params;
+    }
+
+    private void chooseSongs() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
 
         try {
-            startActivityForResult(intent, PICK_FILES);
+            startActivityForResult(intent, REQUEST_IMPORT_SONGS);
         } catch (Exception e) {
-            Toast.makeText(
-                    this,
+            Toast.makeText(this,
                     "Unable to open the file picker.",
-                    Toast.LENGTH_LONG
-            ).show();
+                    Toast.LENGTH_LONG).show();
         }
     }
 
     @Override
     protected void onActivityResult(
             int requestCode, int resultCode, Intent data) {
-
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (requestCode != PICK_FILES
+        if (requestCode != REQUEST_IMPORT_SONGS
                 || resultCode != RESULT_OK
                 || data == null) {
             return;
         }
 
-        int added = 0;
+        int imported = 0;
 
         if (data.getClipData() != null) {
             android.content.ClipData clip = data.getClipData();
 
             for (int i = 0; i < clip.getItemCount(); i++) {
-                if (importFile(clip.getItemAt(i).getUri())) {
-                    added++;
+                Uri uri = clip.getItemAt(i).getUri();
+                if (importSong(uri, data.getFlags())) {
+                    imported++;
                 }
             }
         } else if (data.getData() != null) {
-            if (importFile(data.getData())) {
-                added++;
+            if (importSong(data.getData(), data.getFlags())) {
+                imported++;
             }
         }
 
         saveSongs();
-        renderSongs();
+        renderSongs(searchInput == null
+                ? "" : searchInput.getText().toString());
 
-        Toast.makeText(
-                this,
-                added + " file(s) added to the songbook.",
-                Toast.LENGTH_LONG
-        ).show();
+        Toast.makeText(this,
+                imported + " song file(s) imported.",
+                Toast.LENGTH_LONG).show();
     }
 
-    private boolean importFile(Uri uri) {
+    private boolean importSong(Uri uri, int flags) {
         if (uri == null) {
             return false;
         }
@@ -237,325 +254,186 @@ public class Stage3SongbookActivity extends Activity {
             }
         }
 
-        String filename = getDisplayName(uri);
-
-        if (filename == null || filename.trim().isEmpty()) {
-            filename = "Untitled song";
-        }
-
-        String extension = getExtension(filename);
+        String fileName = getFileName(uri);
+        String extension = getExtension(fileName);
 
         if (!isSupported(extension)) {
-            Toast.makeText(
-                    this,
-                    "Unsupported file: " + filename,
-                    Toast.LENGTH_SHORT
-            ).show();
+            Toast.makeText(this,
+                    "Unsupported file: " + fileName,
+                    Toast.LENGTH_SHORT).show();
             return false;
         }
 
         try {
+            int permissionFlags = flags
+                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
             getContentResolver().takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    uri, permissionFlags
             );
         } catch (Exception ignored) {
-            // Some providers do not support persistent URI permission.
+            // Some document providers do not grant persistable access.
         }
 
-        String title = removeExtension(filename);
-        String number = nextSongNumber();
+        String type = getType(extension);
+        String number = generateNumber();
 
-        songs.add(new Song(
-                number,
-                title,
-                extension.toUpperCase(Locale.ROOT),
-                uriString
-        ));
-
+        songs.add(new Song(number, fileName, uriString, type));
         return true;
     }
 
-    private String getDisplayName(Uri uri) {
+    private String getFileName(Uri uri) {
+        String name = null;
         Cursor cursor = null;
 
         try {
             cursor = getContentResolver().query(
-                    uri, null, null, null, null
+                    uri,
+                    null,
+                    null,
+                    null,
+                    null
             );
 
             if (cursor != null && cursor.moveToFirst()) {
                 int index = cursor.getColumnIndex(
-                        OpenableColumns.DISPLAY_NAME
-                );
+                        OpenableColumns.DISPLAY_NAME);
 
                 if (index >= 0) {
-                    return cursor.getString(index);
+                    name = cursor.getString(index);
                 }
             }
-        } catch (Exception e) {
-            android.util.Log.w(
-                    "Donut4UStage3",
-                    "Could not read filename",
-                    e
-            );
+        } catch (Exception ignored) {
         } finally {
             if (cursor != null) {
                 cursor.close();
             }
         }
 
-        return null;
+        if (name == null || name.trim().isEmpty()) {
+            name = uri.getLastPathSegment();
+        }
+
+        if (name == null || name.trim().isEmpty()) {
+            name = "Untitled song";
+        }
+
+        return name;
     }
 
-    private String getExtension(String filename) {
-        int dot = filename.lastIndexOf('.');
-
-        if (dot < 0 || dot == filename.length() - 1) {
+    private String getExtension(String name) {
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) {
             return "";
         }
 
-        return filename.substring(dot + 1).toLowerCase(Locale.ROOT);
-    }
-
-    private String removeExtension(String filename) {
-        int dot = filename.lastIndexOf('.');
-        return dot > 0 ? filename.substring(0, dot) : filename;
+        return name.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
     private boolean isSupported(String extension) {
-        return extension.equals("mid")
-                || extension.equals("midi")
-                || extension.equals("kar")
-                || extension.equals("mp3")
-                || extension.equals("lrc")
-                || extension.equals("mp4")
-                || extension.equals("mkv")
-                || extension.equals("webm")
-                || extension.equals("sf2");
-    }
-
-    private String nextSongNumber() {
-        int highest = 0;
-
-        for (Song song : songs) {
-            try {
-                highest = Math.max(
-                        highest,
-                        Integer.parseInt(song.number)
-                );
-            } catch (NumberFormatException ignored) {
-            }
-        }
-
-        return String.format(Locale.ROOT, "%05d", highest + 1);
-    }
-
-    private void renderSongs() {
-        if (songList == null || searchBox == null) {
-            return;
-        }
-
-        songList.removeAllViews();
-
-        String query = searchBox.getText()
-                .toString()
-                .trim()
-                .toLowerCase(Locale.ROOT);
-
-        List<Song> filtered = new ArrayList<>();
-
-        for (Song song : songs) {
-            String combined = (
-                    song.number + " " + song.title + " " + song.type
-            ).toLowerCase(Locale.ROOT);
-
-            if (combined.contains(query)) {
-                filtered.add(song);
-            }
-        }
-
-        Collections.sort(filtered, new Comparator<Song>() {
-            @Override
-            public int compare(Song a, Song b) {
-                return a.number.compareTo(b.number);
-            }
-        });
-
-        countText.setText(
-                filtered.size() + " SONGS"
-                        + (query.isEmpty() ? "" : " FOUND")
-        );
-
-        emptyText.setVisibility(
-                filtered.isEmpty() ? View.VISIBLE : View.GONE
-        );
-
-        if (songs.isEmpty()) {
-            emptyText.setText(
-                    "Your songbook is ready.\n\n"
-                            + "Tap IMPORT SONG FILES to add songs from your phone."
-            );
-        } else if (filtered.isEmpty()) {
-            emptyText.setText("No matching songs. Try another search.");
-        }
-
-        for (Song song : filtered) {
-            addSongRow(song);
-        }
-    }
-
-    private void addSongRow(Song song) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackgroundColor(PANEL);
-
-        LinearLayout.LayoutParams cardParams = matchWrap();
-        cardParams.bottomMargin = dp(8);
-        songList.addView(card, cardParams);
-
-        TextView songTitle = text(
-                song.number + "   " + song.title,
-                16, WHITE, true
-        );
-        card.addView(songTitle, matchWrap());
-
-        TextView details = text(
-                song.type + " • LOCAL FILE",
-                12, MUTED, false
-        );
-        details.setPadding(0, dp(5), 0, dp(8));
-        card.addView(details, matchWrap());
-
-        Button addButton = button("ADD TO QUEUE");
-        card.addView(addButton, fullWidth(dp(44)));
-        addButton.setOnClickListener(v -> addToQueue(song));
-
-        Button openButton = button("OPEN FILE EXTERNALLY");
-        LinearLayout.LayoutParams openParams = fullWidth(dp(42));
-        openParams.topMargin = dp(6);
-        card.addView(openButton, openParams);
-        openButton.setOnClickListener(v -> openSong(song));
-    }
-
-    private void addToQueue(Song song) {
-        Stage3SongQueue.QueuedSong queuedSong =
-                new Stage3SongQueue.QueuedSong(
-                        song.number,
-                        song.title,
-                        song.uri,
-                        song.type
-                );
-
-        if (Stage3SongQueue.containsUri(song.uri)) {
-            Toast.makeText(
-                    this,
-                    "This song is already in the queue or playing.",
-                    Toast.LENGTH_SHORT
-            ).show();
-            return;
-        }
-
-        if (Stage3SongQueue.add(queuedSong)) {
-            Toast.makeText(
-                    this,
-                    song.title + " added to queue.",
-                    Toast.LENGTH_SHORT
-            ).show();
-        } else {
-            Toast.makeText(
-                    this,
-                    "Could not add this song to the queue.",
-                    Toast.LENGTH_SHORT
-            ).show();
-        }
-    }
-
-    private void openQueue() {
-        try {
-            startActivity(new Intent(
-                    this, Stage3QueueActivity.class
-            ));
-        } catch (Exception e) {
-            Toast.makeText(
-                    this,
-                    "Unable to open the queue screen.",
-                    Toast.LENGTH_LONG
-            ).show();
-        }
-    }
-
-    private void openSong(Song song) {
-        try {
-            Uri uri = Uri.parse(song.uri);
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(uri, mimeType(song.type));
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
-            startActivity(Intent.createChooser(
-                    intent, "Open " + song.title
-            ));
-        } catch (Exception e) {
-            Toast.makeText(
-                    this,
-                    "No compatible app was found to open this file.",
-                    Toast.LENGTH_LONG
-            ).show();
-        }
-    }
-
-    private String mimeType(String type) {
-        switch (type.toLowerCase(Locale.ROOT)) {
+        switch (extension) {
             case "mid":
             case "midi":
             case "kar":
-                return "audio/midi";
             case "mp3":
-                return "audio/mpeg";
+            case "wav":
+            case "ogg":
+            case "m4a":
+            case "aac":
             case "lrc":
-                return "text/plain";
             case "mp4":
-                return "video/mp4";
             case "mkv":
-                return "video/x-matroska";
             case "webm":
-                return "video/webm";
             case "sf2":
-                return "application/octet-stream";
+                return true;
             default:
-                return "*/*";
+                return false;
         }
+    }
+
+    private String getType(String extension) {
+        switch (extension) {
+            case "mid":
+            case "midi":
+            case "kar":
+                return "MIDI/KAR";
+
+            case "lrc":
+                return "LYRICS";
+
+            case "sf2":
+                return "SOUNDFONT";
+
+            case "mp4":
+            case "mkv":
+            case "webm":
+                return "VIDEO";
+
+            default:
+                return "AUDIO";
+        }
+    }
+
+    private String generateNumber() {
+        String candidate;
+
+        do {
+            candidate = String.format(
+                    Locale.US, "%05d", nextNumber);
+            nextNumber++;
+
+            if (nextNumber > 99999) {
+                nextNumber = 10000;
+            }
+        } while (numberExists(candidate));
+
+        return candidate;
+    }
+
+    private boolean numberExists(String number) {
+        for (Song song : songs) {
+            if (song.number.equals(number)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void loadSongs() {
         songs.clear();
 
-        SharedPreferences prefs = getSharedPreferences(
-                PREFS, MODE_PRIVATE
-        );
-
-        String saved = prefs.getString(SONGS_KEY, "[]");
+        String saved = preferences.getString(SONGS_KEY, "[]");
 
         try {
             JSONArray array = new JSONArray(saved);
 
             for (int i = 0; i < array.length(); i++) {
-                JSONObject item = array.getJSONObject(i);
+                JSONObject object = array.getJSONObject(i);
 
-                songs.add(new Song(
-                        item.optString("number", ""),
-                        item.optString("title", ""),
-                        item.optString("type", ""),
-                        item.optString("uri", "")
-                ));
+                String number = object.optString("number", "");
+                String title = object.optString("title", "");
+                String uri = object.optString("uri", "");
+                String type = object.optString("type", "AUDIO");
+
+                if (!number.isEmpty()
+                        && !title.isEmpty()
+                        && !uri.isEmpty()) {
+                    songs.add(new Song(number, title, uri, type));
+
+                    try {
+                        int numeric = Integer.parseInt(number);
+                        if (numeric >= nextNumber) {
+                            nextNumber = numeric + 1;
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
             }
         } catch (Exception e) {
-            android.util.Log.e(
-                    "Donut4UStage3",
-                    "Could not load songbook",
-                    e
-            );
+            Toast.makeText(this,
+                    "The saved songbook could not be read.",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
@@ -564,73 +442,208 @@ public class Stage3SongbookActivity extends Activity {
 
         try {
             for (Song song : songs) {
-                JSONObject item = new JSONObject();
-                item.put("number", song.number);
-                item.put("title", song.title);
-                item.put("type", song.type);
-                item.put("uri", song.uri);
-                array.put(item);
+                JSONObject object = new JSONObject();
+                object.put("number", song.number);
+                object.put("title", song.title);
+                object.put("uri", song.uri);
+                object.put("type", song.type);
+                array.put(object);
             }
 
-            getSharedPreferences(PREFS, MODE_PRIVATE)
-                    .edit()
+            preferences.edit()
                     .putString(SONGS_KEY, array.toString())
                     .apply();
 
         } catch (Exception e) {
-            Toast.makeText(
-                    this,
+            Toast.makeText(this,
                     "Could not save the songbook.",
-                    Toast.LENGTH_LONG
-            ).show();
+                    Toast.LENGTH_LONG).show();
         }
     }
 
-    private TextView text(
-            String value, int size, int color, boolean bold) {
-
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(size);
-        view.setTextColor(color);
-
-        if (bold) {
-            view.setTypeface(null, Typeface.BOLD);
+    private void renderSongs(String query) {
+        if (songList == null || countLabel == null) {
+            return;
         }
 
-        return view;
+        songList.removeAllViews();
+
+        String search = query == null
+                ? "" : query.trim().toLowerCase(Locale.ROOT);
+
+        int shown = 0;
+
+        for (Song song : songs) {
+            String searchable = (
+                    song.number + " " + song.title + " " + song.type
+            ).toLowerCase(Locale.ROOT);
+
+            if (!search.isEmpty() && !searchable.contains(search)) {
+                continue;
+            }
+
+            shown++;
+            songList.addView(createSongCard(song));
+        }
+
+        countLabel.setText(
+                "SONGS: " + songs.size() + "   |   SHOWING: " + shown);
+
+        if (shown == 0) {
+            TextView empty = new TextView(this);
+            empty.setText(songs.isEmpty()
+                    ? "No songs imported yet.\nTap IMPORT SONGS FROM DEVICE."
+                    : "No matching songs found.");
+            empty.setTextColor(Color.LTGRAY);
+            empty.setTextSize(15);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(12), dp(24), dp(12), dp(24));
+            songList.addView(empty);
+        }
     }
 
-    private Button button(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextColor(BG);
-        button.setTextSize(14);
-        button.setTypeface(null, Typeface.BOLD);
-        button.setAllCaps(false);
-        button.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(GREEN)
-        );
-        return button;
+    private View createSongCard(Song song) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        card.setBackgroundColor(Color.rgb(25, 39, 30));
+
+        LinearLayout.LayoutParams cardParams =
+                new LinearLayout.LayoutParams(-1, -2);
+        cardParams.bottomMargin = dp(8);
+        card.setLayoutParams(cardParams);
+
+        TextView number = new TextView(this);
+        number.setText(song.number + "  •  " + song.type);
+        number.setTextColor(Color.rgb(90, 255, 155));
+        number.setTextSize(14);
+        number.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        card.addView(number);
+
+        TextView title = new TextView(this);
+        title.setText(song.title);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(16);
+        title.setPadding(0, dp(4), 0, dp(8));
+        card.addView(title);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button addButton = makeButton("ADD TO QUEUE");
+        addButton.setTextSize(12);
+        addButton.setOnClickListener(v -> {
+            Stage3SongQueue.initialize(this);
+
+            if (Stage3SongQueue.containsUri(song.uri)) {
+                Toast.makeText(this,
+                        "This song is already in the queue.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            Stage3SongQueue.add(
+                    new Stage3SongQueue.QueuedSong(
+                            song.number,
+                            song.title,
+                            song.uri,
+                            song.type
+                    )
+            );
+
+            Toast.makeText(this,
+                    "Added " + song.number + " to queue.",
+                    Toast.LENGTH_SHORT).show();
+        });
+
+        Button openButton = makeButton("OPEN FILE");
+        openButton.setTextSize(12);
+        openButton.setOnClickListener(v -> openSong(song));
+
+        LinearLayout.LayoutParams half =
+                new LinearLayout.LayoutParams(0, dp(44), 1f);
+        half.setMargins(0, 0, dp(6), 0);
+        buttons.addView(addButton, half);
+
+        LinearLayout.LayoutParams otherHalf =
+                new LinearLayout.LayoutParams(0, dp(44), 1f);
+        buttons.addView(openButton, otherHalf);
+
+        card.addView(buttons);
+        return card;
     }
 
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
+    private void openSong(Song song) {
+        try {
+            Uri uri = Uri.parse(song.uri);
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, getMimeType(song.title));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(intent);
+        } catch (Exception e) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Unable to open file")
+                    .setMessage(
+                            "No compatible app could open this file. " +
+                            "The file remains in your songbook.")
+                    .setPositiveButton("OK", null)
+                    .show();
+        }
     }
 
-    private LinearLayout.LayoutParams fullWidth(int height) {
-        return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                height
-        );
+    private String getMimeType(String fileName) {
+        String extension = getExtension(fileName);
+
+        switch (extension) {
+            case "mid":
+            case "midi":
+                return "audio/midi";
+
+            case "kar":
+                return "audio/midi";
+
+            case "mp3":
+                return "audio/mpeg";
+
+            case "wav":
+                return "audio/wav";
+
+            case "ogg":
+                return "audio/ogg";
+
+            case "m4a":
+                return "audio/mp4";
+
+            case "aac":
+                return "audio/aac";
+
+            case "mp4":
+                return "video/mp4";
+
+            case "mkv":
+                return "video/x-matroska";
+
+            case "webm":
+                return "video/webm";
+
+            case "lrc":
+                return "text/plain";
+
+            case "sf2":
+                return "application/octet-stream";
+
+            default:
+                return "*/*";
+        }
     }
 
-    private int dp(int value) {
-        return Math.round(
-                value * getResources().getDisplayMetrics().density
-        );
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (songList != null && searchInput != null) {
+            Stage3SongQueue.initialize(this);
+            renderSongs(searchInput.getText().toString());
+        }
     }
 }
