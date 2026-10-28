@@ -99,8 +99,22 @@ public class Stage3SongbookActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(12));
         root.addView(subtitle);
 
+        // CONNECT SONGHUB LIBRARY now opens the in-app connection screen.
         Button songHubButton = makeButton("CONNECT SONGHUB LIBRARY");
-        songHubButton.setOnClickListener(v -> chooseSongHubFolder());
+        songHubButton.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3SongHubRemoteActivity.class));
+            } catch (Exception e) {
+                android.util.Log.e("Stage3Songbook",
+                        "Could not open SongHub connection.", e);
+
+                Toast.makeText(Stage3SongbookActivity.this,
+                        "Could not open SongHub connection.",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
         root.addView(songHubButton, buttonParams());
 
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
@@ -469,10 +483,6 @@ public class Stage3SongbookActivity extends Activity {
                         && entry.blobOffsetSectors >= 0
                         && entry.blobLengthSectors > 0) {
 
-                    /*
-                     * Stage3PlayerActivity reads these query parameters.
-                     * The blob URI is encoded by Uri.Builder automatically.
-                     */
                     catalogUri = new Uri.Builder()
                             .scheme("songhub-midi")
                             .authority("play")
