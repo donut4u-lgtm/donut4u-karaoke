@@ -25,7 +25,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Locale;
@@ -119,46 +118,40 @@ public class Stage3SongbookActivity extends Activity {
             try {
                 startActivity(new Intent(
                         Stage3SongbookActivity.this,
-                        Stage3KaraokeMakerActivity.class
-                ));
+                        Stage3KaraokeMakerActivity.class));
             } catch (Exception e) {
-                Toast.makeText(
-                        Stage3SongbookActivity.this,
+                Toast.makeText(this,
                         "Could not open Karaoke Maker.",
-                        Toast.LENGTH_LONG
-                ).show();
+                        Toast.LENGTH_LONG).show();
             }
         });
         root.addView(makeKaraokeButton, buttonParams());
 
         Button queueButton = makeButton("OPEN SONG QUEUE");
         queueButton.setOnClickListener(v -> {
-            Stage3SongQueue.initialize(this);
             try {
+                Stage3SongQueue.initialize(this);
                 startActivity(new Intent(
                         Stage3SongbookActivity.this,
-                        Stage3QueueActivity.class
-                ));
+                        Stage3QueueActivity.class));
             } catch (Exception e) {
-                Toast.makeText(
-                        this,
+                Toast.makeText(this,
                         "Could not open the song queue.",
-                        Toast.LENGTH_LONG
-                ).show();
+                        Toast.LENGTH_LONG).show();
             }
         });
         root.addView(queueButton, buttonParams());
 
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
-        searchInput.setHint("Search song number, title or artist");
+        searchInput.setHint("Search song number, title or singer");
         searchInput.setHintTextColor(Color.LTGRAY);
         searchInput.setTextColor(Color.WHITE);
         searchInput.setTextSize(16);
         searchInput.setPadding(dp(12), 0, dp(12), 0);
         searchInput.setBackgroundColor(Color.rgb(35, 48, 40));
-        root.addView(searchInput, new LinearLayout.LayoutParams(
-                -1, dp(48)));
+        root.addView(searchInput,
+                new LinearLayout.LayoutParams(-1, dp(48)));
 
         countLabel = new TextView(this);
         countLabel.setTextColor(Color.rgb(140, 255, 180));
@@ -173,8 +166,7 @@ public class Stage3SongbookActivity extends Activity {
         songList.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(songList);
 
-        root.addView(scroll, new LinearLayout.LayoutParams(
-                -1, 0, 1f));
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         Button backButton = makeButton("BACK");
         backButton.setOnClickListener(v -> finish());
@@ -182,23 +174,41 @@ public class Stage3SongbookActivity extends Activity {
 
         setContentView(root);
 
-        searchInput.addTextChangedListener(
-                new android.text.TextWatcher() {
-                    @Override
-                    public void beforeTextChanged(
-                            CharSequence s, int start, int count, int after) {
-                    }
+        searchInput.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(
+                    CharSequence s, int start, int count, int after) {
+            }
 
-                    @Override
-                    public void onTextChanged(
-                            CharSequence s, int start, int before, int count) {
-                        renderSongs(s.toString());
-                    }
+            @Override
+            public void onTextChanged(
+                    CharSequence s, int start, int before, int count) {
+                renderSongs(s.toString());
+            }
 
-                    @Override
-                    public void afterTextChanged(android.text.Editable s) {
-                    }
-                });
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
+    }
+
+    private Button makeButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setAllCaps(false);
+        button.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(
+                        Color.rgb(20, 125, 65)));
+        return button;
+    }
+
+    private LinearLayout.LayoutParams buttonParams() {
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, dp(48));
+        params.bottomMargin = dp(8);
+        return params;
     }
 
     private void chooseSongHubFolder() {
@@ -207,40 +217,90 @@ public class Stage3SongbookActivity extends Activity {
         intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
 
         try {
-            startActivityForResult(intent, REQUEST_IMPORT_SONGHUB_FOLDER);
+            startActivityForResult(
+                    intent, REQUEST_IMPORT_SONGHUB_FOLDER);
         } catch (Exception e) {
-            Toast.makeText(
-                    this,
+            Toast.makeText(this,
                     "Unable to open folder picker.",
-                    Toast.LENGTH_LONG
-            ).show();
+                    Toast.LENGTH_LONG).show();
         }
     }
 
-    private int importSongHubFolder(Uri treeUri) {
+    @Override
+    protected void onActivityResult(
+            int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (resultCode != RESULT_OK || data == null) {
+            return;
+        }
+
+        if (requestCode == REQUEST_IMPORT_SONGHUB_FOLDER) {
+            Uri treeUri = data.getData();
+            if (treeUri == null) {
+                return;
+            }
+
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {
+            }
+
+            int imported = scanSongHubFolder(treeUri, treeUri);
+
+            saveSongs();
+            renderSongs(searchInput == null
+                    ? "" : searchInput.getText().toString());
+
+            Toast.makeText(this,
+                    imported + " SongHub catalog/media item(s) imported.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (requestCode == REQUEST_IMPORT_SONGLIST) {
+            Uri spreadsheet = data.getData();
+            if (spreadsheet != null) {
+                importSongbookSpreadsheet(spreadsheet);
+            }
+            return;
+        }
+
+        if (requestCode != REQUEST_IMPORT_SONGS) {
+            return;
+        }
+
         int imported = 0;
 
-        try {
-            getContentResolver().takePersistableUriPermission(
-                    treeUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-            );
+        if (data.getClipData() != null) {
+            android.content.ClipData clip = data.getClipData();
 
-            imported = scanSongHubFolder(treeUri, treeUri);
-
-        } catch (Exception e) {
-            Toast.makeText(
-                    this,
-                    "Folder scan failed: "
-                            + (e.getMessage() == null
-                            ? "Unknown error" : e.getMessage()),
-                    Toast.LENGTH_LONG
-            ).show();
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                if (importSong(clip.getItemAt(i).getUri(), data.getFlags())) {
+                    imported++;
+                }
+            }
+        } else if (data.getData() != null) {
+            if (importSong(data.getData(), data.getFlags())) {
+                imported++;
+            }
         }
 
-        return imported;
+        saveSongs();
+        renderSongs(searchInput == null
+                ? "" : searchInput.getText().toString());
+
+        Toast.makeText(this,
+                imported + " media file(s) imported.",
+                Toast.LENGTH_LONG).show();
     }
 
+    /*
+     * Scans the selected tree. When shubidx is found, it looks for
+     * shubblob beside that index and stores the blob URI and sector
+     * references with each catalog entry.
+     */
     private int scanSongHubFolder(Uri treeUri, Uri folderUri) {
         int imported = 0;
 
@@ -287,44 +347,96 @@ public class Stage3SongbookActivity extends Activity {
 
                     if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
                         imported += scanSongHubFolder(treeUri, childUri);
+                        continue;
+                    }
 
-                    } else if (name != null
-                            && "shubidx".equalsIgnoreCase(name)) {
-                        imported += importSongHubIndex(childUri);
+                    if (name == null) {
+                        continue;
+                    }
 
-                    } else if (name != null
-                            && isSupported(getExtension(name))) {
-                        if (importSong(
-                                childUri,
+                    if ("shubidx".equalsIgnoreCase(name)) {
+                        Uri blobUri = findSiblingBlob(treeUri, folderUri);
+                        imported += importSongHubIndex(childUri, blobUri);
+
+                    } else if (isSupported(getExtension(name))) {
+                        if (importSong(childUri,
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
                             imported++;
                         }
                     }
+                    // shubblob is data storage, not a standalone song.
                 }
             }
         } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage3Songbook",
-                    "Could not scan folder: " + folderUri,
-                    e);
+            android.util.Log.e("Stage3Songbook",
+                    "Could not scan folder: " + folderUri, e);
         }
 
         return imported;
     }
 
-    /**
-     * Reads and parses the SongHub index file.
-     * This imports searchable catalog metadata only.
-     * It does not decrypt or extract protected blob contents.
-     */
-    private int importSongHubIndex(Uri indexUri) {
+    private Uri findSiblingBlob(Uri treeUri, Uri folderUri) {
+        try {
+            String documentId =
+                    DocumentsContract.getDocumentId(folderUri);
+
+            Uri childrenUri =
+                    DocumentsContract.buildChildDocumentsUriUsingTree(
+                            treeUri, documentId);
+
+            String[] columns = {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+            };
+
+            try (Cursor cursor = getContentResolver().query(
+                    childrenUri, columns, null, null, null)) {
+
+                if (cursor == null) {
+                    return null;
+                }
+
+                int idColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                int nameColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                int mimeColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_MIME_TYPE);
+
+                if (idColumn < 0 || nameColumn < 0 || mimeColumn < 0) {
+                    return null;
+                }
+
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(nameColumn);
+                    String mime = cursor.getString(mimeColumn);
+
+                    if (name != null
+                            && "shubblob".equalsIgnoreCase(name)
+                            && !DocumentsContract.Document.MIME_TYPE_DIR
+                            .equals(mime)) {
+                        return DocumentsContract.buildDocumentUriUsingTree(
+                                treeUri, cursor.getString(idColumn));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("Stage3Songbook",
+                    "Could not find sibling shubblob.", e);
+        }
+
+        return null;
+    }
+
+    private int importSongHubIndex(Uri indexUri, Uri blobUri) {
         int imported = 0;
 
         try (InputStream input =
                      getContentResolver().openInputStream(indexUri)) {
 
             if (input == null) {
-                throw new IOException("Cannot read shubidx.");
+                throw new Exception("Cannot read shubidx.");
             }
 
             ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -336,15 +448,13 @@ public class Stage3SongbookActivity extends Activity {
             }
 
             ArrayList<Stage3SongHubIndex.Entry> entries =
-                    new ArrayList<>(
-                            Stage3SongHubIndex.parse(output.toByteArray()));
+                    new ArrayList<>(Stage3SongHubIndex.parse(
+                            output.toByteArray()));
 
             if (entries.isEmpty()) {
-                Toast.makeText(
-                        this,
-                        "No catalog records were found in shubidx.",
-                        Toast.LENGTH_LONG
-                ).show();
+                Toast.makeText(this,
+                        "No catalog records found in shubidx.",
+                        Toast.LENGTH_LONG).show();
                 return 0;
             }
 
@@ -353,13 +463,40 @@ public class Stage3SongbookActivity extends Activity {
                         + " — " + entry.artist
                         + " [" + entry.genre + "]";
 
-                String catalogUri = "songhub-index://catalog/"
-                        + Uri.encode(entry.number) + "/"
-                        + Uri.encode(entry.title) + "/"
-                        + Uri.encode(entry.artist);
+                String catalogUri;
+
+                if (blobUri != null
+                        && entry.blobOffsetSectors >= 0
+                        && entry.blobLengthSectors > 0) {
+
+                    /*
+                     * Stage3PlayerActivity reads these query parameters.
+                     * The blob URI is encoded by Uri.Builder automatically.
+                     */
+                    catalogUri = new Uri.Builder()
+                            .scheme("songhub-midi")
+                            .authority("play")
+                            .appendQueryParameter(
+                                    "blob", blobUri.toString())
+                            .appendQueryParameter(
+                                    "offset",
+                                    String.valueOf(
+                                            entry.blobOffsetSectors))
+                            .appendQueryParameter(
+                                    "length",
+                                    String.valueOf(
+                                            entry.blobLengthSectors))
+                            .build()
+                            .toString();
+
+                } else {
+                    catalogUri = "songhub-index://catalog/"
+                            + Uri.encode(entry.number) + "/"
+                            + Uri.encode(entry.title) + "/"
+                            + Uri.encode(entry.artist);
+                }
 
                 boolean exists = false;
-
                 for (Song song : songs) {
                     if (catalogUri.equals(song.uri)) {
                         exists = true;
@@ -372,47 +509,23 @@ public class Stage3SongbookActivity extends Activity {
                             entry.number,
                             displayTitle,
                             catalogUri,
-                            "CATALOG"
-                    ));
+                            blobUri == null ? "CATALOG" : "MIDI/KAR"));
                     imported++;
                 }
             }
 
         } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage3Songbook",
-                    "Could not import shubidx catalog",
-                    e);
+            android.util.Log.e("Stage3Songbook",
+                    "Could not import SongHub index.", e);
 
-            Toast.makeText(
-                    this,
+            Toast.makeText(this,
                     "SongHub index import failed: "
                             + (e.getMessage() == null
                             ? "Unknown error" : e.getMessage()),
-                    Toast.LENGTH_LONG
-            ).show();
+                    Toast.LENGTH_LONG).show();
         }
 
         return imported;
-    }
-
-    private Button makeButton(String text) {
-        Button button = new Button(this);
-        button.setText(text);
-        button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
-        button.setAllCaps(false);
-        button.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(
-                        Color.rgb(20, 125, 65)));
-        return button;
-    }
-
-    private LinearLayout.LayoutParams buttonParams() {
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(-1, dp(48));
-        params.bottomMargin = dp(8);
-        return params;
     }
 
     private void chooseSongs() {
@@ -452,77 +565,6 @@ public class Stage3SongbookActivity extends Activity {
         }
     }
 
-    @Override
-    protected void onActivityResult(
-            int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        if (requestCode == REQUEST_IMPORT_SONGHUB_FOLDER) {
-            if (resultCode != RESULT_OK || data == null
-                    || data.getData() == null) {
-                return;
-            }
-
-            int imported = importSongHubFolder(data.getData());
-
-            saveSongs();
-            renderSongs(searchInput == null
-                    ? "" : searchInput.getText().toString());
-
-            Toast.makeText(this,
-                    imported + " catalog or media item(s) imported.",
-                    Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        if (resultCode != RESULT_OK || data == null) {
-            return;
-        }
-
-        if (requestCode == REQUEST_IMPORT_SONGLIST) {
-            Uri spreadsheet = data.getData();
-
-            if (spreadsheet == null) {
-                Toast.makeText(this,
-                        "No spreadsheet was selected.",
-                        Toast.LENGTH_LONG).show();
-                return;
-            }
-
-            importSongbookSpreadsheet(spreadsheet);
-            return;
-        }
-
-        if (requestCode != REQUEST_IMPORT_SONGS) {
-            return;
-        }
-
-        int imported = 0;
-
-        if (data.getClipData() != null) {
-            android.content.ClipData clip = data.getClipData();
-
-            for (int i = 0; i < clip.getItemCount(); i++) {
-                Uri uri = clip.getItemAt(i).getUri();
-                if (importSong(uri, data.getFlags())) {
-                    imported++;
-                }
-            }
-        } else if (data.getData() != null) {
-            if (importSong(data.getData(), data.getFlags())) {
-                imported++;
-            }
-        }
-
-        saveSongs();
-        renderSongs(searchInput == null
-                ? "" : searchInput.getText().toString());
-
-        Toast.makeText(this,
-                imported + " media file(s) imported.",
-                Toast.LENGTH_LONG).show();
-    }
-
     private void importSongbookSpreadsheet(Uri uri) {
         int imported = 0;
         int duplicates = 0;
@@ -550,13 +592,13 @@ public class Stage3SongbookActivity extends Activity {
                     number = generateNumber();
                 }
 
-                String displayTitle = artist.isEmpty()
-                        ? title : title + " — " + artist;
-
                 if (catalogEntryExists(number, title, artist)) {
                     duplicates++;
                     continue;
                 }
+
+                String displayTitle = artist.isEmpty()
+                        ? title : title + " — " + artist;
 
                 String catalogUri = "songbook-xls://catalog/"
                         + Uri.encode(number) + "/"
@@ -569,27 +611,23 @@ public class Stage3SongbookActivity extends Activity {
             }
 
             saveSongs();
-            renderSongs(searchInput == null
-                    ? "" : searchInput.getText().toString());
+            renderSongs(searchInput.getText().toString());
 
             new AlertDialog.Builder(this)
                     .setTitle("Songbook import finished")
-                    .setMessage(
-                            "Imported: " + imported
-                                    + "\nDuplicates skipped: " + duplicates
-                                    + "\n\nThese entries contain songbook "
-                                    + "information only. They do not include "
-                                    + "the actual karaoke music files.")
+                    .setMessage("Imported: " + imported
+                            + "\nDuplicates skipped: " + duplicates
+                            + "\n\nSpreadsheet entries contain song "
+                            + "information only, not the actual music.")
                     .setPositiveButton("OK", null)
                     .show();
 
         } catch (Exception e) {
             new AlertDialog.Builder(this)
                     .setTitle("Spreadsheet import failed")
-                    .setMessage(
-                            "Could not read this XLS/XLSX file.\n\nDetails: "
-                                    + (e.getMessage() == null
-                                    ? "Unknown error" : e.getMessage()))
+                    .setMessage("Could not read this XLS/XLSX file.\n\n"
+                            + (e.getMessage() == null
+                            ? "Unknown error" : e.getMessage()))
                     .setPositiveButton("OK", null)
                     .show();
         }
@@ -607,7 +645,7 @@ public class Stage3SongbookActivity extends Activity {
         String wantedArtist = clean(artist).toLowerCase(Locale.ROOT);
 
         for (Song song : songs) {
-            if (!"CATALOG".equals(song.type)) {
+            if (!"CATALOG".equalsIgnoreCase(song.type)) {
                 continue;
             }
 
@@ -618,8 +656,8 @@ public class Stage3SongbookActivity extends Activity {
 
             String savedTitle = song.title.trim();
             String savedArtist = "";
-
             int separator = savedTitle.lastIndexOf(" — ");
+
             if (separator >= 0) {
                 savedArtist = savedTitle.substring(separator + 3).trim();
                 savedTitle = savedTitle.substring(0, separator).trim();
@@ -671,10 +709,11 @@ public class Stage3SongbookActivity extends Activity {
         } catch (Exception ignored) {
         }
 
-        String type = getType(extension);
-        String number = generateNumber();
-
-        songs.add(new Song(number, fileName, uriString, type));
+        songs.add(new Song(
+                generateNumber(),
+                fileName,
+                uriString,
+                getType(extension)));
         return true;
     }
 
@@ -703,10 +742,9 @@ public class Stage3SongbookActivity extends Activity {
         if (name == null || name.trim().isEmpty()) {
             name = uri.getLastPathSegment();
         }
-        if (name == null || name.trim().isEmpty()) {
-            name = "Untitled song";
-        }
-        return name;
+
+        return name == null || name.trim().isEmpty()
+                ? "Untitled song" : name;
     }
 
     private String getExtension(String name) {
@@ -759,10 +797,9 @@ public class Stage3SongbookActivity extends Activity {
 
     private String generateNumber() {
         String candidate;
-        do {
-            candidate = String.format(Locale.US, "%05d", nextNumber);
-            nextNumber++;
 
+        do {
+            candidate = String.format(Locale.US, "%05d", nextNumber++);
             if (nextNumber > 99999) {
                 nextNumber = 10000;
             }
@@ -782,10 +819,10 @@ public class Stage3SongbookActivity extends Activity {
 
     private void loadSongs() {
         songs.clear();
-        String saved = preferences.getString(SONGS_KEY, "[]");
 
         try {
-            JSONArray array = new JSONArray(saved);
+            JSONArray array = new JSONArray(
+                    preferences.getString(SONGS_KEY, "[]"));
 
             for (int i = 0; i < array.length(); i++) {
                 JSONObject object = array.getJSONObject(i);
@@ -850,11 +887,11 @@ public class Stage3SongbookActivity extends Activity {
                 ? "" : query.trim().toLowerCase(Locale.ROOT);
 
         int shown = 0;
-        int catalogCount = 0;
+        int catalogOnly = 0;
 
         for (Song song : songs) {
-            if ("CATALOG".equals(song.type)) {
-                catalogCount++;
+            if ("CATALOG".equalsIgnoreCase(song.type)) {
+                catalogOnly++;
             }
 
             String searchable = (
@@ -872,7 +909,7 @@ public class Stage3SongbookActivity extends Activity {
         countLabel.setText(
                 "ENTRIES: " + songs.size()
                         + "  |  SHOWING: " + shown
-                        + "  |  SONGLIST ONLY: " + catalogCount);
+                        + "  |  INFORMATION ONLY: " + catalogOnly);
 
         if (shown == 0) {
             TextView empty = new TextView(this);
@@ -919,16 +956,13 @@ public class Stage3SongbookActivity extends Activity {
                 || song.title.toLowerCase(Locale.ROOT).endsWith(".lrc");
 
         if (catalog) {
-            addNote(card,
-                    "SONG INFORMATION ONLY • NO MEDIA FILE",
+            addNote(card, "SONG INFORMATION ONLY • NO MEDIA LINK",
                     Color.rgb(255, 210, 110));
         } else if (soundFont) {
-            addNote(card,
-                    "SOUNDFONT • INSTRUMENT BANK FOR MIDI/KAR",
+            addNote(card, "SOUNDFONT • MIDI/KAR INSTRUMENT BANK",
                     Color.rgb(140, 255, 180));
         } else if (lyricsFile) {
-            addNote(card,
-                    "LYRICS FILE • IMPORT THE MATCHING SONG",
+            addNote(card, "LYRICS FILE • IMPORT THE MATCHING SONG",
                     Color.rgb(255, 210, 110));
         }
 
@@ -956,12 +990,13 @@ public class Stage3SongbookActivity extends Activity {
                 return;
             }
 
-            Stage3SongQueue.add(
+            boolean added = Stage3SongQueue.add(
                     new Stage3SongQueue.QueuedSong(
                             song.number, song.title, song.uri, song.type));
 
             Toast.makeText(this,
-                    "Added " + song.number + " to queue.",
+                    added ? "Added " + song.number + " to queue."
+                            : "Could not add this song.",
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -986,9 +1021,8 @@ public class Stage3SongbookActivity extends Activity {
         half.setMargins(0, 0, dp(6), 0);
         buttons.addView(addButton, half);
 
-        LinearLayout.LayoutParams otherHalf =
-                new LinearLayout.LayoutParams(0, dp(44), 1f);
-        buttons.addView(openButton, otherHalf);
+        buttons.addView(openButton,
+                new LinearLayout.LayoutParams(0, dp(44), 1f));
 
         card.addView(buttons);
         return card;
@@ -1007,10 +1041,10 @@ public class Stage3SongbookActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Songbook entry")
                 .setMessage(
-                        "This entry is not a playable song file. "
-                                + "Import its matching media file. "
-                                + "SoundFonts are instruments for MIDI/KAR, "
-                                + "and LRC files contain lyrics.")
+                        "This entry contains song information only. "
+                                + "Import a matching playable media file. "
+                                + "SoundFonts are instruments for MIDI/KAR; "
+                                + "LRC files contain lyrics.")
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -1026,22 +1060,17 @@ public class Stage3SongbookActivity extends Activity {
 
         try {
             Stage3SongQueue.initialize(this);
-
             Stage3SongQueue.setNowPlaying(
                     new Stage3SongQueue.QueuedSong(
                             song.number, song.title, song.uri, song.type));
 
-            Intent intent = new Intent(
+            startActivity(new Intent(
                     Stage3SongbookActivity.this,
-                    Stage3PlayerActivity.class);
-
-            startActivity(intent);
+                    Stage3PlayerActivity.class));
 
         } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage3Songbook",
-                    "Could not launch built-in player",
-                    e);
+            android.util.Log.e("Stage3Songbook",
+                    "Could not launch built-in player.", e);
 
             Toast.makeText(this,
                     "Could not open Donut4U Stage 3.",
