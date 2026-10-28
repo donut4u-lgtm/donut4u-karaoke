@@ -24,6 +24,8 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Locale;
@@ -285,6 +287,11 @@ public class Stage3SongbookActivity extends Activity {
 
                     if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
                         imported += scanSongHubFolder(treeUri, childUri);
+
+                    } else if (name != null
+                            && "shubidx".equalsIgnoreCase(name)) {
+                        imported += importSongHubIndex(childUri);
+
                     } else if (name != null
                             && isSupported(getExtension(name))) {
                         if (importSong(
@@ -300,6 +307,90 @@ public class Stage3SongbookActivity extends Activity {
                     "Stage3Songbook",
                     "Could not scan folder: " + folderUri,
                     e);
+        }
+
+        return imported;
+    }
+
+    /**
+     * Reads and parses the SongHub index file.
+     * This imports searchable catalog metadata only.
+     * It does not decrypt or extract protected blob contents.
+     */
+    private int importSongHubIndex(Uri indexUri) {
+        int imported = 0;
+
+        try (InputStream input =
+                     getContentResolver().openInputStream(indexUri)) {
+
+            if (input == null) {
+                throw new IOException("Cannot read shubidx.");
+            }
+
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+
+            ArrayList<Stage3SongHubIndex.Entry> entries =
+                    new ArrayList<>(
+                            Stage3SongHubIndex.parse(output.toByteArray()));
+
+            if (entries.isEmpty()) {
+                Toast.makeText(
+                        this,
+                        "No catalog records were found in shubidx.",
+                        Toast.LENGTH_LONG
+                ).show();
+                return 0;
+            }
+
+            for (Stage3SongHubIndex.Entry entry : entries) {
+                String displayTitle = entry.title
+                        + " — " + entry.artist
+                        + " [" + entry.genre + "]";
+
+                String catalogUri = "songhub-index://catalog/"
+                        + Uri.encode(entry.number) + "/"
+                        + Uri.encode(entry.title) + "/"
+                        + Uri.encode(entry.artist);
+
+                boolean exists = false;
+
+                for (Song song : songs) {
+                    if (catalogUri.equals(song.uri)) {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists) {
+                    songs.add(new Song(
+                            entry.number,
+                            displayTitle,
+                            catalogUri,
+                            "CATALOG"
+                    ));
+                    imported++;
+                }
+            }
+
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage3Songbook",
+                    "Could not import shubidx catalog",
+                    e);
+
+            Toast.makeText(
+                    this,
+                    "SongHub index import failed: "
+                            + (e.getMessage() == null
+                            ? "Unknown error" : e.getMessage()),
+                    Toast.LENGTH_LONG
+            ).show();
         }
 
         return imported;
@@ -379,7 +470,7 @@ public class Stage3SongbookActivity extends Activity {
                     ? "" : searchInput.getText().toString());
 
             Toast.makeText(this,
-                    imported + " supported song file(s) imported.",
+                    imported + " catalog or media item(s) imported.",
                     Toast.LENGTH_LONG).show();
             return;
         }
