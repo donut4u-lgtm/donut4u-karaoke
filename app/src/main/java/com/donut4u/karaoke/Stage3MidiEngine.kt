@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 
 import dev.kotlinds.fluidsynthkmp.MidiFilePlayer
 
@@ -38,6 +39,21 @@ class Stage3MidiEngine private constructor(
 
     private var activeCallback: Callback? = null
     private var activeTask: Future<*>? = null
+
+    @Volatile
+    private var fallbackPpq: Long = 480L
+
+    @Volatile
+    private var fallbackBaseTick: Long = 0L
+
+    @Volatile
+    private var fallbackStartedAtMs: Long = 0L
+
+    @Volatile
+    private var fallbackPaused = true
+
+    @Volatile
+    private var lastNativeTick: Long = 0L
 
     companion object {
         private const val MIDI_DIRECTORY = "stage3_midi"
@@ -103,6 +119,12 @@ class Stage3MidiEngine private constructor(
                     )
                 }
 
+                fallbackPpq = readMidiPpq(midiFile).coerceAtLeast(1L)
+                fallbackBaseTick = 0L
+                fallbackStartedAtMs = 0L
+                fallbackPaused = false
+                lastNativeTick = 0L
+
                 val newPlayer = MidiFilePlayer(
                     soundFontFile.absolutePath,
                     midiFile.absolutePath
@@ -116,8 +138,13 @@ class Stage3MidiEngine private constructor(
                     midiPlayer = newPlayer
                 }
 
+                fallbackStartedAtMs = SystemClock.elapsedRealtime()
+
                 newPlayer.play {
                     mainHandler.post {
+                        fallbackBaseTick = getCurrentTick()
+                        fallbackPaused = true
+
                         if (!closed) {
                             activeCallback?.onFinished()
                         }
@@ -318,20 +345,106 @@ class Stage3MidiEngine private constructor(
         }
     }
 
+    @Synchronized
     fun pause() {
-        midiPlayer?.pause()
+        val position = getCurrentTick()
+
+        try {
+            midiPlayer?.pause()
+        } finally {
+            fallbackBaseTick = position
+            fallbackPaused = true
+        }
     }
 
+    @Synchronized
     fun resume() {
-        midiPlayer?.play()
+        val player = midiPlayer ?: return
+
+        fallbackBaseTick = getCurrentTick()
+        fallbackStartedAtMs = SystemClock.elapsedRealtime()
+        fallbackPaused = false
+
+        player.play()
     }
 
+    @Synchronized
     fun seekTo(tick: Long) {
-        midiPlayer?.seekTo(tick.coerceAtLeast(0L))
+        val target = tick.coerceAtLeast(0L)
+
+        midiPlayer?.seekTo(target)
+
+        fallbackBaseTick = target
+        fallbackStartedAtMs = SystemClock.elapsedRealtime()
+        fallbackPaused = false
+        lastNativeTick = 0L
     }
 
     fun getCurrentTick(): Long {
-        return midiPlayer?.currentTick ?: 0L
+        val player = midiPlayer ?: return 0L
+
+        val nativeTick = try {
+            player.currentTick.coerceAtLeast(0L)
+        } catch (_: Exception) {
+            0L
+        }
+
+        if (nativeTick > 0L) {
+            lastNativeTick = nativeTick
+            return nativeTick
+        }
+
+        if (fallbackPaused || !player.isPlaying) {
+            return fallbackBaseTick.coerceAtLeast(lastNativeTick)
+        }
+
+        val elapsedMs = (
+            SystemClock.elapsedRealtime() - fallbackStartedAtMs
+        ).coerceAtLeast(0L)
+
+        val estimatedAdvance = elapsedMs * fallbackPpq * 2L / 1000L
+
+        val estimatedTick = (fallbackBaseTick + estimatedAdvance)
+            .coerceAtLeast(lastNativeTick)
+
+        val duration = try {
+            player.durationTicks.coerceAtLeast(0L)
+        } catch (_: Exception) {
+            0L
+        }
+
+        return if (duration > 0L) {
+            estimatedTick.coerceAtMost(duration)
+        } else {
+            estimatedTick
+        }
+    }
+
+    private fun readMidiPpq(file: File): Long {
+        return try {
+            RandomAccessFile(file, "r").use { input ->
+                if (input.length() < 14L) return 480L
+
+                val header = ByteArray(14)
+                input.readFully(header)
+
+                if (String(header, 0, 4, Charsets.US_ASCII) != "MThd") {
+                    return 480L
+                }
+
+                val division =
+                    ((header[12].toInt() and 0xFF) shl 8) or
+                    (header[13].toInt() and 0xFF)
+
+                if ((division and 0x8000) != 0 || division == 0) {
+                    480L
+                } else {
+                    (division and 0x7FFF).toLong()
+                }
+            }
+        } catch (_: Exception) {
+            480L
+        }
     }
 
     fun getDurationTicks(): Long {
@@ -362,6 +475,10 @@ class Stage3MidiEngine private constructor(
         }
 
         midiPlayer = null
+        fallbackBaseTick = 0L
+        fallbackStartedAtMs = 0L
+        fallbackPaused = true
+        lastNativeTick = 0L
     }
 
     private fun copyUriToFile(
