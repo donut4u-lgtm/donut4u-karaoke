@@ -99,7 +99,6 @@ public class Stage3SongbookActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(12));
         root.addView(subtitle);
 
-        // CONNECT SONGHUB LIBRARY now opens the in-app connection screen.
         Button songHubButton = makeButton("CONNECT SONGHUB LIBRARY");
         songHubButton.setOnClickListener(v -> {
             try {
@@ -310,11 +309,6 @@ public class Stage3SongbookActivity extends Activity {
                 Toast.LENGTH_LONG).show();
     }
 
-    /*
-     * Scans the selected tree. When shubidx is found, it looks for
-     * shubblob beside that index and stores the blob URI and sector
-     * references with each catalog entry.
-     */
     private int scanSongHubFolder(Uri treeUri, Uri folderUri) {
         int imported = 0;
 
@@ -371,14 +365,12 @@ public class Stage3SongbookActivity extends Activity {
                     if ("shubidx".equalsIgnoreCase(name)) {
                         Uri blobUri = findSiblingBlob(treeUri, folderUri);
                         imported += importSongHubIndex(childUri, blobUri);
-
                     } else if (isSupported(getExtension(name))) {
                         if (importSong(childUri,
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
                             imported++;
                         }
                     }
-                    // shubblob is data storage, not a standalone song.
                 }
             }
         } catch (Exception e) {
@@ -498,7 +490,6 @@ public class Stage3SongbookActivity extends Activity {
                                             entry.blobLengthSectors))
                             .build()
                             .toString();
-
                 } else {
                     catalogUri = "songhub-index://catalog/"
                             + Uri.encode(entry.number) + "/"
@@ -1033,6 +1024,50 @@ public class Stage3SongbookActivity extends Activity {
 
         buttons.addView(openButton,
                 new LinearLayout.LayoutParams(0, dp(44), 1f));
+
+        // REMOVE appears only on SoundFont entries.
+        if (soundFont) {
+            Button removeButton = makeButton("REMOVE");
+            removeButton.setTextSize(12);
+            removeButton.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(
+                            Color.rgb(170, 45, 45)));
+
+            removeButton.setOnClickListener(v ->
+                    new AlertDialog.Builder(
+                            Stage3SongbookActivity.this)
+                            .setTitle("Remove SoundFont?")
+                            .setMessage(
+                                    "Remove this SoundFont entry from "
+                                            + "the Stage 3 songbook?\n\n"
+                                            + "This will not delete the "
+                                            + "original file in Downloads "
+                                            + "or Google Drive, and will "
+                                            + "not delete a cached copy "
+                                            + "used by the player.")
+                            .setNegativeButton("CANCEL", null)
+                            .setPositiveButton("REMOVE",
+                                    (dialog, which) -> {
+                                        songs.remove(song);
+                                        saveSongs();
+
+                                        renderSongs(searchInput == null
+                                                ? ""
+                                                : searchInput.getText()
+                                                .toString());
+
+                                        Toast.makeText(
+                                                Stage3SongbookActivity.this,
+                                                "SoundFont entry removed.",
+                                                Toast.LENGTH_SHORT).show();
+                                    })
+                            .show());
+
+            LinearLayout.LayoutParams removeParams =
+                    new LinearLayout.LayoutParams(0, dp(44), 1f);
+            removeParams.setMargins(dp(6), 0, 0, 0);
+            buttons.addView(removeButton, removeParams);
+        }
 
         card.addView(buttons);
         return card;
