@@ -5,7 +5,6 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 
 import dev.kotlinds.fluidsynthkmp.MidiFilePlayer
 
@@ -37,20 +36,11 @@ class Stage3MidiEngine private constructor(
     @Volatile
     private var closed = false
 
+    @Volatile
     private var activeCallback: Callback? = null
+
+    @Volatile
     private var activeTask: Future<*>? = null
-
-    @Volatile
-    private var fallbackPpq: Long = 480L
-
-    @Volatile
-    private var fallbackBaseTick: Long = 0L
-
-    @Volatile
-    private var fallbackStartedAtMs: Long = 0L
-
-    @Volatile
-    private var fallbackPaused = true
 
     @Volatile
     private var lastNativeTick: Long = 0L
@@ -113,17 +103,17 @@ class Stage3MidiEngine private constructor(
                     )
                 }
 
+                if (!isValidMidiFile(midiFile)) {
+                    throw IllegalStateException(
+                        "The selected file is not a valid standard MIDI/KAR file."
+                    )
+                }
+
                 if (!isValidSoundFont(soundFontFile)) {
                     throw IllegalStateException(
                         "The SoundFont is invalid. Import a valid .sf2 file."
                     )
                 }
-
-                fallbackPpq = readMidiPpq(midiFile).coerceAtLeast(1L)
-                fallbackBaseTick = 0L
-                fallbackStartedAtMs = 0L
-                fallbackPaused = false
-                lastNativeTick = 0L
 
                 val newPlayer = MidiFilePlayer(
                     soundFontFile.absolutePath,
@@ -137,30 +127,31 @@ class Stage3MidiEngine private constructor(
                     }
 
                     midiPlayer = newPlayer
+                    lastNativeTick = 0L
                 }
-
-                fallbackStartedAtMs = SystemClock.elapsedRealtime()
 
                 newPlayer.play {
                     mainHandler.post {
-                        val finalPosition = getCurrentTick()
-                        fallbackBaseTick = finalPosition
-                        lastNativeTick = maxOf(
-                            lastNativeTick,
-                            finalPosition
-                        )
-                        fallbackPaused = true
-
                         if (!closed) {
+                            val player = midiPlayer
+                            if (player != null) {
+                                try {
+                                    lastNativeTick =
+                                        player.currentTick.coerceAtLeast(0L)
+                                } catch (_: Exception) {
+                                    // Keep the last known position.
+                                }
+                            }
+
                             activeCallback?.onFinished()
                         }
                     }
                 }
 
                 mainHandler.post {
-                    if (!closed) {
+                    if (!closed && midiPlayer === newPlayer) {
                         activeCallback?.onReady(
-                            newPlayer.durationTicks
+                            newPlayer.durationTicks.coerceAtLeast(0L)
                         )
                     }
                 }
@@ -174,6 +165,28 @@ class Stage3MidiEngine private constructor(
                     }
                 }
             }
+        }
+    }
+
+    private fun isValidMidiFile(file: File): Boolean {
+        if (!file.exists() || file.length() < 14L) {
+            return false
+        }
+
+        return try {
+            RandomAccessFile(file, "r").use { input ->
+                val header = ByteArray(4)
+                input.readFully(header)
+
+                String(
+                    header,
+                    0,
+                    4,
+                    Charsets.US_ASCII
+                ) == "MThd"
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -205,7 +218,7 @@ class Stage3MidiEngine private constructor(
             if (!isValidSoundFont(temporary)) {
                 throw IllegalStateException(
                     "Google Drive did not return a valid SoundFont. " +
-                    "Check the file and its sharing permissions."
+                        "Check the file and its sharing permissions."
                 )
             }
 
@@ -243,6 +256,7 @@ class Stage3MidiEngine private constructor(
                 connectTimeout = 30000
                 readTimeout = 120000
                 instanceFollowRedirects = true
+
                 setRequestProperty(
                     "User-Agent",
                     "Mozilla/5.0 (Android) Donut4U-Karaoke"
@@ -264,7 +278,8 @@ class Stage3MidiEngine private constructor(
                         val firstPart =
                             cookie.substringBefore(";").trim()
 
-                        if (firstPart.isNotEmpty() &&
+                        if (
+                            firstPart.isNotEmpty() &&
                             !cookies.contains(firstPart)
                         ) {
                             cookies.add(firstPart)
@@ -276,7 +291,7 @@ class Stage3MidiEngine private constructor(
                 if (status !in 200..299) {
                     throw IllegalStateException(
                         "SoundFont download failed (HTTP $status). " +
-                        "Check Google Drive sharing permissions."
+                            "Check Google Drive sharing permissions."
                     )
                 }
 
@@ -297,15 +312,15 @@ class Stage3MidiEngine private constructor(
                     if (token == null || attempt >= 3) {
                         throw IllegalStateException(
                             "Google Drive returned a webpage instead " +
-                            "of the SoundFont file. Check that the link " +
-                            "is public and allows downloads."
+                                "of the SoundFont file. Check that the link " +
+                                "is public and allows downloads."
                         )
                     }
 
                     requestUrl =
                         "$baseUrl?export=download&confirm=" +
-                        URLEncoder.encode(token, "UTF-8") +
-                        "&id=$encodedId"
+                            URLEncoder.encode(token, "UTF-8") +
+                            "&id=$encodedId"
 
                     continue
                 }
@@ -353,12 +368,12 @@ class Stage3MidiEngine private constructor(
                         4,
                         Charsets.US_ASCII
                     ) == "RIFF" &&
-                    String(
-                        header,
-                        8,
-                        4,
-                        Charsets.US_ASCII
-                    ) == "sfbk"
+                        String(
+                            header,
+                            8,
+                            4,
+                            Charsets.US_ASCII
+                        ) == "sfbk"
                 }
             }
         } catch (_: Exception) {
@@ -373,130 +388,65 @@ class Stage3MidiEngine private constructor(
         try {
             midiPlayer?.pause()
         } finally {
-            fallbackBaseTick = position
-            lastNativeTick = maxOf(lastNativeTick, position)
-            fallbackPaused = true
+            lastNativeTick = position
         }
     }
 
     @Synchronized
     fun resume() {
         val player = midiPlayer ?: return
-
-        val position = getCurrentTick()
-
-        fallbackBaseTick = position
-        lastNativeTick = maxOf(lastNativeTick, position)
-        fallbackStartedAtMs = SystemClock.elapsedRealtime()
-        fallbackPaused = false
-
         player.play()
     }
 
     @Synchronized
     fun seekTo(tick: Long) {
         val target = tick.coerceAtLeast(0L)
+        val player = midiPlayer ?: return
 
-        midiPlayer?.seekTo(target)
+        player.seekTo(target)
 
-        fallbackBaseTick = target
         lastNativeTick = target
-        fallbackStartedAtMs = SystemClock.elapsedRealtime()
-        fallbackPaused = false
     }
 
     /**
-     * Uses the greatest observed playback position or an elapsed-time
-     * estimate so a stale native tick value cannot freeze the counter.
+     * Returns the player's actual MIDI tick position.
+     * No fixed-tempo estimate is used.
      */
+    @Synchronized
     fun getCurrentTick(): Long {
         val player = midiPlayer ?: return 0L
 
-        val nativeTick = try {
-            player.currentTick.coerceAtLeast(0L)
-        } catch (_: Exception) {
-            0L
-        }
-
-        if (fallbackPaused) {
-            val pausedPosition = maxOf(
-                fallbackBaseTick,
-                lastNativeTick,
-                nativeTick
-            )
-
-            lastNativeTick = pausedPosition
-            return pausedPosition
-        }
-
-        val elapsedMs = (
-            SystemClock.elapsedRealtime() - fallbackStartedAtMs
-        ).coerceAtLeast(0L)
-
-        val estimatedTick = fallbackBaseTick +
-            (elapsedMs * fallbackPpq * 2L / 1000L)
-
-        val currentPosition = maxOf(
-            nativeTick,
-            estimatedTick,
-            lastNativeTick
-        )
-
-        val duration = try {
-            player.durationTicks.coerceAtLeast(0L)
-        } catch (_: Exception) {
-            0L
-        }
-
-        val result = if (duration > 0L) {
-            currentPosition.coerceAtMost(duration)
-        } else {
-            currentPosition
-        }
-
-        lastNativeTick = result
-        return result
-    }
-
-    private fun readMidiPpq(file: File): Long {
         return try {
-            RandomAccessFile(file, "r").use { input ->
-                if (input.length() < 14L) return 480L
+            val nativeTick = player.currentTick.coerceAtLeast(0L)
+            val duration = player.durationTicks.coerceAtLeast(0L)
 
-                val header = ByteArray(14)
-                input.readFully(header)
-
-                if (String(
-                        header,
-                        0,
-                        4,
-                        Charsets.US_ASCII
-                    ) != "MThd"
-                ) {
-                    return 480L
-                }
-
-                val division =
-                    ((header[12].toInt() and 0xFF) shl 8) or
-                    (header[13].toInt() and 0xFF)
-
-                if ((division and 0x8000) != 0 || division == 0) {
-                    480L
-                } else {
-                    (division and 0x7FFF).toLong()
-                }
+            val position = if (duration > 0L) {
+                nativeTick.coerceAtMost(duration)
+            } else {
+                nativeTick
             }
+
+            lastNativeTick = position
+            position
         } catch (_: Exception) {
-            480L
+            lastNativeTick.coerceAtLeast(0L)
         }
     }
 
     fun getDurationTicks(): Long {
-        return midiPlayer?.durationTicks ?: 0L
+        return try {
+            midiPlayer?.durationTicks?.coerceAtLeast(0L) ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
     }
 
     fun isPlaying(): Boolean {
-        return midiPlayer?.isPlaying ?: false
+        return try {
+            midiPlayer?.isPlaying ?: false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     @Synchronized
@@ -519,9 +469,6 @@ class Stage3MidiEngine private constructor(
         }
 
         midiPlayer = null
-        fallbackBaseTick = 0L
-        fallbackStartedAtMs = 0L
-        fallbackPaused = true
         lastNativeTick = 0L
     }
 
@@ -540,7 +487,6 @@ class Stage3MidiEngine private constructor(
 
         val destination = File(directory, fileName)
         val temporary = File(directory, "$fileName.tmp")
-
         val uri = Uri.parse(uriString)
 
         val input = context.contentResolver.openInputStream(uri)
