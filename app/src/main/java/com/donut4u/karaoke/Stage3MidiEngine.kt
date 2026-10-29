@@ -135,6 +135,7 @@ class Stage3MidiEngine private constructor(
                         newPlayer.close()
                         return@submit
                     }
+
                     midiPlayer = newPlayer
                 }
 
@@ -142,7 +143,12 @@ class Stage3MidiEngine private constructor(
 
                 newPlayer.play {
                     mainHandler.post {
-                        fallbackBaseTick = getCurrentTick()
+                        val finalPosition = getCurrentTick()
+                        fallbackBaseTick = finalPosition
+                        lastNativeTick = maxOf(
+                            lastNativeTick,
+                            finalPosition
+                        )
                         fallbackPaused = true
 
                         if (!closed) {
@@ -243,7 +249,10 @@ class Stage3MidiEngine private constructor(
                 )
 
                 if (cookies.isNotEmpty()) {
-                    setRequestProperty("Cookie", cookies.joinToString("; "))
+                    setRequestProperty(
+                        "Cookie",
+                        cookies.joinToString("; ")
+                    )
                 }
             }
 
@@ -252,7 +261,9 @@ class Stage3MidiEngine private constructor(
 
                 connection.getHeaderFields()["Set-Cookie"]
                     ?.forEach { cookie ->
-                        val firstPart = cookie.substringBefore(";").trim()
+                        val firstPart =
+                            cookie.substringBefore(";").trim()
+
                         if (firstPart.isNotEmpty() &&
                             !cookies.contains(firstPart)
                         ) {
@@ -336,8 +347,18 @@ class Stage3MidiEngine private constructor(
                     val header = ByteArray(12)
                     input.readFully(header)
 
-                    String(header, 0, 4, Charsets.US_ASCII) == "RIFF" &&
-                        String(header, 8, 4, Charsets.US_ASCII) == "sfbk"
+                    String(
+                        header,
+                        0,
+                        4,
+                        Charsets.US_ASCII
+                    ) == "RIFF" &&
+                    String(
+                        header,
+                        8,
+                        4,
+                        Charsets.US_ASCII
+                    ) == "sfbk"
                 }
             }
         } catch (_: Exception) {
@@ -353,6 +374,7 @@ class Stage3MidiEngine private constructor(
             midiPlayer?.pause()
         } finally {
             fallbackBaseTick = position
+            lastNativeTick = maxOf(lastNativeTick, position)
             fallbackPaused = true
         }
     }
@@ -361,7 +383,10 @@ class Stage3MidiEngine private constructor(
     fun resume() {
         val player = midiPlayer ?: return
 
-        fallbackBaseTick = getCurrentTick()
+        val position = getCurrentTick()
+
+        fallbackBaseTick = position
+        lastNativeTick = maxOf(lastNativeTick, position)
         fallbackStartedAtMs = SystemClock.elapsedRealtime()
         fallbackPaused = false
 
@@ -375,18 +400,14 @@ class Stage3MidiEngine private constructor(
         midiPlayer?.seekTo(target)
 
         fallbackBaseTick = target
+        lastNativeTick = target
         fallbackStartedAtMs = SystemClock.elapsedRealtime()
         fallbackPaused = false
-        lastNativeTick = 0L
     }
 
     /**
-     * Returns the native playback position when available.
-     * If native position is zero, estimate progress from elapsed time.
-     *
-     * IMPORTANT: Do not use player.isPlaying to decide whether the
-     * fallback clock advances. Some player implementations report
-     * false even while their playback callback is running.
+     * Uses the greatest observed playback position or an elapsed-time
+     * estimate so a stale native tick value cannot freeze the counter.
      */
     fun getCurrentTick(): Long {
         val player = midiPlayer ?: return 0L
@@ -397,23 +418,29 @@ class Stage3MidiEngine private constructor(
             0L
         }
 
-        if (nativeTick > 0L) {
-            lastNativeTick = nativeTick
-            return nativeTick
-        }
-
         if (fallbackPaused) {
-            return fallbackBaseTick.coerceAtLeast(lastNativeTick)
+            val pausedPosition = maxOf(
+                fallbackBaseTick,
+                lastNativeTick,
+                nativeTick
+            )
+
+            lastNativeTick = pausedPosition
+            return pausedPosition
         }
 
         val elapsedMs = (
             SystemClock.elapsedRealtime() - fallbackStartedAtMs
         ).coerceAtLeast(0L)
 
-        val estimatedAdvance = elapsedMs * fallbackPpq * 2L / 1000L
+        val estimatedTick = fallbackBaseTick +
+            (elapsedMs * fallbackPpq * 2L / 1000L)
 
-        val estimatedTick = (fallbackBaseTick + estimatedAdvance)
-            .coerceAtLeast(lastNativeTick)
+        val currentPosition = maxOf(
+            nativeTick,
+            estimatedTick,
+            lastNativeTick
+        )
 
         val duration = try {
             player.durationTicks.coerceAtLeast(0L)
@@ -421,11 +448,14 @@ class Stage3MidiEngine private constructor(
             0L
         }
 
-        return if (duration > 0L) {
-            estimatedTick.coerceAtMost(duration)
+        val result = if (duration > 0L) {
+            currentPosition.coerceAtMost(duration)
         } else {
-            estimatedTick
+            currentPosition
         }
+
+        lastNativeTick = result
+        return result
     }
 
     private fun readMidiPpq(file: File): Long {
@@ -436,7 +466,13 @@ class Stage3MidiEngine private constructor(
                 val header = ByteArray(14)
                 input.readFully(header)
 
-                if (String(header, 0, 4, Charsets.US_ASCII) != "MThd") {
+                if (String(
+                        header,
+                        0,
+                        4,
+                        Charsets.US_ASCII
+                    ) != "MThd"
+                ) {
                     return 480L
                 }
 
