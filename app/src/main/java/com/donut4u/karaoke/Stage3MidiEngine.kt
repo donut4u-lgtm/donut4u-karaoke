@@ -13,14 +13,6 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
-/**
- * Stage 3 MIDI/KAR playback engine.
- *
- * Copies imported content URIs into app-private storage before
- * passing file paths to FluidSynth.
- *
- * A SoundFont (.sf2) must be imported before MIDI playback.
- */
 class Stage3MidiEngine private constructor(
     private val context: Context
 ) {
@@ -46,6 +38,7 @@ class Stage3MidiEngine private constructor(
     companion object {
         private const val MIDI_DIRECTORY = "stage3_midi"
         private const val SOUNDFONT_DIRECTORY = "stage3_soundfonts"
+        private const val DEFAULT_SOUNDFONT = "builtin://default"
 
         @JvmStatic
         fun create(context: Context): Stage3MidiEngine {
@@ -53,11 +46,6 @@ class Stage3MidiEngine private constructor(
         }
     }
 
-    /**
-     * Starts MIDI playback asynchronously.
-     *
-     * midiUri and soundFontUri are Android content URI strings.
-     */
     @Synchronized
     fun play(
         midiUri: String,
@@ -77,23 +65,24 @@ class Stage3MidiEngine private constructor(
                     )
                 }
 
-                if (soundFontUri.isBlank()) {
-                    throw IllegalArgumentException(
-                        "Import a SoundFont (.sf2) in the Stage 3 songbook first."
-                    )
-                }
-
                 val midiFile = copyUriToFile(
                     midiUri,
                     MIDI_DIRECTORY,
                     "song.mid"
                 )
 
-                val soundFontFile = copyUriToFile(
-                    soundFontUri,
-                    SOUNDFONT_DIRECTORY,
-                    "soundfont.sf2"
-                )
+                val soundFontFile = if (
+                    soundFontUri.isBlank() ||
+                    soundFontUri == DEFAULT_SOUNDFONT
+                ) {
+                    copyDefaultSoundFont()
+                } else {
+                    copyUriToFile(
+                        soundFontUri,
+                        SOUNDFONT_DIRECTORY,
+                        "soundfont.sf2"
+                    )
+                }
 
                 if (!midiFile.exists() || midiFile.length() == 0L) {
                     throw IllegalStateException(
@@ -105,7 +94,8 @@ class Stage3MidiEngine private constructor(
                     soundFontFile.length() == 0L
                 ) {
                     throw IllegalStateException(
-                        "The selected SoundFont file is empty or unavailable."
+                        "The default SoundFont is missing or empty. " +
+                        "Add app/src/main/assets/default.sf2 to the project."
                     )
                 }
 
@@ -119,7 +109,6 @@ class Stage3MidiEngine private constructor(
                         newPlayer.close()
                         return@submit
                     }
-
                     midiPlayer = newPlayer
                 }
 
@@ -151,6 +140,51 @@ class Stage3MidiEngine private constructor(
         }
     }
 
+    private fun copyDefaultSoundFont(): File {
+        val directory = File(context.filesDir, SOUNDFONT_DIRECTORY)
+
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IllegalStateException(
+                "Could not create the SoundFont storage directory."
+            )
+        }
+
+        val destination = File(directory, "default.sf2")
+
+        if (destination.exists() && destination.length() > 0L) {
+            return destination
+        }
+
+        val temporary = File(directory, "default.sf2.tmp")
+
+        context.assets.open("default.sf2").use { input ->
+            FileOutputStream(temporary).use { output ->
+                input.copyTo(output)
+                output.flush()
+            }
+        }
+
+        if (temporary.length() == 0L) {
+            temporary.delete()
+            throw IllegalStateException(
+                "The bundled default SoundFont is empty."
+            )
+        }
+
+        if (destination.exists()) {
+            destination.delete()
+        }
+
+        if (!temporary.renameTo(destination)) {
+            temporary.delete()
+            throw IllegalStateException(
+                "Could not install the default SoundFont."
+            )
+        }
+
+        return destination
+    }
+
     fun pause() {
         midiPlayer?.pause()
     }
@@ -160,8 +194,7 @@ class Stage3MidiEngine private constructor(
     }
 
     fun seekTo(tick: Long) {
-        val safeTick = tick.coerceAtLeast(0L)
-        midiPlayer?.seekTo(safeTick)
+        midiPlayer?.seekTo(tick.coerceAtLeast(0L))
     }
 
     fun getCurrentTick(): Long {
@@ -179,18 +212,6 @@ class Stage3MidiEngine private constructor(
     @Synchronized
     fun stop() {
         stopCurrentTask()
-
-        try {
-            midiPlayer?.stop()
-        } catch (_: Exception) {
-        }
-
-        try {
-            midiPlayer?.close()
-        } catch (_: Exception) {
-        }
-
-        midiPlayer = null
     }
 
     private fun stopCurrentTask() {
@@ -263,7 +284,6 @@ class Stage3MidiEngine private constructor(
 
         closed = true
         activeCallback = null
-
         stopCurrentTask()
         worker.shutdownNow()
     }
