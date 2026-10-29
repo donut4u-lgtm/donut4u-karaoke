@@ -380,6 +380,14 @@ class Stage3MidiEngine private constructor(
         lastNativeTick = 0L
     }
 
+    /**
+     * Returns the native playback position when available.
+     * If native position is zero, estimate progress from elapsed time.
+     *
+     * IMPORTANT: Do not use player.isPlaying to decide whether the
+     * fallback clock advances. Some player implementations report
+     * false even while their playback callback is running.
+     */
     fun getCurrentTick(): Long {
         val player = midiPlayer ?: return 0L
 
@@ -394,7 +402,7 @@ class Stage3MidiEngine private constructor(
             return nativeTick
         }
 
-        if (fallbackPaused || !player.isPlaying) {
+        if (fallbackPaused) {
             return fallbackBaseTick.coerceAtLeast(lastNativeTick)
         }
 
