@@ -49,6 +49,7 @@ public class Stage3PlayerActivity extends Activity {
     private SurfaceView videoSurface;
     private TextView titleLabel;
     private TextView statusLabel;
+    private TextView lyricsLabel;
     private TextView timeLabel;
     private SeekBar seekBar;
     private Button playPauseButton;
@@ -63,6 +64,10 @@ public class Stage3PlayerActivity extends Activity {
     private boolean midiPausedByLifecycle;
 
     private long midiDurationTicks;
+
+    private Stage3MidiLyrics currentMidiLyrics =
+            Stage3MidiLyrics.empty();
+
     private Stage3SongQueue.QueuedSong currentSong;
 
     private final Runnable progressUpdater = new Runnable() {
@@ -112,6 +117,7 @@ public class Stage3PlayerActivity extends Activity {
         heading.setTextSize(24);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
+
         root.addView(heading,
                 new LinearLayout.LayoutParams(-1, dp(44)));
 
@@ -139,6 +145,20 @@ public class Stage3PlayerActivity extends Activity {
         statusLabel.setGravity(Gravity.CENTER);
         root.addView(statusLabel);
 
+        // Embedded MIDI/KAR lyrics display.
+        lyricsLabel = new TextView(this);
+        lyricsLabel.setText("Waiting for embedded lyrics...");
+        lyricsLabel.setTextColor(Color.WHITE);
+        lyricsLabel.setTextSize(22);
+        lyricsLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        lyricsLabel.setGravity(Gravity.CENTER);
+        lyricsLabel.setPadding(dp(8), dp(8), dp(8), dp(8));
+        lyricsLabel.setMinHeight(dp(64));
+        lyricsLabel.setMaxLines(3);
+
+        root.addView(lyricsLabel,
+                new LinearLayout.LayoutParams(-1, -2));
+
         seekBar = new SeekBar(this);
         seekBar.setMax(1000);
         root.addView(seekBar,
@@ -156,7 +176,8 @@ public class Stage3PlayerActivity extends Activity {
 
                     @Override
                     public void onProgressChanged(
-                            SeekBar bar, int progress,
+                            SeekBar bar,
+                            int progress,
                             boolean fromUser) {
 
                         if (!fromUser) {
@@ -165,6 +186,7 @@ public class Stage3PlayerActivity extends Activity {
 
                         if (midiMode && midiReady
                                 && midiDurationTicks > 0) {
+
                             long target =
                                     midiDurationTicks * progress / 1000L;
 
@@ -198,11 +220,15 @@ public class Stage3PlayerActivity extends Activity {
                         if (midiMode && midiEngine != null
                                 && midiReady
                                 && midiDurationTicks > 0) {
+
                             midiEngine.seekTo(
                                     midiDurationTicks * progress / 1000L);
 
+                            updateMidiLyricsAtCurrentPosition();
+
                         } else if (!midiMode && player != null
                                 && player.getDuration() > 0) {
+
                             player.seekTo(
                                     player.getDuration()
                                             * progress / 1000L);
@@ -234,6 +260,7 @@ public class Stage3PlayerActivity extends Activity {
 
         Button backButton = makeButton("BACK TO QUEUE");
         backButton.setOnClickListener(v -> finish());
+
         root.addView(backButton,
                 new LinearLayout.LayoutParams(-1, dp(46)));
 
@@ -253,7 +280,10 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     private void addControl(
-            LinearLayout parent, Button button, float weight) {
+            LinearLayout parent,
+            Button button,
+            float weight) {
+
         LinearLayout.LayoutParams params =
                 new LinearLayout.LayoutParams(0, -1, weight);
         params.setMargins(dp(2), 0, dp(2), 0);
@@ -271,6 +301,7 @@ public class Stage3PlayerActivity extends Activity {
             titleLabel.setText("No song selected");
             statusLabel.setText(
                     "Return to the songbook and add songs to the queue.");
+            lyricsLabel.setText("No song selected.");
             playPauseButton.setEnabled(false);
             return;
         }
@@ -283,6 +314,7 @@ public class Stage3PlayerActivity extends Activity {
 
     private boolean isSongHubMidi(
             Stage3SongQueue.QueuedSong song) {
+
         if (song == null || song.uri == null) {
             return false;
         }
@@ -297,6 +329,7 @@ public class Stage3PlayerActivity extends Activity {
 
     private boolean isMidiSong(
             Stage3SongQueue.QueuedSong song) {
+
         if (song == null) {
             return false;
         }
@@ -309,8 +342,10 @@ public class Stage3PlayerActivity extends Activity {
                 ? "" : song.type.toUpperCase(Locale.ROOT);
 
         String segment = "";
+
         try {
             String last = Uri.parse(song.uri).getLastPathSegment();
+
             if (last != null) {
                 segment = last.toLowerCase(Locale.ROOT);
             }
@@ -359,6 +394,7 @@ public class Stage3PlayerActivity extends Activity {
 
     private void initializePlayer(
             Stage3SongQueue.QueuedSong song) {
+
         releasePlayback();
 
         if (isMidiSong(song)) {
@@ -370,12 +406,15 @@ public class Stage3PlayerActivity extends Activity {
 
     private void initializeMidiPlayer(
             Stage3SongQueue.QueuedSong song) {
+
         midiMode = true;
         midiReady = false;
         midiDurationTicks = 0L;
+        currentMidiLyrics = Stage3MidiLyrics.empty();
 
         seekBar.setProgress(0);
         timeLabel.setText("00:00 / 00:00");
+        lyricsLabel.setText("Loading song lyrics...");
         playPauseButton.setText("PLAY");
         playPauseButton.setEnabled(false);
 
@@ -405,12 +444,16 @@ public class Stage3PlayerActivity extends Activity {
                 runOnUiThread(() -> {
                     if (!released && midiMode) {
                         statusLabel.setText("SongHub MIDI unavailable");
+                        lyricsLabel.setText(
+                                "Lyrics unavailable for this song.");
+
                         Toast.makeText(
                                 Stage3PlayerActivity.this,
                                 message,
                                 Toast.LENGTH_LONG).show();
                     }
                 });
+
                 return;
             }
 
@@ -434,9 +477,23 @@ public class Stage3PlayerActivity extends Activity {
                                 midiDurationTicks =
                                         Math.max(0L, durationTicks);
 
+                                /*
+                                 * Stage3MidiEngine copies the selected
+                                 * MIDI/KAR file to this location before
+                                 * playback begins.
+                                 */
+                                File midiFile = new File(
+                                        getFilesDir(),
+                                        "stage3_midi/song.mid");
+
+                                currentMidiLyrics =
+                                        Stage3MidiLyrics.read(midiFile);
+
                                 playPauseButton.setEnabled(true);
                                 playPauseButton.setText("PAUSE");
                                 statusLabel.setText("MIDI playing");
+
+                                updateMidiLyricsAtCurrentPosition();
                                 updateMidiProgress();
                             }
 
@@ -449,6 +506,8 @@ public class Stage3PlayerActivity extends Activity {
                                 midiReady = false;
                                 playPauseButton.setEnabled(false);
                                 statusLabel.setText("MIDI playback failed");
+                                lyricsLabel.setText(
+                                        "Unable to load this song's lyrics.");
 
                                 Toast.makeText(
                                         Stage3PlayerActivity.this,
@@ -470,12 +529,32 @@ public class Stage3PlayerActivity extends Activity {
         }, "Stage3SongHubPrepare").start();
     }
 
+    private void updateMidiLyricsAtCurrentPosition() {
+        if (lyricsLabel == null) {
+            return;
+        }
+
+        if (currentMidiLyrics == null
+                || !currentMidiLyrics.hasLyrics()) {
+
+            lyricsLabel.setText(
+                    "No embedded lyrics found in this MIDI/KAR file.");
+            return;
+        }
+
+        long position = midiEngine == null
+                ? 0L : midiEngine.getCurrentTick();
+
+        lyricsLabel.setText(
+                currentMidiLyrics.textAtTick(position));
+    }
+
     /**
      * Reads a sector range only when it is already an ordinary MIDI file.
      * The index URI format is:
      * songhub-midi://play?blob=<content-uri>&offset=<sector>&length=<sectors>
      *
-     * Protected or encoded SongHub content is intentionally not decoded here.
+     * Protected or encoded SongHub content is not decoded here.
      */
     private File extractSongHubRawMidi(String songUri)
             throws IOException {
@@ -528,6 +607,7 @@ public class Stage3PlayerActivity extends Activity {
         Uri blobUri = Uri.parse(blobString);
 
         File directory = new File(getCacheDir(), "stage3_songhub");
+
         if (!directory.exists() && !directory.mkdirs()) {
             throw new IOException("Cannot create the SongHub cache folder.");
         }
@@ -558,7 +638,9 @@ public class Stage3PlayerActivity extends Activity {
                 while (remaining > 0
                         && (read = input.read(
                                 buffer, 0,
-                                (int) Math.min(buffer.length, remaining))) != -1) {
+                                (int) Math.min(
+                                        buffer.length, remaining))) != -1) {
+
                     output.write(buffer, 0, read);
                     remaining -= read;
                 }
@@ -568,6 +650,7 @@ public class Stage3PlayerActivity extends Activity {
                             "The blob file is shorter than the indexed range.");
                 }
             }
+
         } catch (Exception e) {
             temporary.delete();
 
@@ -585,14 +668,18 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         byte[] header = new byte[4];
+
         try (InputStream check =
                      new java.io.FileInputStream(temporary)) {
+
             if (check.read(header) != 4
                     || header[0] != 'M'
                     || header[1] != 'T'
                     || header[2] != 'h'
                     || header[3] != 'd') {
+
                 temporary.delete();
+
                 throw new IOException(
                         "This indexed data is not a standard, unencrypted "
                                 + "MIDI file. Protected SongHub data cannot "
@@ -615,6 +702,7 @@ public class Stage3PlayerActivity extends Activity {
 
     private void skipFully(InputStream input, long bytes)
             throws IOException {
+
         long remaining = bytes;
 
         while (remaining > 0) {
@@ -627,6 +715,7 @@ public class Stage3PlayerActivity extends Activity {
                     throw new IOException(
                             "Blob file ended before the indexed song.");
                 }
+
                 remaining--;
             }
         }
@@ -634,8 +723,12 @@ public class Stage3PlayerActivity extends Activity {
 
     private void initializeMediaPlayer(
             Stage3SongQueue.QueuedSong song) {
+
         midiMode = false;
         midiReady = false;
+        currentMidiLyrics = Stage3MidiLyrics.empty();
+        lyricsLabel.setText(
+                "Embedded MIDI/KAR lyrics are shown for supported files.");
 
         try {
             player = new ExoPlayer.Builder(this).build();
@@ -668,6 +761,7 @@ public class Stage3PlayerActivity extends Activity {
 
                     playPauseButton.setText(
                             isPlaying ? "PAUSE" : "PLAY");
+
                     statusLabel.setText(
                             isPlaying ? "Playing" : "Playback paused");
                 }
@@ -686,6 +780,7 @@ public class Stage3PlayerActivity extends Activity {
 
             player.setMediaItem(
                     MediaItem.fromUri(Uri.parse(song.uri)));
+
             player.prepare();
             player.play();
 
@@ -694,7 +789,9 @@ public class Stage3PlayerActivity extends Activity {
 
         } catch (Exception e) {
             statusLabel.setText("Unable to start playback.");
-            Toast.makeText(this,
+
+            Toast.makeText(
+                    this,
                     "Could not play this song.",
                     Toast.LENGTH_LONG).show();
         }
@@ -715,6 +812,7 @@ public class Stage3PlayerActivity extends Activity {
                 playPauseButton.setText("PAUSE");
                 statusLabel.setText("MIDI playing");
             }
+
             return;
         }
 
@@ -737,6 +835,7 @@ public class Stage3PlayerActivity extends Activity {
             releasePlayback();
             statusLabel.setText("Queue finished.");
             titleLabel.setText("No more queued songs");
+            lyricsLabel.setText("Queue finished.");
             playPauseButton.setEnabled(false);
             seekBar.setProgress(0);
             timeLabel.setText("00:00 / 00:00");
@@ -757,6 +856,7 @@ public class Stage3PlayerActivity extends Activity {
             seekBar.setProgress(0);
             timeLabel.setText("00:00 / 00:00");
             statusLabel.setText("MIDI stopped");
+            updateMidiLyricsAtCurrentPosition();
             return;
         }
 
@@ -774,6 +874,8 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         long position = midiEngine.getCurrentTick();
+
+        updateMidiLyricsAtCurrentPosition();
 
         if (midiDurationTicks > 0) {
             int progress = (int) Math.min(
@@ -815,6 +917,7 @@ public class Stage3PlayerActivity extends Activity {
             if (!userSeeking) {
                 seekBar.setProgress(0);
             }
+
             timeLabel.setText(formatTime(position) + " / 00:00");
         }
 
@@ -845,6 +948,7 @@ public class Stage3PlayerActivity extends Activity {
                 player.release();
             } catch (Exception ignored) {
             }
+
             player = null;
         }
 
@@ -859,6 +963,12 @@ public class Stage3PlayerActivity extends Activity {
         midiReady = false;
         midiDurationTicks = 0L;
         midiPausedByLifecycle = false;
+
+        currentMidiLyrics = Stage3MidiLyrics.empty();
+
+        if (lyricsLabel != null) {
+            lyricsLabel.setText("Loading song lyrics...");
+        }
 
         if (videoSurface != null) {
             videoSurface.setVisibility(SurfaceView.VISIBLE);
@@ -888,6 +998,7 @@ public class Stage3PlayerActivity extends Activity {
 
         if (midiMode && midiEngine != null && midiReady
                 && midiPausedByLifecycle) {
+
             midiEngine.resume();
             midiPausedByLifecycle = false;
         }
@@ -907,6 +1018,7 @@ public class Stage3PlayerActivity extends Activity {
                 player.release();
             } catch (Exception ignored) {
             }
+
             player = null;
         }
 
