@@ -2,11 +2,11 @@
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
-import android.graphics.Typeface;
 
 import java.io.File;
 import java.io.IOException;
@@ -157,8 +157,9 @@ public final class Stage3MidiLyrics {
     }
 
     /*
-     * Returns the upcoming lyric line for singer preparation.
-     * This does not change the existing player's lyric rendering.
+     * Returns the next lyric line for the preparation display.
+     * MIDI fragments are joined carefully so syllables are not
+     * automatically separated by spaces.
      */
     public String upcomingLineAtTick(long tick) {
         int active = findActiveEventIndex(tick);
@@ -171,20 +172,21 @@ public final class Stage3MidiLyrics {
 
         for (int i = Math.max(0, active + 1); i < events.size(); i++) {
             LyricEvent event = events.get(i);
-            if (event.section) continue;
 
-            if (event.line != currentLine) {
-                if (nextLine == Integer.MIN_VALUE) {
-                    nextLine = event.line;
-                } else if (event.line != nextLine) {
-                    break;
-                }
-
-                if (next.length() > 0) {
-                    next.append(' ');
-                }
-                next.append(event.text.trim());
+            if (event.section) {
+                if (next.length() > 0) break;
+                continue;
             }
+
+            if (event.line == currentLine) continue;
+
+            if (nextLine == Integer.MIN_VALUE) {
+                nextLine = event.line;
+            } else if (event.line != nextLine) {
+                break;
+            }
+
+            appendLyricFragment(next, event.text);
         }
 
         return next.toString().trim();
@@ -206,18 +208,41 @@ public final class Stage3MidiLyrics {
         }
 
         int active = findActiveEventIndex(safeTick);
-
         if (active < 0) return false;
+
+        /*
+         * An explicit instrumental section should animate the dots
+         * until the next lyric event or another section marker.
+         */
+        int sectionIndex = mostRecentSectionIndex(safeTick);
+        if (sectionIndex >= 0) {
+            LyricEvent section = events.get(sectionIndex);
+
+            if (isInstrumentalHeading(section.text)) {
+                int boundary = nextSectionOrLyricIndex(sectionIndex + 1);
+
+                if (boundary >= 0) {
+                    LyricEvent next = events.get(boundary);
+                    if (safeTick >= section.tick && safeTick < next.tick) {
+                        return true;
+                    }
+                } else {
+                    return safeTick >= section.tick;
+                }
+            }
+        }
 
         LyricEvent current = events.get(active);
 
         if (current.section) {
             int next = nextLyricIndex(active + 1);
+
             if (next >= 0) {
                 long gap = events.get(next).tick - safeTick;
                 return gap >= beat;
             }
-            return false;
+
+            return isInstrumentalHeading(current.text);
         }
 
         int nextIndex = nextLyricIndex(active + 1);
@@ -231,6 +256,37 @@ public final class Stage3MidiLyrics {
         long margin = Math.max(1L, beat / 2L);
         return safeTick >= current.tick + margin
                 && safeTick < next.tick - margin;
+    }
+
+    private int mostRecentSectionIndex(long tick) {
+        for (int i = events.size() - 1; i >= 0; i--) {
+            LyricEvent event = events.get(i);
+            if (event.tick <= tick && event.section) return i;
+        }
+        return -1;
+    }
+
+    private int nextSectionOrLyricIndex(int start) {
+        for (int i = Math.max(0, start); i < events.size(); i++) {
+            LyricEvent event = events.get(i);
+            if (event.section || !event.text.trim().isEmpty()) return i;
+        }
+        return -1;
+    }
+
+    private static boolean isInstrumentalHeading(String heading) {
+        if (heading == null) return false;
+
+        String value = heading.trim().toUpperCase(Locale.ROOT);
+
+        return value.contains("INSTRUMENTAL")
+                || value.equals("INTRO")
+                || value.equals("INTERLUDE")
+                || value.equals("OUTRO")
+                || value.equals("SOLO")
+                || value.equals("BREAK")
+                || value.equals("ENDING")
+                || value.equals("CODA");
     }
 
     private int firstLyricIndex() {
@@ -247,6 +303,11 @@ public final class Stage3MidiLyrics {
         return -1;
     }
 
+    /*
+     * Section markers remain active at their own timestamp.
+     * This prevents the preceding lyric from staying highlighted
+     * after the song enters a new section.
+     */
     private int findActiveEventIndex(long tick) {
         int low = 0;
         int high = events.size() - 1;
@@ -262,14 +323,6 @@ public final class Stage3MidiLyrics {
             } else {
                 high = mid - 1;
             }
-        }
-
-        if (result >= 0 && events.get(result).section) {
-            int previous = result - 1;
-            while (previous >= 0 && events.get(previous).section) {
-                previous--;
-            }
-            if (previous >= 0) return previous;
         }
 
         return result;
@@ -289,11 +342,21 @@ public final class Stage3MidiLyrics {
         int activeStart = -1;
         int activeEnd = -1;
 
-        List<Integer> starts = new ArrayList<>();
-        List<Integer> ends = new ArrayList<>();
+        /*
+         * These offsets are indexed by the original event index.
+         * Section markers therefore cannot shift the highlight offsets.
+         */
+        int[] starts = new int[events.size()];
+        int[] ends = new int[events.size()];
+
+        for (int i = 0; i < events.size(); i++) {
+            starts[i] = -1;
+            ends[i] = -1;
+        }
 
         int currentLine = Integer.MIN_VALUE;
         boolean previousWasSection = false;
+        int previousLyricEvent = -1;
 
         for (int i = 0; i < events.size(); i++) {
             LyricEvent event = events.get(i);
@@ -302,28 +365,34 @@ public final class Stage3MidiLyrics {
                 if (display.length() > 0
                         && display.charAt(display.length() - 1) != '\n') {
                     display.append("\n\n");
+                } else if (display.length() > 1
+                        && display.charAt(display.length() - 2) != '\n') {
+                    display.append('\n');
                 }
 
                 int start = display.length();
                 display.append(event.text.trim());
                 int end = display.length();
 
+                starts[i] = start;
+                ends[i] = end;
+
                 if (end > start) {
                     display.setSpan(
                             new ForegroundColorSpan(SECTION_GOLD),
                             start, end,
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+
                     display.setSpan(
                             new StyleSpan(Typeface.BOLD),
                             start, end,
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }
 
-                display.append('\n');
+                display.append("\n");
                 currentLine = Integer.MIN_VALUE;
                 previousWasSection = true;
-                starts.add(start);
-                ends.add(end);
+                previousLyricEvent = -1;
                 continue;
             }
 
@@ -331,13 +400,16 @@ public final class Stage3MidiLyrics {
                 if (display.length() > 0
                         && display.charAt(display.length() - 1) != '\n') {
                     display.append('\n');
-                } else if (previousWasSection
-                        && display.length() > 0
-                        && display.charAt(display.length() - 1) != '\n') {
-                    display.append('\n');
                 }
+
                 currentLine = event.line;
-            } else if (needsWordSpace(display, event.text)) {
+                previousLyricEvent = -1;
+            }
+
+            if (previousLyricEvent >= 0
+                    && needsWordSpace(
+                            events.get(previousLyricEvent).text,
+                            event.text)) {
                 display.append(' ');
             }
 
@@ -345,10 +417,12 @@ public final class Stage3MidiLyrics {
             display.append(event.text);
             int end = display.length();
 
-            starts.add(start);
-            ends.add(end);
+            starts[i] = start;
+            ends[i] = end;
 
             if (i == active) activeLineStart = start;
+
+            previousLyricEvent = i;
             previousWasSection = false;
         }
 
@@ -367,6 +441,7 @@ public final class Stage3MidiLyrics {
                         || !isSameWord(previous, current)) {
                     break;
                 }
+
                 first--;
             }
 
@@ -379,47 +454,202 @@ public final class Stage3MidiLyrics {
                         || !isSameWord(current, next)) {
                     break;
                 }
+
                 last++;
             }
 
-            int firstPosition = lyricPosition(first);
-            int lastPosition = lyricPosition(last);
-
-            if (firstPosition >= 0 && lastPosition >= firstPosition) {
-                activeStart = starts.get(firstPosition);
-                activeEnd = ends.get(lastPosition);
+            if (starts[first] >= 0 && ends[last] >= starts[first]) {
+                activeStart = starts[first];
+                activeEnd = ends[last];
             }
         }
 
         applyActiveHighlight(display, activeStart, activeEnd);
+
         return new FullLyricsResult(display, activeLineStart);
     }
 
-    private int lyricPosition(int eventIndex) {
-        int position = -1;
-        for (int i = 0; i <= eventIndex && i < events.size(); i++) {
-            if (!events.get(i).section) position++;
-        }
-        return position;
-    }
-
+    /*
+     * Spacing heuristic:
+     * - Preserve spaces already present in MIDI lyric events.
+     * - Never put a space before punctuation.
+     * - Keep ordinary syllable fragments together.
+     * - Add a space when a recognizable complete word follows or
+     *   precedes another fragment.
+     */
     private static boolean needsWordSpace(
-            SpannableStringBuilder display,
+            String previousText,
             String nextText) {
 
-        if (display.length() == 0 || nextText == null
-                || nextText.isEmpty()) return false;
+        if (previousText == null || nextText == null
+                || previousText.isEmpty() || nextText.isEmpty()) {
+            return false;
+        }
 
-        char previous = display.charAt(display.length() - 1);
+        char previous = previousText.charAt(previousText.length() - 1);
         char next = nextText.charAt(0);
 
         if (Character.isWhitespace(previous)
-                || Character.isWhitespace(next)) return false;
+                || Character.isWhitespace(next)) {
+            return false;
+        }
 
         if (",.!?;:)]}".indexOf(next) >= 0) return false;
         if ("([{".indexOf(previous) >= 0) return false;
 
+        if (!Character.isLetterOrDigit(previous)
+                || !Character.isLetterOrDigit(next)) {
+            return previous == ',' || previous == '.'
+                    || previous == '!' || previous == '?'
+                    || previous == ';' || previous == ':';
+        }
+
+        String left = previousText.trim().toLowerCase(Locale.ROOT);
+        String right = nextText.trim().toLowerCase(Locale.ROOT);
+
+        if (left.isEmpty() || right.isEmpty()) return false;
+
+        if (isCommonWord(left) || isCommonWord(right)) {
+            return true;
+        }
+
+        /*
+         * A leading uppercase character after a lowercase fragment
+         * often indicates a new proper name or sentence.
+         */
+        if (Character.isLowerCase(previous)
+                && Character.isUpperCase(next)
+                && right.length() > 1) {
+            return true;
+        }
+
         return false;
+    }
+
+    private static boolean isCommonWord(String value) {
+        if (value == null) return false;
+
+        String word = value.toLowerCase(Locale.ROOT)
+                .replaceAll("^[^\\p{L}]+|[^\\p{L}]+$", "");
+
+        switch (word) {
+            case "a":
+            case "i":
+            case "am":
+            case "an":
+            case "and":
+            case "are":
+            case "as":
+            case "at":
+            case "be":
+            case "but":
+            case "by":
+            case "can":
+            case "do":
+            case "for":
+            case "from":
+            case "go":
+            case "he":
+            case "her":
+            case "here":
+            case "him":
+            case "his":
+            case "how":
+            case "if":
+            case "in":
+            case "is":
+            case "it":
+            case "its":
+            case "know":
+            case "like":
+            case "love":
+            case "me":
+            case "my":
+            case "no":
+            case "not":
+            case "of":
+            case "on":
+            case "one":
+            case "or":
+            case "our":
+            case "out":
+            case "she":
+            case "so":
+            case "that":
+            case "the":
+            case "their":
+            case "them":
+            case "there":
+            case "they":
+            case "this":
+            case "to":
+            case "up":
+            case "us":
+            case "was":
+            case "we":
+            case "were":
+            case "what":
+            case "when":
+            case "who":
+            case "will":
+            case "with":
+            case "you":
+            case "your":
+            case "ako":
+            case "akin":
+            case "ang":
+            case "ay":
+            case "ba":
+            case "bakit":
+            case "dahil":
+            case "di":
+            case "hindi":
+            case "ikaw":
+            case "kami":
+            case "ka":
+            case "ko":
+            case "kung":
+            case "lang":
+            case "mga":
+            case "mo":
+            case "na":
+            case "ng":
+            case "nang":
+            case "ni":
+            case "o":
+            case "pa":
+            case "para":
+            case "pero":
+            case "sa":
+            case "si":
+            case "sila":
+            case "tayo":
+            case "wala":
+            case "yan":
+            case "iyo":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static void appendLyricFragment(
+            StringBuilder target,
+            String fragment) {
+
+        if (target == null || fragment == null || fragment.isEmpty()) {
+            return;
+        }
+
+        if (target.length() > 0
+                && needsWordSpace(
+                        target.substring(
+                                Math.max(0, target.length() - 12)),
+                        fragment)) {
+            target.append(' ');
+        }
+
+        target.append(fragment);
     }
 
     private static boolean isSameWord(
@@ -432,8 +662,12 @@ public final class Stage3MidiLyrics {
         char leftChar = left.text.charAt(left.text.length() - 1);
         char rightChar = right.text.charAt(0);
 
-        return !Character.isWhitespace(leftChar)
-                && !Character.isWhitespace(rightChar);
+        if (Character.isWhitespace(leftChar)
+                || Character.isWhitespace(rightChar)) {
+            return false;
+        }
+
+        return !needsWordSpace(left.text, right.text);
     }
 
     private static void applyActiveHighlight(
@@ -556,9 +790,11 @@ public final class Stage3MidiLyrics {
                         }
 
                         if (metaType == 0x06) {
-                            if (isSectionHeading(trimmed)) {
+                            String heading = extractHeading(trimmed);
+
+                            if (heading != null) {
                                 result.add(new LyricEvent(
-                                        tick, normalizeHeading(trimmed),
+                                        tick, heading,
                                         sequence++, false, true));
                             }
                             continue;
@@ -570,24 +806,41 @@ public final class Stage3MidiLyrics {
 
                         if (trimmed.startsWith("@")) {
                             MetadataResult metadata = parseMetadata(trimmed);
-                            if (!metadata.singer.isEmpty()) singer = metadata.singer;
-                            if (!metadata.composer.isEmpty()) composer = metadata.composer;
+                            if (!metadata.singer.isEmpty()) {
+                                singer = metadata.singer;
+                            }
+                            if (!metadata.composer.isEmpty()) {
+                                composer = metadata.composer;
+                            }
                             continue;
                         }
 
                         MetadataResult metadata = parseMetadata(trimmed);
                         if (metadata.isMetadata) {
-                            if (!metadata.singer.isEmpty()) singer = metadata.singer;
-                            if (!metadata.composer.isEmpty()) composer = metadata.composer;
+                            if (!metadata.singer.isEmpty()) {
+                                singer = metadata.singer;
+                            }
+                            if (!metadata.composer.isEmpty()) {
+                                composer = metadata.composer;
+                            }
                             continue;
                         }
 
                         if (isNonLyricTag(trimmed)) continue;
 
+                        String heading = extractHeading(trimmed);
+                        if (heading != null) {
+                            result.add(new LyricEvent(
+                                    tick, heading,
+                                    sequence++, false, true));
+                            continue;
+                        }
+
                         boolean lineEnd = containsLineBreak(value);
                         String lyric = cleanLyric(value);
 
-                        if (!lyric.trim().isEmpty() && !isControlToken(lyric)) {
+                        if (!lyric.trim().isEmpty()
+                                && !isControlToken(lyric)) {
                             result.add(new LyricEvent(
                                     tick, lyric, sequence++, lineEnd, false));
                         } else if (lineEnd && !result.isEmpty()) {
@@ -645,10 +898,35 @@ public final class Stage3MidiLyrics {
                 ticksPerQuarterNote, tempos);
     }
 
+    /*
+     * Only exact heading-like entries are converted to sections.
+     * Bracketed forms such as [LAST CHORUS] are supported without
+     * treating a normal lyric sentence containing "chorus" as a heading.
+     */
+    private static String extractHeading(String value) {
+        if (value == null) return null;
+
+        String candidate = value.trim();
+
+        if ((candidate.startsWith("[") && candidate.endsWith("]"))
+                || (candidate.startsWith("<") && candidate.endsWith(">"))
+                || (candidate.startsWith("*") && candidate.endsWith("*"))) {
+            if (candidate.length() >= 2) {
+                candidate = candidate.substring(1, candidate.length() - 1).trim();
+            }
+        }
+
+        if (!isSectionHeading(candidate)) return null;
+        return normalizeHeading(candidate);
+    }
+
     private static boolean isSectionHeading(String value) {
+        if (value == null) return false;
+
         String normalized = value.trim().toLowerCase(Locale.ROOT);
         normalized = normalized.replaceAll("[_\\-]+", " ");
         normalized = normalized.replaceAll("\\s+", " ");
+        normalized = normalized.replaceAll("[.!:]+$", "").trim();
 
         return normalized.matches(
                 "^(intro|instrumental|interlude|outro|"
@@ -661,12 +939,12 @@ public final class Stage3MidiLyrics {
     }
 
     private static String normalizeHeading(String value) {
-        String text = value.trim()
+        return value.trim()
                 .replace('_', ' ')
                 .replace('-', ' ')
-                .replaceAll("\\s+", " ");
-
-        return text.toUpperCase(Locale.ROOT);
+                .replaceAll("\\s+", " ")
+                .replaceAll("[.!:]+$", "")
+                .toUpperCase(Locale.ROOT);
     }
 
     private static boolean isControlToken(String text) {
@@ -751,7 +1029,8 @@ public final class Stage3MidiLyrics {
 
         TempoEvent(long tick, long microsecondsPerQuarter) {
             this.tick = Math.max(0L, tick);
-            this.microsecondsPerQuarter = Math.max(1L, microsecondsPerQuarter);
+            this.microsecondsPerQuarter =
+                    Math.max(1L, microsecondsPerQuarter);
         }
     }
 
@@ -759,7 +1038,9 @@ public final class Stage3MidiLyrics {
         final SpannableStringBuilder text;
         final int activeLineStart;
 
-        FullLyricsResult(SpannableStringBuilder text, int activeLineStart) {
+        FullLyricsResult(
+                SpannableStringBuilder text,
+                int activeLineStart) {
             this.text = text;
             this.activeLineStart = activeLineStart;
         }
@@ -770,7 +1051,10 @@ public final class Stage3MidiLyrics {
         final String singer;
         final String composer;
 
-        MetadataResult(boolean isMetadata, String singer, String composer) {
+        MetadataResult(
+                boolean isMetadata,
+                String singer,
+                String composer) {
             this.isMetadata = isMetadata;
             this.singer = singer;
             this.composer = composer;
