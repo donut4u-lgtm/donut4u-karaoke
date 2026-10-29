@@ -9,7 +9,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.SpannableStringBuilder;
 import android.view.Gravity;
 import android.view.SurfaceView;
 import android.widget.Button;
@@ -50,6 +49,7 @@ public class Stage3PlayerActivity extends Activity {
     private SurfaceView videoSurface;
     private TextView titleLabel;
     private TextView statusLabel;
+    private TextView metadataLabel; // ADDED
     private TextView lyricsLabel;
     private TextView timeLabel;
     private SeekBar seekBar;
@@ -145,11 +145,6 @@ public class Stage3PlayerActivity extends Activity {
         root.addView(statusLabel,
                 new LinearLayout.LayoutParams(-1, dp(28)));
 
-        /*
-         * Both playback areas have weight.
-         * The unused area is hidden for each playback type,
-         * allowing the remaining area to fill the screen.
-         */
         videoSurface = new SurfaceView(this);
         videoSurface.setBackgroundColor(Color.BLACK);
 
@@ -157,7 +152,20 @@ public class Stage3PlayerActivity extends Activity {
         videoParams.setMargins(0, dp(4), 0, dp(4));
         root.addView(videoSurface, videoParams);
 
-        // Large, expandable MIDI/KAR lyrics area.
+        // ADDED: Separate singer/composer metadata area.
+        metadataLabel = new TextView(this);
+        metadataLabel.setText("");
+        metadataLabel.setTextColor(Color.rgb(255, 210, 100));
+        metadataLabel.setTextSize(15);
+        metadataLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        metadataLabel.setGravity(Gravity.CENTER);
+        metadataLabel.setPadding(dp(8), dp(6), dp(8), dp(6));
+        metadataLabel.setVisibility(TextView.GONE);
+
+        root.addView(metadataLabel,
+                new LinearLayout.LayoutParams(-1, -2));
+
+        // MIDI/KAR lyrics area.
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("Waiting for embedded lyrics...");
         lyricsLabel.setTextColor(Color.WHITE);
@@ -313,6 +321,10 @@ public class Stage3PlayerActivity extends Activity {
             videoSurface.setVisibility(SurfaceView.GONE);
         }
 
+        if (metadataLabel != null) {
+            metadataLabel.setVisibility(TextView.VISIBLE);
+        }
+
         if (lyricsLabel != null) {
             lyricsLabel.setVisibility(TextView.VISIBLE);
             lyricsLabel.setTextSize(27);
@@ -320,6 +332,10 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     private void showVideoArea() {
+        if (metadataLabel != null) {
+            metadataLabel.setVisibility(TextView.GONE);
+        }
+
         if (lyricsLabel != null) {
             lyricsLabel.setVisibility(TextView.GONE);
         }
@@ -458,6 +474,8 @@ public class Stage3PlayerActivity extends Activity {
         seekBar.setProgress(0);
         timeLabel.setText("00:00 / 00:00");
         lyricsLabel.setText("Loading song lyrics...");
+        metadataLabel.setText("");
+        metadataLabel.setVisibility(TextView.GONE);
         playPauseButton.setText("PLAY");
         playPauseButton.setEnabled(false);
 
@@ -572,6 +590,21 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
+        // Display singer/composer separately above the lyrics.
+        if (metadataLabel != null) {
+            String metadata = currentMidiLyrics == null
+                    ? ""
+                    : currentMidiLyrics.getMetadataText();
+
+            if (metadata == null || metadata.trim().isEmpty()) {
+                metadataLabel.setText("");
+                metadataLabel.setVisibility(TextView.GONE);
+            } else {
+                metadataLabel.setText(metadata);
+                metadataLabel.setVisibility(TextView.VISIBLE);
+            }
+        }
+
         if (currentMidiLyrics == null
                 || !currentMidiLyrics.hasLyrics()) {
 
@@ -583,10 +616,6 @@ public class Stage3PlayerActivity extends Activity {
         long position = midiEngine == null
                 ? 0L : midiEngine.getCurrentTick();
 
-        /*
-         * Keep the Spannable text intact so the active lyric
-         * can be displayed in green.
-         */
         CharSequence styled =
                 currentMidiLyrics.styledTextAtTick(position);
 
@@ -595,7 +624,7 @@ public class Stage3PlayerActivity extends Activity {
 
     /**
      * Reads a sector range only when it is already an ordinary MIDI file.
-     * The index URI format is:
+     * Format:
      * songhub-midi://play?blob=<content-uri>&offset=<sector>&length=<sectors>
      *
      * Protected or encoded SongHub content is not decoded here.
@@ -1011,6 +1040,11 @@ public class Stage3PlayerActivity extends Activity {
         midiPausedByLifecycle = false;
 
         currentMidiLyrics = Stage3MidiLyrics.empty();
+
+        if (metadataLabel != null) {
+            metadataLabel.setText("");
+            metadataLabel.setVisibility(TextView.GONE);
+        }
 
         if (lyricsLabel != null) {
             lyricsLabel.setText("Loading song lyrics...");
