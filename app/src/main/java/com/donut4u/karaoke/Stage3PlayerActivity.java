@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.SpannableStringBuilder;
 import android.view.Gravity;
 import android.view.SurfaceView;
 import android.widget.Button;
@@ -53,6 +54,9 @@ public class Stage3PlayerActivity extends Activity {
     private TextView timeLabel;
     private SeekBar seekBar;
     private Button playPauseButton;
+
+    private LinearLayout.LayoutParams videoParams;
+    private LinearLayout.LayoutParams lyricsParams;
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -108,7 +112,7 @@ public class Stage3PlayerActivity extends Activity {
     private void buildScreen() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(14), dp(14), dp(12));
+        root.setPadding(dp(14), dp(10), dp(14), dp(8));
         root.setBackgroundColor(Color.rgb(8, 17, 12));
 
         TextView heading = new TextView(this);
@@ -119,7 +123,7 @@ public class Stage3PlayerActivity extends Activity {
         heading.setGravity(Gravity.CENTER);
 
         root.addView(heading,
-                new LinearLayout.LayoutParams(-1, dp(44)));
+                new LinearLayout.LayoutParams(-1, dp(42)));
 
         titleLabel = new TextView(this);
         titleLabel.setText("Preparing song...");
@@ -127,49 +131,63 @@ public class Stage3PlayerActivity extends Activity {
         titleLabel.setTextSize(18);
         titleLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         titleLabel.setGravity(Gravity.CENTER);
-        titleLabel.setPadding(dp(4), dp(8), dp(4), dp(8));
-        root.addView(titleLabel);
+        titleLabel.setPadding(dp(4), dp(4), dp(4), dp(4));
 
-        videoSurface = new SurfaceView(this);
-        videoSurface.setBackgroundColor(Color.BLACK);
-
-        LinearLayout.LayoutParams videoParams =
-                new LinearLayout.LayoutParams(-1, 0, 1f);
-        videoParams.setMargins(0, dp(4), 0, dp(8));
-        root.addView(videoSurface, videoParams);
+        root.addView(titleLabel,
+                new LinearLayout.LayoutParams(-1, -2));
 
         statusLabel = new TextView(this);
         statusLabel.setText("Preparing playback...");
         statusLabel.setTextColor(Color.rgb(140, 255, 180));
         statusLabel.setTextSize(14);
         statusLabel.setGravity(Gravity.CENTER);
-        root.addView(statusLabel);
 
-        // Embedded MIDI/KAR lyrics display.
+        root.addView(statusLabel,
+                new LinearLayout.LayoutParams(-1, dp(28)));
+
+        /*
+         * Both playback areas have weight.
+         * The unused area is hidden for each playback type,
+         * allowing the remaining area to fill the screen.
+         */
+        videoSurface = new SurfaceView(this);
+        videoSurface.setBackgroundColor(Color.BLACK);
+
+        videoParams = new LinearLayout.LayoutParams(-1, 0, 1f);
+        videoParams.setMargins(0, dp(4), 0, dp(4));
+        root.addView(videoSurface, videoParams);
+
+        // Large, expandable MIDI/KAR lyrics area.
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("Waiting for embedded lyrics...");
         lyricsLabel.setTextColor(Color.WHITE);
-        lyricsLabel.setTextSize(22);
+        lyricsLabel.setTextSize(27);
         lyricsLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         lyricsLabel.setGravity(Gravity.CENTER);
-        lyricsLabel.setPadding(dp(8), dp(8), dp(8), dp(8));
-        lyricsLabel.setMinHeight(dp(64));
-        lyricsLabel.setMaxLines(3);
+        lyricsLabel.setPadding(dp(12), dp(16), dp(12), dp(16));
+        lyricsLabel.setLineSpacing(dp(8), 1.05f);
+        lyricsLabel.setMaxLines(Integer.MAX_VALUE);
+        lyricsLabel.setFocusable(false);
+        lyricsLabel.setVisibility(TextView.GONE);
 
-        root.addView(lyricsLabel,
-                new LinearLayout.LayoutParams(-1, -2));
+        lyricsParams = new LinearLayout.LayoutParams(-1, 0, 1f);
+        lyricsParams.setMargins(0, dp(4), 0, dp(4));
+        root.addView(lyricsLabel, lyricsParams);
 
         seekBar = new SeekBar(this);
         seekBar.setMax(1000);
+
         root.addView(seekBar,
-                new LinearLayout.LayoutParams(-1, dp(40)));
+                new LinearLayout.LayoutParams(-1, dp(38)));
 
         timeLabel = new TextView(this);
         timeLabel.setText("00:00 / 00:00");
         timeLabel.setTextColor(Color.LTGRAY);
         timeLabel.setTextSize(12);
         timeLabel.setGravity(Gravity.CENTER);
-        root.addView(timeLabel);
+
+        root.addView(timeLabel,
+                new LinearLayout.LayoutParams(-1, dp(22)));
 
         seekBar.setOnSeekBarChangeListener(
                 new SeekBar.OnSeekBarChangeListener() {
@@ -256,13 +274,13 @@ public class Stage3PlayerActivity extends Activity {
         addControl(controls, stopButton, 0.8f);
 
         root.addView(controls,
-                new LinearLayout.LayoutParams(-1, dp(50)));
+                new LinearLayout.LayoutParams(-1, dp(48)));
 
         Button backButton = makeButton("BACK TO QUEUE");
         backButton.setOnClickListener(v -> finish());
 
         root.addView(backButton,
-                new LinearLayout.LayoutParams(-1, dp(46)));
+                new LinearLayout.LayoutParams(-1, dp(42)));
 
         setContentView(root);
     }
@@ -290,6 +308,27 @@ public class Stage3PlayerActivity extends Activity {
         parent.addView(button, params);
     }
 
+    private void showMidiLyricsArea() {
+        if (videoSurface != null) {
+            videoSurface.setVisibility(SurfaceView.GONE);
+        }
+
+        if (lyricsLabel != null) {
+            lyricsLabel.setVisibility(TextView.VISIBLE);
+            lyricsLabel.setTextSize(27);
+        }
+    }
+
+    private void showVideoArea() {
+        if (lyricsLabel != null) {
+            lyricsLabel.setVisibility(TextView.GONE);
+        }
+
+        if (videoSurface != null) {
+            videoSurface.setVisibility(SurfaceView.VISIBLE);
+        }
+    }
+
     private void startSelectedSong() {
         currentSong = Stage3SongQueue.getNowPlaying();
 
@@ -302,6 +341,8 @@ public class Stage3PlayerActivity extends Activity {
             statusLabel.setText(
                     "Return to the songbook and add songs to the queue.");
             lyricsLabel.setText("No song selected.");
+            lyricsLabel.setVisibility(TextView.VISIBLE);
+            videoSurface.setVisibility(SurfaceView.GONE);
             playPauseButton.setEnabled(false);
             return;
         }
@@ -412,6 +453,8 @@ public class Stage3PlayerActivity extends Activity {
         midiDurationTicks = 0L;
         currentMidiLyrics = Stage3MidiLyrics.empty();
 
+        showMidiLyricsArea();
+
         seekBar.setProgress(0);
         timeLabel.setText("00:00 / 00:00");
         lyricsLabel.setText("Loading song lyrics...");
@@ -477,11 +520,6 @@ public class Stage3PlayerActivity extends Activity {
                                 midiDurationTicks =
                                         Math.max(0L, durationTicks);
 
-                                /*
-                                 * Stage3MidiEngine copies the selected
-                                 * MIDI/KAR file to this location before
-                                 * playback begins.
-                                 */
                                 File midiFile = new File(
                                         getFilesDir(),
                                         "stage3_midi/song.mid");
@@ -545,8 +583,14 @@ public class Stage3PlayerActivity extends Activity {
         long position = midiEngine == null
                 ? 0L : midiEngine.getCurrentTick();
 
-        lyricsLabel.setText(
-                currentMidiLyrics.textAtTick(position));
+        /*
+         * Keep the Spannable text intact so the active lyric
+         * can be displayed in green.
+         */
+        CharSequence styled =
+                currentMidiLyrics.styledTextAtTick(position);
+
+        lyricsLabel.setText(styled);
     }
 
     /**
@@ -727,8 +771,8 @@ public class Stage3PlayerActivity extends Activity {
         midiMode = false;
         midiReady = false;
         currentMidiLyrics = Stage3MidiLyrics.empty();
-        lyricsLabel.setText(
-                "Embedded MIDI/KAR lyrics are shown for supported files.");
+
+        showVideoArea();
 
         try {
             player = new ExoPlayer.Builder(this).build();
@@ -836,6 +880,8 @@ public class Stage3PlayerActivity extends Activity {
             statusLabel.setText("Queue finished.");
             titleLabel.setText("No more queued songs");
             lyricsLabel.setText("Queue finished.");
+            lyricsLabel.setVisibility(TextView.VISIBLE);
+            videoSurface.setVisibility(SurfaceView.GONE);
             playPauseButton.setEnabled(false);
             seekBar.setProgress(0);
             timeLabel.setText("00:00 / 00:00");
@@ -968,6 +1014,7 @@ public class Stage3PlayerActivity extends Activity {
 
         if (lyricsLabel != null) {
             lyricsLabel.setText("Loading song lyrics...");
+            lyricsLabel.setVisibility(TextView.GONE);
         }
 
         if (videoSurface != null) {
