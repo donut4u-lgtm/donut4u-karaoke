@@ -56,6 +56,7 @@ public class Stage3PlayerActivity extends Activity {
     private TextView statusLabel;
     private TextView metadataLabel;
     private TextView lyricsLabel;
+    private TextView cueLabel;
     private TextView timeLabel;
     private ScrollView lyricsScroll;
     private SeekBar seekBar;
@@ -160,6 +161,16 @@ public class Stage3PlayerActivity extends Activity {
         metadataLabel.setVisibility(View.GONE);
         root.addView(metadataLabel,
                 new LinearLayout.LayoutParams(-1, -2));
+
+        cueLabel = new TextView(this);
+        cueLabel.setText(". . . . .");
+        cueLabel.setTextColor(Color.rgb(80, 255, 150));
+        cueLabel.setTextSize(28);
+        cueLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        cueLabel.setGravity(Gravity.CENTER);
+        cueLabel.setVisibility(View.GONE);
+        root.addView(cueLabel,
+                new LinearLayout.LayoutParams(-1, dp(44)));
 
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(false);
@@ -311,6 +322,9 @@ public class Stage3PlayerActivity extends Activity {
     private void showVideoArea() {
         metadataLabel.setVisibility(View.GONE);
         lyricsScroll.setVisibility(View.GONE);
+        if (cueLabel != null) {
+            cueLabel.setVisibility(View.GONE);
+        }
         lyricsScroll.scrollTo(0, 0);
         videoSurface.setVisibility(View.VISIBLE);
         resetLyricsScrollTracking();
@@ -424,6 +438,7 @@ public class Stage3PlayerActivity extends Activity {
         lyricsScroll.scrollTo(0, 0);
         metadataLabel.setText("");
         metadataLabel.setVisibility(View.GONE);
+        cueLabel.setVisibility(View.GONE);
         playPauseButton.setText("PLAY");
         playPauseButton.setEnabled(false);
 
@@ -489,6 +504,7 @@ public class Stage3PlayerActivity extends Activity {
                                 statusLabel.setText("MIDI playback failed");
                                 lyricsLabel.setText(
                                         "Unable to load this song's lyrics.");
+                                cueLabel.setVisibility(View.GONE);
                                 Toast.makeText(
                                         Stage3PlayerActivity.this,
                                         message, Toast.LENGTH_LONG).show();
@@ -498,6 +514,7 @@ public class Stage3PlayerActivity extends Activity {
                             public void onFinished() {
                                 if (released || !midiMode) return;
                                 statusLabel.setText("MIDI finished");
+                                cueLabel.setVisibility(View.GONE);
                                 playNextSong();
                             }
                         });
@@ -517,6 +534,9 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         if (!currentMidiLyrics.hasLyrics()) {
+            if (cueLabel != null) {
+                cueLabel.setVisibility(View.GONE);
+            }
             if (lastRenderedLyricStart != -1) {
                 lyricsLabel.setText(
                         "No embedded lyrics found in this MIDI/KAR file.");
@@ -529,6 +549,13 @@ public class Stage3PlayerActivity extends Activity {
 
         long tick = midiEngine == null
                 ? 0L : midiEngine.getCurrentTick();
+
+        boolean showDots =
+                currentMidiLyrics.shouldShowDotsAtTick(tick);
+        if (cueLabel != null) {
+            cueLabel.setVisibility(
+                    showDots ? View.VISIBLE : View.GONE);
+        }
 
         CharSequence candidate =
                 currentMidiLyrics.styledFullTextAtTick(tick);
@@ -550,11 +577,6 @@ public class Stage3PlayerActivity extends Activity {
             }
         }
 
-        /*
-         * The progress timer runs every 300 ms. Avoid replacing the
-         * TextView text on every timer tick. Refresh only when the active
-         * highlighted lyric event changes.
-         */
         if (activeStart != lastRenderedLyricStart
                 || activeEnd != lastRenderedLyricEnd) {
             int savedScrollY = lyricsScroll == null
@@ -609,7 +631,6 @@ public class Stage3PlayerActivity extends Activity {
                     lineTop < scrollY + margin
                     || lineBottom > scrollY + viewportHeight - margin;
 
-            // Keep the current lyric line visible as the song advances.
             boolean newLyricLine = activeOffset != lastAutoScrolledOffset;
 
             if (outsideViewport || newLyricLine) {
@@ -868,6 +889,7 @@ public class Stage3PlayerActivity extends Activity {
             seekBar.setProgress(0);
             timeLabel.setText("MIDI stopped");
             statusLabel.setText("MIDI stopped");
+            cueLabel.setVisibility(View.GONE);
             resetLyricsScrollTracking();
             return;
         }
@@ -962,6 +984,9 @@ public class Stage3PlayerActivity extends Activity {
         if (metadataLabel != null) {
             metadataLabel.setText("");
             metadataLabel.setVisibility(View.GONE);
+        }
+        if (cueLabel != null) {
+            cueLabel.setVisibility(View.GONE);
         }
         if (lyricsLabel != null) {
             lyricsLabel.setText("Loading song lyrics...");
