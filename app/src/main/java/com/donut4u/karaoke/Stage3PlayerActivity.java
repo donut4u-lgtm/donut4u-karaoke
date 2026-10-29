@@ -13,6 +13,7 @@ import android.view.Gravity;
 import android.view.SurfaceView;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -49,9 +50,10 @@ public class Stage3PlayerActivity extends Activity {
     private SurfaceView videoSurface;
     private TextView titleLabel;
     private TextView statusLabel;
-    private TextView metadataLabel; // ADDED
+    private TextView metadataLabel;
     private TextView lyricsLabel;
     private TextView timeLabel;
+    private ScrollView lyricsScroll;
     private SeekBar seekBar;
     private Button playPauseButton;
 
@@ -152,7 +154,7 @@ public class Stage3PlayerActivity extends Activity {
         videoParams.setMargins(0, dp(4), 0, dp(4));
         root.addView(videoSurface, videoParams);
 
-        // ADDED: Separate singer/composer metadata area.
+        // Singer and composer metadata.
         metadataLabel = new TextView(this);
         metadataLabel.setText("");
         metadataLabel.setTextColor(Color.rgb(255, 210, 100));
@@ -165,7 +167,15 @@ public class Stage3PlayerActivity extends Activity {
         root.addView(metadataLabel,
                 new LinearLayout.LayoutParams(-1, -2));
 
-        // MIDI/KAR lyrics area.
+        // Scrollable MIDI/KAR lyrics area.
+        lyricsScroll = new ScrollView(this);
+        lyricsScroll.setFillViewport(true);
+        lyricsScroll.setSmoothScrollingEnabled(true);
+        lyricsScroll.setVerticalScrollBarEnabled(true);
+        lyricsScroll.setBackgroundColor(Color.rgb(8, 17, 12));
+        lyricsScroll.setOverScrollMode(
+                ScrollView.OVER_SCROLL_IF_CONTENT_SCROLLS);
+
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("Waiting for embedded lyrics...");
         lyricsLabel.setTextColor(Color.WHITE);
@@ -176,11 +186,17 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel.setLineSpacing(dp(8), 1.05f);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
         lyricsLabel.setFocusable(false);
-        lyricsLabel.setVisibility(TextView.GONE);
+        lyricsLabel.setTextIsSelectable(false);
+
+        lyricsScroll.addView(
+                lyricsLabel,
+                new ScrollView.LayoutParams(-1, -2));
+
+        lyricsScroll.setVisibility(ScrollView.GONE);
 
         lyricsParams = new LinearLayout.LayoutParams(-1, 0, 1f);
         lyricsParams.setMargins(0, dp(4), 0, dp(4));
-        root.addView(lyricsLabel, lyricsParams);
+        root.addView(lyricsScroll, lyricsParams);
 
         seekBar = new SeekBar(this);
         seekBar.setMax(1000);
@@ -325,9 +341,9 @@ public class Stage3PlayerActivity extends Activity {
             metadataLabel.setVisibility(TextView.VISIBLE);
         }
 
-        if (lyricsLabel != null) {
-            lyricsLabel.setVisibility(TextView.VISIBLE);
-            lyricsLabel.setTextSize(27);
+        if (lyricsScroll != null) {
+            lyricsScroll.setVisibility(ScrollView.VISIBLE);
+            lyricsScroll.scrollTo(0, 0);
         }
     }
 
@@ -336,8 +352,9 @@ public class Stage3PlayerActivity extends Activity {
             metadataLabel.setVisibility(TextView.GONE);
         }
 
-        if (lyricsLabel != null) {
-            lyricsLabel.setVisibility(TextView.GONE);
+        if (lyricsScroll != null) {
+            lyricsScroll.setVisibility(ScrollView.GONE);
+            lyricsScroll.scrollTo(0, 0);
         }
 
         if (videoSurface != null) {
@@ -357,7 +374,7 @@ public class Stage3PlayerActivity extends Activity {
             statusLabel.setText(
                     "Return to the songbook and add songs to the queue.");
             lyricsLabel.setText("No song selected.");
-            lyricsLabel.setVisibility(TextView.VISIBLE);
+            lyricsScroll.setVisibility(ScrollView.VISIBLE);
             videoSurface.setVisibility(SurfaceView.GONE);
             playPauseButton.setEnabled(false);
             return;
@@ -474,6 +491,7 @@ public class Stage3PlayerActivity extends Activity {
         seekBar.setProgress(0);
         timeLabel.setText("00:00 / 00:00");
         lyricsLabel.setText("Loading song lyrics...");
+        lyricsScroll.scrollTo(0, 0);
         metadataLabel.setText("");
         metadataLabel.setVisibility(TextView.GONE);
         playPauseButton.setText("PLAY");
@@ -590,7 +608,6 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        // Display singer/composer separately above the lyrics.
         if (metadataLabel != null) {
             String metadata = currentMidiLyrics == null
                     ? ""
@@ -620,6 +637,11 @@ public class Stage3PlayerActivity extends Activity {
                 currentMidiLyrics.styledTextAtTick(position);
 
         lyricsLabel.setText(styled);
+
+        // Keep the displayed lyrics at the top when the song is
+        // first loaded or repositioned. Automatic active-line
+        // following requires line-position information from the
+        // Stage3MidiLyrics parser.
     }
 
     /**
@@ -909,7 +931,7 @@ public class Stage3PlayerActivity extends Activity {
             statusLabel.setText("Queue finished.");
             titleLabel.setText("No more queued songs");
             lyricsLabel.setText("Queue finished.");
-            lyricsLabel.setVisibility(TextView.VISIBLE);
+            lyricsScroll.setVisibility(ScrollView.VISIBLE);
             videoSurface.setVisibility(SurfaceView.GONE);
             playPauseButton.setEnabled(false);
             seekBar.setProgress(0);
@@ -1048,7 +1070,11 @@ public class Stage3PlayerActivity extends Activity {
 
         if (lyricsLabel != null) {
             lyricsLabel.setText("Loading song lyrics...");
-            lyricsLabel.setVisibility(TextView.GONE);
+        }
+
+        if (lyricsScroll != null) {
+            lyricsScroll.setVisibility(ScrollView.GONE);
+            lyricsScroll.scrollTo(0, 0);
         }
 
         if (videoSurface != null) {
