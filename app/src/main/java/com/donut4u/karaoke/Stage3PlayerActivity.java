@@ -36,6 +36,9 @@ public class Stage3PlayerActivity extends Activity {
     private static final String SONGBOOK_PREFS =
             "donut4u_stage3_songbook";
     private static final String SONGS_KEY = "songs_json";
+    private static final String DEFAULT_SOUNDFONT =
+            "builtin://default";
+
     private static final int SONGHUB_SECTOR_SIZE = 2048;
     private static final long MAX_SONGHUB_SLICE_BYTES =
             64L * 1024L * 1024L;
@@ -378,17 +381,13 @@ public class Stage3PlayerActivity extends Activity {
 
         String soundFontUri = findSoundFontUri();
 
-        if (soundFontUri.isEmpty()) {
-            statusLabel.setText(
-                    "Import a SoundFont (.sf2) in the songbook first.");
-
-            Toast.makeText(this,
-                    "No SoundFont found. Import an .sf2 file first.",
-                    Toast.LENGTH_LONG).show();
-            return;
+        if (soundFontUri == null || soundFontUri.trim().isEmpty()) {
+            soundFontUri = DEFAULT_SOUNDFONT;
         }
 
-        statusLabel.setText("Loading MIDI/KAR and SoundFont...");
+        statusLabel.setText("Loading MIDI/KAR and instrument sounds...");
+
+        final String selectedSoundFont = soundFontUri;
 
         new Thread(() -> {
             String playableMidiUri;
@@ -422,7 +421,7 @@ public class Stage3PlayerActivity extends Activity {
 
                 midiEngine.play(
                         playableMidiUri,
-                        soundFontUri,
+                        selectedSoundFont,
                         new Stage3MidiEngine.Callback() {
 
                             @Override
