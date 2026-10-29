@@ -1,48 +1,147 @@
 
 package com.donut4u.karaoke;
 
+import android.graphics.Color;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 public final class Stage3MidiLyrics {
 
-    private final TreeMap<Long, String> lyrics;
+    private static final int ACTIVE_GREEN = Color.rgb(0, 255, 100);
 
-    private Stage3MidiLyrics(TreeMap<Long, String> lyrics) {
-        this.lyrics = lyrics;
+    private final List<LyricEvent> events;
+
+    private Stage3MidiLyrics(List<LyricEvent> events) {
+        this.events = events;
     }
 
     public static Stage3MidiLyrics empty() {
-        return new Stage3MidiLyrics(new TreeMap<Long, String>());
+        return new Stage3MidiLyrics(new ArrayList<LyricEvent>());
     }
 
     public boolean hasLyrics() {
-        return !lyrics.isEmpty();
+        return !events.isEmpty();
     }
 
     public String textAtTick(long tick) {
-        if (lyrics.isEmpty()) {
+        return styledTextAtTick(tick).toString();
+    }
+
+    public CharSequence styledTextAtTick(long tick) {
+        if (events.isEmpty()) {
             return "No embedded lyrics found in this MIDI/KAR file.";
         }
 
-        Map.Entry<Long, String> entry =
-                lyrics.floorEntry(Math.max(0L, tick));
+        int active = 0;
 
-        if (entry == null) {
-            entry = lyrics.firstEntry();
+        for (int i = 0; i < events.size(); i++) {
+            if (events.get(i).tick <= Math.max(0L, tick)) {
+                active = i;
+            } else {
+                break;
+            }
         }
 
-        String text = entry.getValue();
-        return text == null || text.trim().isEmpty() ? "♪" : text;
+        int activeLine = events.get(active).line;
+        int first = active;
+        int last = active;
+
+        while (first > 0 && events.get(first - 1).line == activeLine) {
+            first--;
+        }
+
+        while (last + 1 < events.size()
+                && events.get(last + 1).line == activeLine) {
+            last++;
+        }
+
+        // Also show the next lyric line when space allows.
+        int displayLast = last;
+        if (last + 1 < events.size()) {
+            int nextLine = events.get(last + 1).line;
+
+            while (displayLast + 1 < events.size()
+                    && events.get(displayLast + 1).line == nextLine) {
+                displayLast++;
+            }
+        }
+
+        SpannableStringBuilder display = new SpannableStringBuilder();
+        int activeStart = -1;
+        int activeEnd = -1;
+
+        for (int i = first; i <= displayLast; i++) {
+            LyricEvent event = events.get(i);
+
+            if (i > first) {
+                LyricEvent previous = events.get(i - 1);
+
+                if (event.line != previous.line) {
+                    display.append('\n');
+                } else if (needsSpace(previous.text, event.text)) {
+                    display.append(' ');
+                }
+            }
+
+            int start = display.length();
+            display.append(event.text);
+            int end = display.length();
+
+            if (i == active) {
+                activeStart = start;
+                activeEnd = end;
+            }
+        }
+
+        if (activeStart >= 0 && activeEnd > activeStart) {
+            display.setSpan(
+                    new ForegroundColorSpan(ACTIVE_GREEN),
+                    activeStart,
+                    activeEnd,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+
+        return display;
+    }
+
+    private static boolean needsSpace(String previous, String current) {
+        if (previous == null || previous.isEmpty()
+                || current == null || current.isEmpty()) {
+            return false;
+        }
+
+        char before = previous.charAt(previous.length() - 1);
+        char after = current.charAt(0);
+
+        if (Character.isWhitespace(before)
+                || Character.isWhitespace(after)) {
+            return false;
+        }
+
+        if (".,!?;:)]}".indexOf(after) >= 0) {
+            return false;
+        }
+
+        if ("([{".indexOf(before) >= 0) {
+            return false;
+        }
+
+        return true;
     }
 
     public static Stage3MidiLyrics read(File file) {
-        TreeMap<Long, String> result = new TreeMap<>();
+        List<LyricEvent> result = new ArrayList<>();
 
         if (file == null || !file.isFile() || file.length() < 14) {
             return empty();
@@ -50,54 +149,62 @@ public final class Stage3MidiLyrics {
 
         try {
             byte[] data = Files.readAllBytes(file.toPath());
-            Reader r = new Reader(data);
+            Reader reader = new Reader(data);
 
-            if (!r.ascii(4).equals("MThd")) {
+            if (!"MThd".equals(reader.ascii(4))) {
                 return empty();
             }
 
-            long headerLength = r.u32();
-            if (headerLength < 6 || headerLength > r.remaining()) {
+            long headerLength = reader.u32();
+
+            if (headerLength < 6 || headerLength > reader.remaining()) {
                 return empty();
             }
 
-            r.u16(); // MIDI format
-            int trackCount = r.u16();
-            r.u16(); // ticks per quarter note
-            r.skip((int) headerLength - 6);
+            reader.u16(); // MIDI format
+            int trackCount = reader.u16();
+            reader.u16(); // ticks per quarter note
+            reader.skip((int) headerLength - 6);
+
+            int sequence = 0;
 
             for (int track = 0;
-                 track < trackCount && r.remaining() >= 8;
+                 track < trackCount && reader.remaining() >= 8;
                  track++) {
 
-                String chunk = r.ascii(4);
-                long chunkLength = r.u32();
+                String chunk = reader.ascii(4);
+                long chunkLength = reader.u32();
 
-                if (chunkLength > r.remaining()) {
+                if (chunkLength > reader.remaining()) {
                     break;
                 }
 
-                int end = r.position + (int) chunkLength;
+                int end = reader.position + (int) chunkLength;
 
                 if (!"MTrk".equals(chunk)) {
-                    r.position = end;
+                    reader.position = end;
                     continue;
                 }
 
                 long tick = 0;
                 int runningStatus = 0;
-                StringBuilder line = new StringBuilder();
 
-                while (r.position < end) {
-                    tick += r.vlq(end);
-                    if (r.position >= end) break;
+                while (reader.position < end) {
+                    tick += reader.vlq(end);
 
-                    int first = r.u8();
+                    if (reader.position >= end) {
+                        break;
+                    }
+
+                    int first = reader.u8();
                     int status;
                     int firstData = -1;
 
                     if (first < 0x80) {
-                        if (runningStatus == 0) break;
+                        if (runningStatus == 0) {
+                            break;
+                        }
+
                         status = runningStatus;
                         firstData = first;
                     } else {
@@ -106,16 +213,19 @@ public final class Stage3MidiLyrics {
 
                     if (status == 0xFF) {
                         runningStatus = 0;
-                        int metaType = r.u8();
-                        int length = r.vlq(end);
 
-                        if (length > end - r.position) break;
+                        int metaType = reader.u8();
+                        int length = reader.vlq(end);
 
-                        if (metaType == 0x01 ||
-                            metaType == 0x05 ||
-                            metaType == 0x06) {
+                        if (length > end - reader.position) {
+                            break;
+                        }
 
-                            String value = decode(r.bytes(length))
+                        if (metaType == 0x01
+                                || metaType == 0x05
+                                || metaType == 0x06) {
+
+                            String value = decode(reader.bytes(length))
                                     .replace("\u0000", "")
                                     .trim();
 
@@ -123,59 +233,88 @@ public final class Stage3MidiLyrics {
                                     && !value.startsWith("@")) {
 
                                 boolean lineEnd =
-                                        value.contains("/") ||
-                                        value.contains("\\");
+                                        value.contains("/")
+                                        || value.contains("\\");
 
                                 value = value.replace("/", "")
                                         .replace("\\", "")
                                         .trim();
 
                                 if (!value.isEmpty()) {
-                                    line.append(value);
-                                }
-
-                                if (line.length() > 0) {
-                                    result.put(tick, line.toString().trim());
-                                }
-
-                                if (lineEnd) {
-                                    line.setLength(0);
+                                    result.add(new LyricEvent(
+                                            tick,
+                                            value,
+                                            sequence++,
+                                            lineEnd));
+                                } else if (lineEnd && !result.isEmpty()) {
+                                    result.get(result.size() - 1).lineEnd = true;
                                 }
                             }
+
                         } else {
-                            r.skip(length);
+                            reader.skip(length);
                         }
 
-                        if (metaType == 0x2F) break;
+                        if (metaType == 0x2F) {
+                            break;
+                        }
 
                     } else if (status == 0xF0 || status == 0xF7) {
                         runningStatus = 0;
-                        int length = r.vlq(end);
+                        int length = reader.vlq(end);
 
-                        if (length > end - r.position) break;
-                        r.skip(length);
+                        if (length > end - reader.position) {
+                            break;
+                        }
+
+                        reader.skip(length);
 
                     } else if (status >= 0x80 && status <= 0xEF) {
                         runningStatus = status;
 
                         if (firstData < 0) {
-                            r.u8();
+                            reader.u8();
                         }
 
                         int command = status & 0xF0;
+
                         if (command != 0xC0 && command != 0xD0) {
-                            r.u8();
+                            reader.u8();
                         }
+
                     } else {
                         runningStatus = 0;
                     }
                 }
 
-                r.position = end;
+                reader.position = end;
             }
 
         } catch (Exception ignored) {
-            // Return any valid lyric events found before a parsing error.
+            // Keep any lyric events successfully read.
+        }
+
+        Collections.sort(result, new Comparator<LyricEvent>() {
+            @Override
+            public int compare(LyricEvent a, LyricEvent b) {
+                int byTick = Long.compare(a.tick, b.tick);
+
+                if (byTick != 0) {
+                    return byTick;
+                }
+
+                return Integer.compare(a.sequence, b.sequence);
+            }
+        });
+
+        int line = 0;
+
+        for (LyricEvent event : result) {
+            event.line = line;
+
+            if (event.lineEnd) {
+                line++;
+            }
         }
 
         return new Stage3MidiLyrics(result);
@@ -185,10 +324,31 @@ public final class Stage3MidiLyrics {
         String value = new String(bytes, StandardCharsets.UTF_8);
 
         if (value.indexOf('\uFFFD') >= 0) {
-            value = new String(bytes, Charset.forName("ISO-8859-1"));
+            value = new String(
+                    bytes, Charset.forName("ISO-8859-1"));
         }
 
         return value;
+    }
+
+    private static final class LyricEvent {
+        final long tick;
+        final String text;
+        final int sequence;
+        boolean lineEnd;
+        int line;
+
+        LyricEvent(
+                long tick,
+                String text,
+                int sequence,
+                boolean lineEnd) {
+
+            this.tick = tick;
+            this.text = text;
+            this.sequence = sequence;
+            this.lineEnd = lineEnd;
+        }
     }
 
     private static final class Reader {
@@ -207,6 +367,7 @@ public final class Stage3MidiLyrics {
             if (position >= data.length) {
                 throw new IOException("Unexpected end of MIDI file");
             }
+
             return data[position++] & 0xFF;
         }
 
@@ -227,7 +388,10 @@ public final class Stage3MidiLyrics {
             }
 
             String value = new String(
-                    data, position, length, StandardCharsets.US_ASCII);
+                    data,
+                    position,
+                    length,
+                    StandardCharsets.US_ASCII);
 
             position += length;
             return value;
@@ -239,8 +403,10 @@ public final class Stage3MidiLyrics {
             }
 
             byte[] value = new byte[length];
+
             System.arraycopy(data, position, value, 0, length);
             position += length;
+
             return value;
         }
 
@@ -248,6 +414,7 @@ public final class Stage3MidiLyrics {
             if (length < 0 || length > remaining()) {
                 throw new IOException("Invalid MIDI length");
             }
+
             position += length;
         }
 
