@@ -21,22 +21,30 @@ public final class Stage3MidiLyrics {
 
     private static final int ACTIVE_GREEN = Color.rgb(0, 255, 100);
 
+    /*
+     * Instrumental-gap detection is a timing heuristic.
+     * MIDI lyric events alone cannot prove that no singer is singing.
+     */
     private final List<LyricEvent> events;
     private final String singer;
     private final String composer;
+    private final int ticksPerQuarterNote;
 
     private Stage3MidiLyrics(
             List<LyricEvent> events,
             String singer,
-            String composer) {
+            String composer,
+            int ticksPerQuarterNote) {
         this.events = events;
         this.singer = singer;
         this.composer = composer;
+        this.ticksPerQuarterNote =
+                ticksPerQuarterNote > 0 ? ticksPerQuarterNote : 480;
     }
 
     public static Stage3MidiLyrics empty() {
         return new Stage3MidiLyrics(
-                new ArrayList<LyricEvent>(), "", "");
+                new ArrayList<LyricEvent>(), "", "", 480);
     }
 
     public boolean hasLyrics() {
@@ -82,10 +90,6 @@ public final class Stage3MidiLyrics {
         return buildFullLyrics(tick).activeLineStart;
     }
 
-    /*
-     * Exposed for the player so it can avoid rebuilding the lyrics
-     * TextView on every progress-timer update.
-     */
     public int activeEventIndexAtTick(long tick) {
         return findActiveEventIndex(tick);
     }
@@ -93,6 +97,44 @@ public final class Stage3MidiLyrics {
     public int activeLineNumberAtTick(long tick) {
         int index = findActiveEventIndex(tick);
         return index < 0 ? -1 : events.get(index).line;
+    }
+
+    /*
+     * Returns true during an intro or a likely instrumental gap.
+     *
+     * Intro: the first lyric starts after tick zero.
+     * Interlude: two lyric events are separated by at least three
+     * quarter notes, and playback is inside the middle of that gap.
+     *
+     * This is deliberately conservative. The MIDI lyric track does
+     * not contain enough information to prove when vocals stop.
+     */
+    public boolean shouldShowDotsAtTick(long tick) {
+        if (events.isEmpty()) return false;
+
+        long safeTick = Math.max(0L, tick);
+        long beat = Math.max(1L, ticksPerQuarterNote);
+
+        if (safeTick < events.get(0).tick) {
+            return events.get(0).tick > 0L;
+        }
+
+        int active = findActiveEventIndex(safeTick);
+
+        if (active < 0 || active >= events.size() - 1) {
+            return false;
+        }
+
+        LyricEvent current = events.get(active);
+        LyricEvent next = events.get(active + 1);
+        long gap = next.tick - current.tick;
+
+        if (gap < beat * 3L) {
+            return false;
+        }
+
+        return safeTick >= current.tick + beat
+                && safeTick < next.tick - beat;
     }
 
     private int findActiveEventIndex(long tick) {
@@ -153,9 +195,48 @@ public final class Stage3MidiLyrics {
             }
         }
 
+        /*
+         * If a word is split across lyric events, extend the green
+         * highlight across adjoining pieces of that same word.
+         * Example: "exa" followed by "mple" becomes "example".
+         *
+         * We only join pieces on the same lyric line when no
+         * whitespace separates them.
+         */
+        if (active >= 0) {
+            int first = active;
+            int last = active;
+
+            while (first > 0
+                    && isSameWord(events.get(first - 1), events.get(first))) {
+                first--;
+            }
+
+            while (last + 1 < events.size()
+                    && isSameWord(events.get(last), events.get(last + 1))) {
+                last++;
+            }
+
+            activeStart = findEventStartOffset(first);
+            activeEnd = findEventEndOffset(last);
+        }
+
         applyActiveHighlight(display, activeStart, activeEnd);
 
         return new FullLyricsResult(display, activeLineStart);
+    }
+
+    private static boolean isSameWord(
+            LyricEvent left,
+            LyricEvent right) {
+        if (left.line != right.line) return false;
+        if (left.text.isEmpty() || right.text.isEmpty()) return false;
+
+        char leftChar = left.text.charAt(left.text.length() - 1);
+        char rightChar = right.text.charAt(0);
+
+        return !Character.isWhitespace(leftChar)
+                && !Character.isWhitespace(rightChar);
     }
 
     private int findEventStartOffset(int targetIndex) {
@@ -182,11 +263,16 @@ public final class Stage3MidiLyrics {
         return offset;
     }
 
+    private int findEventEndOffset(int targetIndex) {
+        return findEventStartOffset(targetIndex)
+                + events.get(targetIndex).text.length();
+    }
+
     private static void applyActiveHighlight(
             SpannableStringBuilder display,
             int start,
             int end) {
-        if (start >= 0 && end > start) {
+        if (start >= 0 && end > start && end <= display.length()) {
             display.setSpan(
                     new ForegroundColorSpan(ACTIVE_GREEN),
                     start,
@@ -200,6 +286,7 @@ public final class Stage3MidiLyrics {
 
         String singer = "";
         String composer = "";
+        int ticksPerQuarterNote = 480;
 
         if (file == null || !file.isFile() || file.length() < 14) {
             return empty();
@@ -220,7 +307,16 @@ public final class Stage3MidiLyrics {
 
             reader.u16(); // MIDI format
             int trackCount = reader.u16();
-            reader.u16(); // Time division; lyric events already use ticks.
+            int division = reader.u16();
+
+            /*
+             * A positive division value is ticks per quarter note.
+             * A negative high byte represents SMPTE timing instead;
+             * retain the fallback in that case.
+             */
+            if ((division & 0x8000) == 0 && division > 0) {
+                ticksPerQuarterNote = division;
+            }
 
             reader.skip((int) headerLength - 6);
 
@@ -284,7 +380,6 @@ public final class Stage3MidiLyrics {
                         String lower =
                                 trimmed.toLowerCase(Locale.ROOT);
 
-                        // Track-name metadata can contain singer/composer labels.
                         if (metaType == 0x03) {
                             if (lower.startsWith("singer:")) {
                                 singer = removeLabel(trimmed, "singer:");
@@ -293,17 +388,12 @@ public final class Stage3MidiLyrics {
                             }
                         }
 
-                        // Only these meta-event types are considered lyric sources.
                         if (metaType != 0x01
                                 && metaType != 0x05
                                 && metaType != 0x06) {
                             continue;
                         }
 
-                        /*
-                         * Standard KAR @ tags are metadata, not sung lyrics.
-                         * For example: @T title, @A artist, @I information.
-                         */
                         if (trimmed.startsWith("@")) {
                             MetadataResult metadata =
                                     parseMetadata(trimmed);
@@ -334,10 +424,6 @@ public final class Stage3MidiLyrics {
                         boolean lineEnd = containsLineBreak(value);
                         String lyric = cleanLyric(value);
 
-                        /*
-                         * Preserve explicit spaces in the original lyric event.
-                         * Do not invent spaces from elapsed time between events.
-                         */
                         if (!lyric.trim().isEmpty()
                                 && !isControlToken(lyric)) {
                             result.add(new LyricEvent(
@@ -346,7 +432,6 @@ public final class Stage3MidiLyrics {
                                     sequence++,
                                     lineEnd));
                         } else if (lineEnd && !result.isEmpty()) {
-                            // A marker-only event ends the previous lyric line.
                             result.get(result.size() - 1).lineEnd = true;
                         }
 
@@ -377,7 +462,7 @@ public final class Stage3MidiLyrics {
             }
 
         } catch (Exception ignored) {
-            // Keep any valid lyric events parsed before a malformed chunk.
+            // Preserve any valid lyric events parsed before a malformed chunk.
         }
 
         Collections.sort(result, new Comparator<LyricEvent>() {
@@ -390,10 +475,6 @@ public final class Stage3MidiLyrics {
             }
         });
 
-        /*
-         * KAR slash and backslash markers determine line boundaries.
-         * Do not invent lines from timing gaps: pauses can occur inside a line.
-         */
         int line = 0;
 
         for (int i = 0; i < result.size(); i++) {
@@ -406,7 +487,8 @@ public final class Stage3MidiLyrics {
             event.line = line;
         }
 
-        return new Stage3MidiLyrics(result, singer, composer);
+        return new Stage3MidiLyrics(
+                result, singer, composer, ticksPerQuarterNote);
     }
 
     private static boolean isControlToken(String text) {
@@ -416,7 +498,6 @@ public final class Stage3MidiLyrics {
 
         if (value.isEmpty()) return true;
 
-        // Ignore zero-only tokens, including "00 00", "0 0 0", and "0000".
         String noWhitespace = value.replaceAll("\\s+", "");
 
         if (noWhitespace.matches("(?i)0{2,}")) {
@@ -427,14 +508,9 @@ public final class Stage3MidiLyrics {
             return true;
         }
 
-        // Ignore strings made entirely of control characters.
         return value.matches("[\\p{Cntrl}\\s]+");
     }
 
-    /*
-     * Remove KAR markers from the displayed text while retaining spaces.
-     * A marker indicates that the following event starts a new line.
-     */
     private static String cleanLyric(String value) {
         return value.replace("/", "")
                 .replace("\\", "")
@@ -472,7 +548,6 @@ public final class Stage3MidiLyrics {
         boolean found = false;
 
         String cleaned = value.trim();
-
         String[] parts = cleaned.split("[\\r\\n;]+");
 
         for (String part : parts) {
