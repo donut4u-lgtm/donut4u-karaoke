@@ -73,8 +73,8 @@ public final class Stage3MidiLyrics {
     }
 
     /**
-     * Displays the current lyric line and the next line.
-     * The current timed lyric event is highlighted in green.
+     * Shows the current lyric line and the next line.
+     * Highlights the active timed lyric event.
      */
     public CharSequence styledTextAtTick(long tick) {
         if (events.isEmpty()) {
@@ -106,7 +106,6 @@ public final class Stage3MidiLyrics {
             last++;
         }
 
-        // Include the following line so the lyrics advance naturally.
         int displayLast = last;
 
         if (last + 1 < events.size()) {
@@ -158,11 +157,6 @@ public final class Stage3MidiLyrics {
         return display;
     }
 
-    /**
-     * Avoids inserting spaces between closely timed syllables.
-     * A longer pause between events is treated as a possible word boundary.
-     * Existing whitespace in the source always takes priority.
-     */
     private static boolean needsWordSpace(
             LyricEvent previous,
             LyricEvent current) {
@@ -171,7 +165,8 @@ public final class Stage3MidiLyrics {
             return false;
         }
 
-        char last = previous.text.charAt(previous.text.length() - 1);
+        char last = previous.text.charAt(
+                previous.text.length() - 1);
         char first = current.text.charAt(0);
 
         if (Character.isWhitespace(last)
@@ -179,10 +174,12 @@ public final class Stage3MidiLyrics {
             return false;
         }
 
+        // Keep hyphenated words and contractions together.
         if (last == '-' || last == '\'' || last == '’') {
             return false;
         }
 
+        // Do not put a space before punctuation.
         if (first == ',' || first == '.' || first == '!'
                 || first == '?' || first == ';' || first == ':'
                 || first == ')' || first == ']' || first == '’'
@@ -192,9 +189,7 @@ public final class Stage3MidiLyrics {
 
         long gap = current.tick - previous.tick;
 
-        // A small gap usually indicates the next sung syllable.
-        // A larger gap may indicate a word boundary.
-        return gap >= 240L;
+        return gap >= current.wordGapThreshold;
     }
 
     public static Stage3MidiLyrics read(File file) {
@@ -206,6 +201,8 @@ public final class Stage3MidiLyrics {
         if (file == null || !file.isFile() || file.length() < 14) {
             return empty();
         }
+
+        long ppq = 480L;
 
         try {
             byte[] data = Files.readAllBytes(file.toPath());
@@ -227,16 +224,19 @@ public final class Stage3MidiLyrics {
             int trackCount = reader.u16();
             int division = reader.u16();
 
-            long ppq = (division & 0x8000) == 0
-                    ? (division & 0x7FFF)
-                    : 480L;
+            // SMPTE timing is handled with a conservative fallback.
+            if ((division & 0x8000) == 0) {
+                ppq = division & 0x7FFF;
+            }
 
             if (ppq <= 0) {
                 ppq = 480L;
             }
 
-            // Word-spacing threshold scales with the file's PPQ.
             long wordGapThreshold = Math.max(120L, ppq / 2L);
+
+            // A longer gap can indicate the beginning of a new phrase.
+            long phraseGapThreshold = Math.max(ppq * 2L, 960L);
 
             reader.skip((int) headerLength - 6);
 
@@ -295,28 +295,29 @@ public final class Stage3MidiLyrics {
                             break;
                         }
 
-                        String value = decode(reader.bytes(length))
+                        byte[] raw = reader.bytes(length);
+                        String value = decode(raw)
                                 .replace("\u0000", "")
                                 .trim();
+
+                        if (metaType == 0x2F) {
+                            break;
+                        }
 
                         if (!value.isEmpty()) {
                             String lower =
                                     value.toLowerCase(Locale.ROOT);
 
-                            // Track names can contain metadata.
                             if (metaType == 0x03) {
                                 if (lower.startsWith("singer:")) {
-                                    singer = removeLabel(value, "singer:");
+                                    singer = removeLabel(
+                                            value, "singer:");
                                 } else if (lower.startsWith("composer:")) {
-                                    composer = removeLabel(value, "composer:");
-                                } else {
-                                    extractMetadata(
-                                            value, MetadataHolder.of(
-                                                    singer, composer));
+                                    composer = removeLabel(
+                                            value, "composer:");
                                 }
                             }
 
-                            // Standard text/lyric event types.
                             if (metaType == 0x01
                                     || metaType == 0x05
                                     || metaType == 0x06) {
@@ -344,7 +345,8 @@ public final class Stage3MidiLyrics {
                                                 lyric,
                                                 sequence++,
                                                 lineEnd,
-                                                wordGapThreshold));
+                                                wordGapThreshold,
+                                                phraseGapThreshold));
                                     } else if (lineEnd
                                             && !result.isEmpty()) {
                                         result.get(result.size() - 1)
@@ -353,9 +355,8 @@ public final class Stage3MidiLyrics {
                                 }
                             }
 
-                            // Common KAR metadata conventions.
-                            // @T = title, @A = artist, @I = information.
-                            // Do not show these tags as lyrics.
+                            // Common KAR tags such as @T, @A and @I
+                            // are metadata, not lyric text.
                             if (value.startsWith("@")) {
                                 MetadataResult metadata =
                                         parseMetadata(value);
@@ -370,10 +371,6 @@ public final class Stage3MidiLyrics {
                                     }
                                 }
                             }
-                        }
-
-                        if (metaType == 0x2F) {
-                            break;
                         }
 
                     } else if (status == 0xF0 || status == 0xF7) {
@@ -409,7 +406,7 @@ public final class Stage3MidiLyrics {
             }
 
         } catch (Exception ignored) {
-            // Return the valid events already parsed.
+            // Keep any valid lyric events already read.
         }
 
         Collections.sort(result, new Comparator<LyricEvent>() {
@@ -423,24 +420,53 @@ public final class Stage3MidiLyrics {
             }
         });
 
+        /*
+         * Assign lines using explicit MIDI/KAR line endings first.
+         * When a file has no line markers, infer a new line from a
+         * long pause or sentence-ending punctuation.
+         */
         int line = 0;
 
-        for (LyricEvent event : result) {
-            event.line = line;
+        for (int i = 0; i < result.size(); i++) {
+            LyricEvent event = result.get(i);
 
-            if (event.lineEnd) {
-                line++;
+            if (i > 0) {
+                LyricEvent previous = result.get(i - 1);
+
+                long gap = event.tick - previous.tick;
+
+                boolean longPause =
+                        gap >= event.phraseGapThreshold;
+
+                boolean sentenceEnd =
+                        endsSentence(previous.text);
+
+                if (previous.lineEnd || longPause || sentenceEnd) {
+                    line++;
+                }
             }
+
+            event.line = line;
         }
 
-        // Store the calculated threshold for each event pair.
         return new Stage3MidiLyrics(result, singer, composer);
+    }
+
+    private static boolean endsSentence(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+
+        char last = text.charAt(text.length() - 1);
+
+        return last == '.' || last == '!'
+                || last == '?' || last == ';' || last == ':';
     }
 
     private static String cleanLyric(String value) {
         String result = value.trim();
 
-        // MIDI/KAR commonly uses slash or backslash as line endings.
+        // Slash, backslash and newline mark line endings in many KAR files.
         result = result.replace("/", "")
                 .replace("\\", "")
                 .replace("\r", "")
@@ -485,7 +511,7 @@ public final class Stage3MidiLyrics {
 
         String cleaned = value.trim();
 
-        if (cleaned.startsWith("@")) {
+        if (cleaned.startsWith("@") && cleaned.length() >= 2) {
             cleaned = cleaned.substring(2).trim();
         }
 
@@ -507,13 +533,6 @@ public final class Stage3MidiLyrics {
         return new MetadataResult(found, singer, composer);
     }
 
-    private static void extractMetadata(
-            String value,
-            MetadataHolder holder) {
-        // Kept intentionally empty: metadata is extracted only from
-        // explicit Singer:/Composer: labels to avoid inventing values.
-    }
-
     private static String decode(byte[] bytes) {
         String value = new String(bytes, StandardCharsets.UTF_8);
 
@@ -523,20 +542,6 @@ public final class Stage3MidiLyrics {
         }
 
         return value;
-    }
-
-    private static final class MetadataHolder {
-        final String singer;
-        final String composer;
-
-        private MetadataHolder(String singer, String composer) {
-            this.singer = singer;
-            this.composer = composer;
-        }
-
-        static MetadataHolder of(String singer, String composer) {
-            return new MetadataHolder(singer, composer);
-        }
     }
 
     private static final class MetadataResult {
@@ -559,6 +564,7 @@ public final class Stage3MidiLyrics {
         final String text;
         final int sequence;
         final long wordGapThreshold;
+        final long phraseGapThreshold;
 
         boolean lineEnd;
         int line;
@@ -568,13 +574,15 @@ public final class Stage3MidiLyrics {
                 String text,
                 int sequence,
                 boolean lineEnd,
-                long wordGapThreshold) {
+                long wordGapThreshold,
+                long phraseGapThreshold) {
 
             this.tick = tick;
             this.text = text;
             this.sequence = sequence;
             this.lineEnd = lineEnd;
             this.wordGapThreshold = wordGapThreshold;
+            this.phraseGapThreshold = phraseGapThreshold;
         }
     }
 
@@ -653,7 +661,6 @@ public final class Stage3MidiLyrics {
                 if (position >= end
                         || position >= data.length
                         || count++ >= 4) {
-
                     throw new IOException(
                             "Invalid MIDI event length");
                 }
