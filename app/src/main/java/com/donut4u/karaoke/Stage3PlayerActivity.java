@@ -10,6 +10,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Layout;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.view.Gravity;
 import android.view.SurfaceView;
 import android.view.View;
@@ -71,6 +73,8 @@ public class Stage3PlayerActivity extends Activity {
     private long midiDurationTicks;
     private int lastAutoScrolledLine = -1;
     private int lastAutoScrolledOffset = -1;
+    private int lastRenderedLyricStart = -2;
+    private int lastRenderedLyricEnd = -2;
 
     private Stage3MidiLyrics currentMidiLyrics =
             Stage3MidiLyrics.empty();
@@ -80,9 +84,7 @@ public class Stage3PlayerActivity extends Activity {
     private final Runnable progressUpdater = new Runnable() {
         @Override
         public void run() {
-            if (released) {
-                return;
-            }
+            if (released) return;
 
             if (midiMode && midiEngine != null && midiReady) {
                 updateMidiProgress();
@@ -317,6 +319,8 @@ public class Stage3PlayerActivity extends Activity {
     private void resetLyricsScrollTracking() {
         lastAutoScrolledLine = -1;
         lastAutoScrolledOffset = -1;
+        lastRenderedLyricStart = -2;
+        lastRenderedLyricEnd = -2;
     }
 
     private void startSelectedSong() {
@@ -513,8 +517,12 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         if (!currentMidiLyrics.hasLyrics()) {
-            lyricsLabel.setText(
-                    "No embedded lyrics found in this MIDI/KAR file.");
+            if (lastRenderedLyricStart != -1) {
+                lyricsLabel.setText(
+                        "No embedded lyrics found in this MIDI/KAR file.");
+                lastRenderedLyricStart = -1;
+                lastRenderedLyricEnd = -1;
+            }
             resetLyricsScrollTracking();
             return;
         }
@@ -522,14 +530,62 @@ public class Stage3PlayerActivity extends Activity {
         long tick = midiEngine == null
                 ? 0L : midiEngine.getCurrentTick();
 
-        // Display all lyrics rather than only two lines.
-        lyricsLabel.setText(
-                currentMidiLyrics.styledFullTextAtTick(tick));
+        CharSequence candidate =
+                currentMidiLyrics.styledFullTextAtTick(tick);
+
+        int activeStart = -1;
+        int activeEnd = -1;
+
+        if (candidate instanceof Spanned) {
+            Spanned spanned = (Spanned) candidate;
+            ForegroundColorSpan[] spans = spanned.getSpans(
+                    0, spanned.length(), ForegroundColorSpan.class);
+
+            for (ForegroundColorSpan span : spans) {
+                if (span.getForegroundColor() == Color.rgb(0, 255, 100)) {
+                    activeStart = spanned.getSpanStart(span);
+                    activeEnd = spanned.getSpanEnd(span);
+                    break;
+                }
+            }
+        }
+
+        /*
+         * The progress timer runs every 300 ms. Avoid replacing the
+         * TextView text on every timer tick. Refresh only when the active
+         * highlighted lyric event changes.
+         */
+        if (activeStart != lastRenderedLyricStart
+                || activeEnd != lastRenderedLyricEnd) {
+            int savedScrollY = lyricsScroll == null
+                    ? 0 : lyricsScroll.getScrollY();
+
+            lyricsLabel.setText(candidate);
+            lastRenderedLyricStart = activeStart;
+            lastRenderedLyricEnd = activeEnd;
+
+            final int restoreY = savedScrollY;
+            lyricsLabel.post(() -> {
+                if (released || lyricsScroll == null
+                        || lyricsLabel == null
+                        || lyricsScroll.getVisibility() != View.VISIBLE) {
+                    return;
+                }
+
+                Layout layout = lyricsLabel.getLayout();
+                if (layout == null || layout.getLineCount() == 0) return;
+
+                int maxScroll = Math.max(
+                        0, lyricsLabel.getHeight() - lyricsScroll.getHeight());
+                lyricsScroll.scrollTo(0, Math.min(restoreY, maxScroll));
+            });
+        }
+
+        if (activeStart < 0) return;
 
         final int activeOffset = Math.max(0,
                 currentMidiLyrics.activeLineStartOffsetAtTick(tick));
 
-        // TextView must finish laying out the new text before scrolling.
         lyricsLabel.post(() -> {
             if (released || lyricsScroll == null
                     || lyricsLabel == null
@@ -541,9 +597,9 @@ public class Stage3PlayerActivity extends Activity {
             if (layout == null || layout.getLineCount() == 0) return;
 
             int offset = Math.min(activeOffset, lyricsLabel.length());
-            int line = layout.getLineForOffset(offset);
-            int lineTop = layout.getLineTop(line);
-            int lineBottom = layout.getLineBottom(line);
+            int visualLine = layout.getLineForOffset(offset);
+            int lineTop = layout.getLineTop(visualLine);
+            int lineBottom = layout.getLineBottom(visualLine);
 
             int scrollY = lyricsScroll.getScrollY();
             int viewportHeight = lyricsScroll.getHeight();
@@ -553,18 +609,18 @@ public class Stage3PlayerActivity extends Activity {
                     lineTop < scrollY + margin
                     || lineBottom > scrollY + viewportHeight - margin;
 
-            boolean newLine = line != lastAutoScrolledLine
-                    || offset != lastAutoScrolledOffset;
+            // Keep the current lyric line visible as the song advances.
+            boolean newLyricLine = activeOffset != lastAutoScrolledOffset;
 
-            if (outsideViewport || newLine) {
+            if (outsideViewport || newLyricLine) {
                 int targetY = lineTop - viewportHeight / 3;
                 int maxScroll = Math.max(
                         0, lyricsLabel.getHeight() - viewportHeight);
                 targetY = Math.max(0, Math.min(targetY, maxScroll));
 
                 lyricsScroll.smoothScrollTo(0, targetY);
-                lastAutoScrolledLine = line;
-                lastAutoScrolledOffset = offset;
+                lastAutoScrolledLine = visualLine;
+                lastAutoScrolledOffset = activeOffset;
             }
         });
     }
@@ -835,7 +891,6 @@ public class Stage3PlayerActivity extends Activity {
 
             if (!userSeeking) seekBar.setProgress(progress);
 
-            // Ticks are not elapsed seconds. Do not label them as mm:ss.
             timeLabel.setText(
                     formatTicks(position) + " / "
                             + formatTicks(midiDurationTicks));
