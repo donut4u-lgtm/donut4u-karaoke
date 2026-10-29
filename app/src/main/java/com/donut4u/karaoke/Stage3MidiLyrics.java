@@ -156,11 +156,6 @@ public final class Stage3MidiLyrics {
         return index < 0 ? -1 : events.get(index).line;
     }
 
-    /*
-     * Returns the next lyric line for the preparation display.
-     * MIDI fragments are joined carefully so syllables are not
-     * automatically separated by spaces.
-     */
     public String upcomingLineAtTick(long tick) {
         int active = findActiveEventIndex(tick);
 
@@ -210,10 +205,6 @@ public final class Stage3MidiLyrics {
         int active = findActiveEventIndex(safeTick);
         if (active < 0) return false;
 
-        /*
-         * An explicit instrumental section should animate the dots
-         * until the next lyric event or another section marker.
-         */
         int sectionIndex = mostRecentSectionIndex(safeTick);
         if (sectionIndex >= 0) {
             LyricEvent section = events.get(sectionIndex);
@@ -303,11 +294,6 @@ public final class Stage3MidiLyrics {
         return -1;
     }
 
-    /*
-     * Section markers remain active at their own timestamp.
-     * This prevents the preceding lyric from staying highlighted
-     * after the song enters a new section.
-     */
     private int findActiveEventIndex(long tick) {
         int low = 0;
         int high = events.size() - 1;
@@ -342,10 +328,6 @@ public final class Stage3MidiLyrics {
         int activeStart = -1;
         int activeEnd = -1;
 
-        /*
-         * These offsets are indexed by the original event index.
-         * Section markers therefore cannot shift the highlight offsets.
-         */
         int[] starts = new int[events.size()];
         int[] ends = new int[events.size()];
 
@@ -355,7 +337,6 @@ public final class Stage3MidiLyrics {
         }
 
         int currentLine = Integer.MIN_VALUE;
-        boolean previousWasSection = false;
         int previousLyricEvent = -1;
 
         for (int i = 0; i < events.size(); i++) {
@@ -365,9 +346,6 @@ public final class Stage3MidiLyrics {
                 if (display.length() > 0
                         && display.charAt(display.length() - 1) != '\n') {
                     display.append("\n\n");
-                } else if (display.length() > 1
-                        && display.charAt(display.length() - 2) != '\n') {
-                    display.append('\n');
                 }
 
                 int start = display.length();
@@ -389,9 +367,8 @@ public final class Stage3MidiLyrics {
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }
 
-                display.append("\n");
+                display.append('\n');
                 currentLine = Integer.MIN_VALUE;
-                previousWasSection = true;
                 previousLyricEvent = -1;
                 continue;
             }
@@ -406,11 +383,11 @@ public final class Stage3MidiLyrics {
                 previousLyricEvent = -1;
             }
 
-            if (previousLyricEvent >= 0
-                    && needsWordSpace(
-                            events.get(previousLyricEvent).text,
-                            event.text)) {
-                display.append(' ');
+            if (previousLyricEvent >= 0) {
+                String previous = events.get(previousLyricEvent).text;
+                if (needsWordSpace(previous, event.text)) {
+                    display.append(' ');
+                }
             }
 
             int start = display.length();
@@ -423,7 +400,6 @@ public final class Stage3MidiLyrics {
             if (i == active) activeLineStart = start;
 
             previousLyricEvent = i;
-            previousWasSection = false;
         }
 
         if (active >= 0 && active < events.size()
@@ -465,17 +441,12 @@ public final class Stage3MidiLyrics {
         }
 
         applyActiveHighlight(display, activeStart, activeEnd);
-
         return new FullLyricsResult(display, activeLineStart);
     }
 
     /*
-     * Spacing heuristic:
-     * - Preserve spaces already present in MIDI lyric events.
-     * - Never put a space before punctuation.
-     * - Keep ordinary syllable fragments together.
-     * - Add a space when a recognizable complete word follows or
-     *   precedes another fragment.
+     * Never guess word boundaries using an English/Filipino word list.
+     * Only explicit whitespace or punctuation can establish a boundary.
      */
     private static boolean needsWordSpace(
             String previousText,
@@ -494,143 +465,7 @@ public final class Stage3MidiLyrics {
             return false;
         }
 
-        if (",.!?;:)]}".indexOf(next) >= 0) return false;
-        if ("([{".indexOf(previous) >= 0) return false;
-
-        if (!Character.isLetterOrDigit(previous)
-                || !Character.isLetterOrDigit(next)) {
-            return previous == ',' || previous == '.'
-                    || previous == '!' || previous == '?'
-                    || previous == ';' || previous == ':';
-        }
-
-        String left = previousText.trim().toLowerCase(Locale.ROOT);
-        String right = nextText.trim().toLowerCase(Locale.ROOT);
-
-        if (left.isEmpty() || right.isEmpty()) return false;
-
-        if (isCommonWord(left) || isCommonWord(right)) {
-            return true;
-        }
-
-        /*
-         * A leading uppercase character after a lowercase fragment
-         * often indicates a new proper name or sentence.
-         */
-        if (Character.isLowerCase(previous)
-                && Character.isUpperCase(next)
-                && right.length() > 1) {
-            return true;
-        }
-
         return false;
-    }
-
-    private static boolean isCommonWord(String value) {
-        if (value == null) return false;
-
-        String word = value.toLowerCase(Locale.ROOT)
-                .replaceAll("^[^\\p{L}]+|[^\\p{L}]+$", "");
-
-        switch (word) {
-            case "a":
-            case "i":
-            case "am":
-            case "an":
-            case "and":
-            case "are":
-            case "as":
-            case "at":
-            case "be":
-            case "but":
-            case "by":
-            case "can":
-            case "do":
-            case "for":
-            case "from":
-            case "go":
-            case "he":
-            case "her":
-            case "here":
-            case "him":
-            case "his":
-            case "how":
-            case "if":
-            case "in":
-            case "is":
-            case "it":
-            case "its":
-            case "know":
-            case "like":
-            case "love":
-            case "me":
-            case "my":
-            case "no":
-            case "not":
-            case "of":
-            case "on":
-            case "one":
-            case "or":
-            case "our":
-            case "out":
-            case "she":
-            case "so":
-            case "that":
-            case "the":
-            case "their":
-            case "them":
-            case "there":
-            case "they":
-            case "this":
-            case "to":
-            case "up":
-            case "us":
-            case "was":
-            case "we":
-            case "were":
-            case "what":
-            case "when":
-            case "who":
-            case "will":
-            case "with":
-            case "you":
-            case "your":
-            case "ako":
-            case "akin":
-            case "ang":
-            case "ay":
-            case "ba":
-            case "bakit":
-            case "dahil":
-            case "di":
-            case "hindi":
-            case "ikaw":
-            case "kami":
-            case "ka":
-            case "ko":
-            case "kung":
-            case "lang":
-            case "mga":
-            case "mo":
-            case "na":
-            case "ng":
-            case "nang":
-            case "ni":
-            case "o":
-            case "pa":
-            case "para":
-            case "pero":
-            case "sa":
-            case "si":
-            case "sila":
-            case "tayo":
-            case "wala":
-            case "yan":
-            case "iyo":
-                return true;
-            default:
-                return false;
-        }
     }
 
     private static void appendLyricFragment(
@@ -641,14 +476,6 @@ public final class Stage3MidiLyrics {
             return;
         }
 
-        if (target.length() > 0
-                && needsWordSpace(
-                        target.substring(
-                                Math.max(0, target.length() - 12)),
-                        fragment)) {
-            target.append(' ');
-        }
-
         target.append(fragment);
     }
 
@@ -656,18 +483,17 @@ public final class Stage3MidiLyrics {
             LyricEvent left,
             LyricEvent right) {
 
-        if (left.line != right.line) return false;
-        if (left.text.isEmpty() || right.text.isEmpty()) return false;
+        if (left.line != right.line
+                || left.text.isEmpty()
+                || right.text.isEmpty()) {
+            return false;
+        }
 
         char leftChar = left.text.charAt(left.text.length() - 1);
         char rightChar = right.text.charAt(0);
 
-        if (Character.isWhitespace(leftChar)
-                || Character.isWhitespace(rightChar)) {
-            return false;
-        }
-
-        return !needsWordSpace(left.text, right.text);
+        return !Character.isWhitespace(leftChar)
+                && !Character.isWhitespace(rightChar);
     }
 
     private static void applyActiveHighlight(
@@ -898,11 +724,6 @@ public final class Stage3MidiLyrics {
                 ticksPerQuarterNote, tempos);
     }
 
-    /*
-     * Only exact heading-like entries are converted to sections.
-     * Bracketed forms such as [LAST CHORUS] are supported without
-     * treating a normal lyric sentence containing "chorus" as a heading.
-     */
     private static String extractHeading(String value) {
         if (value == null) return null;
 
@@ -961,18 +782,35 @@ public final class Stage3MidiLyrics {
     }
 
     private static String cleanLyric(String value) {
-        return value.replace("/", "")
-                .replace("\\", "")
+        if (value == null) return "";
+
+        String cleaned = value
                 .replace("\r", "")
                 .replace("\n", "")
                 .replace("\u0000", "");
+
+        while (!cleaned.isEmpty()) {
+            char first = cleaned.charAt(0);
+
+            if (first == '/' || first == '\\') {
+                cleaned = cleaned.substring(1);
+            } else {
+                break;
+            }
+        }
+
+        return cleaned;
     }
 
     private static boolean containsLineBreak(String value) {
-        return value.contains("/")
-                || value.contains("\\")
-                || value.contains("\n")
-                || value.contains("\r");
+        if (value == null || value.isEmpty()) return false;
+
+        char first = value.charAt(0);
+
+        return first == '/'
+                || first == '\\'
+                || value.indexOf('\n') >= 0
+                || value.indexOf('\r') >= 0;
     }
 
     private static boolean isNonLyricTag(String value) {
