@@ -14,6 +14,7 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
@@ -45,6 +46,9 @@ class Stage3MidiEngine private constructor(
     @Volatile
     private var lastNativeTick: Long = 0L
 
+    @Volatile
+    private var activeSessionId: Long = 0L
+
     companion object {
         private const val MIDI_DIRECTORY = "stage3_midi"
         private const val SOUNDFONT_DIRECTORY = "stage3_soundfonts"
@@ -65,9 +69,15 @@ class Stage3MidiEngine private constructor(
         soundFontUri: String,
         callback: Callback
     ) {
+        if (closed) {
+            throw IllegalStateException(
+                "The MIDI engine has already been released."
+            )
+        }
+
         stopCurrentTask()
 
-        closed = false
+        val sessionId = activeSessionId
         activeCallback = callback
 
         activeTask = worker.submit {
@@ -78,24 +88,32 @@ class Stage3MidiEngine private constructor(
                     )
                 }
 
+                checkSession(sessionId)
+
                 val midiFile = copyUriToFile(
                     midiUri,
-                    MIDI_DIRECTORY,
-                    "song.mid"
+                    File(context.filesDir, MIDI_DIRECTORY),
+                    "song.mid",
+                    sessionId
                 )
+
+                checkSession(sessionId)
 
                 val soundFontFile = if (
                     soundFontUri.isBlank() ||
                     soundFontUri == DEFAULT_SOUNDFONT
                 ) {
-                    copyDefaultSoundFont()
+                    copyDefaultSoundFont(sessionId)
                 } else {
                     copyUriToFile(
                         soundFontUri,
-                        SOUNDFONT_DIRECTORY,
-                        "soundfont.sf2"
+                        File(context.cacheDir, SOUNDFONT_DIRECTORY),
+                        "soundfont.sf2",
+                        sessionId
                     )
                 }
+
+                checkSession(sessionId)
 
                 if (!midiFile.exists() || midiFile.length() == 0L) {
                     throw IllegalStateException(
@@ -115,15 +133,28 @@ class Stage3MidiEngine private constructor(
                     )
                 }
 
+                checkSession(sessionId)
+
                 val newPlayer = MidiFilePlayer(
                     soundFontFile.absolutePath,
                     midiFile.absolutePath
                 )
 
                 synchronized(this) {
-                    if (closed) {
-                        newPlayer.close()
-                        return@submit
+                    if (!isSessionActive(sessionId)) {
+                        try {
+                            newPlayer.stop()
+                        } catch (_: Exception) {
+                        }
+
+                        try {
+                            newPlayer.close()
+                        } catch (_: Exception) {
+                        }
+
+                        throw CancellationException(
+                            "Playback was cancelled."
+                        )
                     }
 
                     midiPlayer = newPlayer
@@ -132,39 +163,49 @@ class Stage3MidiEngine private constructor(
 
                 newPlayer.play {
                     mainHandler.post {
-                        if (!closed) {
-                            val player = midiPlayer
-                            if (player != null) {
-                                try {
-                                    lastNativeTick =
-                                        player.currentTick.coerceAtLeast(0L)
-                                } catch (_: Exception) {
-                                    // Keep the last known position.
-                                }
-                            }
-
-                            activeCallback?.onFinished()
-                        }
+                        finishSession(sessionId)
                     }
                 }
 
                 mainHandler.post {
-                    if (!closed && midiPlayer === newPlayer) {
-                        activeCallback?.onReady(
-                            newPlayer.durationTicks.coerceAtLeast(0L)
-                        )
+                    synchronized(this) {
+                        if (
+                            isSessionActive(sessionId) &&
+                            midiPlayer === newPlayer
+                        ) {
+                            activeCallback?.onReady(
+                                newPlayer.durationTicks.coerceAtLeast(0L)
+                            )
+                        }
                     }
                 }
+
+            } catch (_: CancellationException) {
+                cleanupTemporaryFiles()
+
             } catch (error: Exception) {
                 val message = error.message
                     ?: "Could not start MIDI playback."
 
                 mainHandler.post {
-                    if (!closed) {
-                        activeCallback?.onError(message)
-                    }
+                    failSession(sessionId, message)
                 }
             }
+        }
+    }
+
+    @Synchronized
+    private fun isSessionActive(sessionId: Long): Boolean {
+        return !closed && activeSessionId == sessionId
+    }
+
+    private fun checkSession(sessionId: Long) {
+        if (Thread.currentThread().isInterrupted ||
+            !isSessionActive(sessionId)
+        ) {
+            throw CancellationException(
+                "Playback was cancelled."
+            )
         }
     }
 
@@ -190,30 +231,25 @@ class Stage3MidiEngine private constructor(
         }
     }
 
-    private fun copyDefaultSoundFont(): File {
-        val directory = File(context.filesDir, SOUNDFONT_DIRECTORY)
+    private fun copyDefaultSoundFont(sessionId: Long): File {
+        val directory = File(context.cacheDir, SOUNDFONT_DIRECTORY)
 
         if (!directory.exists() && !directory.mkdirs()) {
             throw IllegalStateException(
-                "Could not create the SoundFont storage directory."
+                "Could not create temporary SoundFont storage."
             )
         }
 
-        val destination = File(directory, "default.sf2")
+        val destination = File(directory, "soundfont.sf2")
+        val temporary = File(directory, "soundfont.sf2.tmp")
 
-        if (isValidSoundFont(destination)) {
-            return destination
-        }
-
-        if (destination.exists()) {
-            destination.delete()
-        }
-
-        val temporary = File(directory, "default.sf2.tmp")
-        if (temporary.exists()) temporary.delete()
+        destination.delete()
+        temporary.delete()
 
         try {
-            downloadSoundFontFromDrive(temporary)
+            checkSession(sessionId)
+            downloadSoundFontFromDrive(temporary, sessionId)
+            checkSession(sessionId)
 
             if (!isValidSoundFont(temporary)) {
                 throw IllegalStateException(
@@ -222,22 +258,26 @@ class Stage3MidiEngine private constructor(
                 )
             }
 
-            if (destination.exists()) destination.delete()
-
             if (!temporary.renameTo(destination)) {
                 throw IllegalStateException(
-                    "Could not save the downloaded SoundFont."
+                    "Could not save the temporary SoundFont."
                 )
             }
 
+            checkSession(sessionId)
             return destination
+
         } catch (error: Exception) {
             temporary.delete()
+            destination.delete()
             throw error
         }
     }
 
-    private fun downloadSoundFontFromDrive(destination: File) {
+    private fun downloadSoundFontFromDrive(
+        destination: File,
+        sessionId: Long
+    ) {
         val baseUrl = "https://drive.google.com/uc"
         val encodedId = URLEncoder.encode(DRIVE_FILE_ID, "UTF-8")
         val cookies = mutableListOf<String>()
@@ -248,6 +288,7 @@ class Stage3MidiEngine private constructor(
         var attempt = 0
 
         while (attempt < 3) {
+            checkSession(sessionId)
             attempt++
 
             val connection = (URL(requestUrl).openConnection()
@@ -272,6 +313,7 @@ class Stage3MidiEngine private constructor(
 
             try {
                 connection.connect()
+                checkSession(sessionId)
 
                 connection.getHeaderFields()["Set-Cookie"]
                     ?.forEach { cookie ->
@@ -303,6 +345,8 @@ class Stage3MidiEngine private constructor(
                         .bufferedReader(Charsets.UTF_8)
                         .use { it.readText() }
 
+                    checkSession(sessionId)
+
                     val match = Regex(
                         """confirm=([0-9A-Za-z_-]+)"""
                     ).find(page)
@@ -327,10 +371,23 @@ class Stage3MidiEngine private constructor(
 
                 connection.inputStream.use { input ->
                     FileOutputStream(destination).use { output ->
-                        input.copyTo(output)
+                        val buffer = ByteArray(8192)
+                        var read: Int
+
+                        while (true) {
+                            checkSession(sessionId)
+
+                            read = input.read(buffer)
+                            if (read == -1) break
+
+                            output.write(buffer, 0, read)
+                        }
+
                         output.flush()
                     }
                 }
+
+                checkSession(sessionId)
 
                 if (destination.length() == 0L) {
                     throw IllegalStateException(
@@ -339,6 +396,7 @@ class Stage3MidiEngine private constructor(
                 }
 
                 return
+
             } finally {
                 connection.disconnect()
             }
@@ -395,6 +453,8 @@ class Stage3MidiEngine private constructor(
     @Synchronized
     fun resume() {
         val player = midiPlayer ?: return
+        if (closed) return
+
         player.play()
     }
 
@@ -404,14 +464,9 @@ class Stage3MidiEngine private constructor(
         val player = midiPlayer ?: return
 
         player.seekTo(target)
-
         lastNativeTick = target
     }
 
-    /**
-     * Returns the player's actual MIDI tick position.
-     * No fixed-tempo estimate is used.
-     */
     @Synchronized
     fun getCurrentTick(): Long {
         val player = midiPlayer ?: return 0L
@@ -433,6 +488,7 @@ class Stage3MidiEngine private constructor(
         }
     }
 
+    @Synchronized
     fun getDurationTicks(): Long {
         return try {
             midiPlayer?.durationTicks?.coerceAtLeast(0L) ?: 0L
@@ -441,6 +497,7 @@ class Stage3MidiEngine private constructor(
         }
     }
 
+    @Synchronized
     fun isPlaying(): Boolean {
         return try {
             midiPlayer?.isPlaying ?: false
@@ -455,38 +512,83 @@ class Stage3MidiEngine private constructor(
     }
 
     private fun stopCurrentTask() {
+        // Invalidate callbacks before stopping or deleting files.
+        activeSessionId++
+
+        activeCallback = null
+
         activeTask?.cancel(true)
         activeTask = null
 
-        try {
-            midiPlayer?.stop()
-        } catch (_: Exception) {
-        }
+        closeMidiPlayer()
 
-        try {
-            midiPlayer?.close()
-        } catch (_: Exception) {
-        }
-
-        midiPlayer = null
         lastNativeTick = 0L
+
+        cleanupTemporaryFiles()
+    }
+
+    private fun closeMidiPlayer() {
+        val player = midiPlayer
+        midiPlayer = null
+
+        if (player != null) {
+            try {
+                player.stop()
+            } catch (_: Exception) {
+            }
+
+            try {
+                player.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun cleanupTemporaryFiles() {
+        deleteRecursively(
+            File(context.filesDir, MIDI_DIRECTORY)
+        )
+
+        deleteRecursively(
+            File(context.cacheDir, SOUNDFONT_DIRECTORY)
+        )
+    }
+
+    private fun deleteRecursively(file: File) {
+        if (!file.exists()) return
+
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { child ->
+                deleteRecursively(child)
+            }
+        }
+
+        try {
+            file.delete()
+        } catch (_: Exception) {
+        }
     }
 
     private fun copyUriToFile(
         uriString: String,
-        directoryName: String,
-        fileName: String
+        directory: File,
+        fileName: String,
+        sessionId: Long
     ): File {
-        val directory = File(context.filesDir, directoryName)
+        checkSession(sessionId)
 
         if (!directory.exists() && !directory.mkdirs()) {
             throw IllegalStateException(
-                "Could not create the Stage 3 storage directory."
+                "Could not create temporary Stage 3 storage."
             )
         }
 
         val destination = File(directory, fileName)
         val temporary = File(directory, "$fileName.tmp")
+
+        destination.delete()
+        temporary.delete()
+
         val uri = Uri.parse(uriString)
 
         val input = context.contentResolver.openInputStream(uri)
@@ -494,28 +596,85 @@ class Stage3MidiEngine private constructor(
                 "Cannot read the selected file. Import it again."
             )
 
-        input.use { source ->
-            FileOutputStream(temporary).use { output ->
-                source.copyTo(output)
-                output.flush()
+        try {
+            input.use { source ->
+                FileOutputStream(temporary).use { output ->
+                    val buffer = ByteArray(8192)
+                    var read: Int
+
+                    while (true) {
+                        checkSession(sessionId)
+
+                        read = source.read(buffer)
+                        if (read == -1) break
+
+                        output.write(buffer, 0, read)
+                    }
+
+                    output.flush()
+                }
             }
-        }
 
-        if (destination.exists() && !destination.delete()) {
+            checkSession(sessionId)
+
+            if (temporary.length() == 0L) {
+                throw IllegalStateException(
+                    "The selected file is empty."
+                )
+            }
+
+            if (!temporary.renameTo(destination)) {
+                throw IllegalStateException(
+                    "Could not save the temporary Stage 3 file."
+                )
+            }
+
+            checkSession(sessionId)
+            return destination
+
+        } catch (error: Exception) {
             temporary.delete()
-            throw IllegalStateException(
-                "Could not replace the cached Stage 3 file."
-            )
+            destination.delete()
+            throw error
+        }
+    }
+
+    @Synchronized
+    private fun finishSession(sessionId: Long) {
+        if (!isSessionActive(sessionId)) return
+
+        val callback = activeCallback
+
+        closeMidiPlayer()
+        activeTask = null
+        activeCallback = null
+        lastNativeTick = 0L
+
+        cleanupTemporaryFiles()
+
+        callback?.onFinished()
+    }
+
+    @Synchronized
+    private fun failSession(
+        sessionId: Long,
+        message: String
+    ) {
+        if (!isSessionActive(sessionId)) {
+            cleanupTemporaryFiles()
+            return
         }
 
-        if (!temporary.renameTo(destination)) {
-            temporary.delete()
-            throw IllegalStateException(
-                "Could not save the selected Stage 3 file."
-            )
-        }
+        val callback = activeCallback
 
-        return destination
+        closeMidiPlayer()
+        activeTask = null
+        activeCallback = null
+        lastNativeTick = 0L
+
+        cleanupTemporaryFiles()
+
+        callback?.onError(message)
     }
 
     @Synchronized
@@ -523,8 +682,18 @@ class Stage3MidiEngine private constructor(
         if (closed) return
 
         closed = true
+        activeSessionId++
+
         activeCallback = null
-        stopCurrentTask()
+
+        activeTask?.cancel(true)
+        activeTask = null
+
+        closeMidiPlayer()
+        lastNativeTick = 0L
+
+        cleanupTemporaryFiles()
+
         worker.shutdownNow()
     }
 }
