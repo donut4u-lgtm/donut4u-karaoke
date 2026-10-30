@@ -168,7 +168,7 @@ public class Stage3PlayerActivity extends Activity {
                 new LinearLayout.LayoutParams(-1, -2));
 
         cueLabel = new TextView(this);
-        cueLabel.setText(". . . . .");
+        cueLabel.setText("1   2   3   4   5");
         cueLabel.setTextColor(Color.rgb(80, 255, 150));
         cueLabel.setTextSize(28);
         cueLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -539,25 +539,34 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        String dots = ". . . . .";
-        SpannableString styled = new SpannableString(dots);
-        int activeDot = dotFrame % 5;
+        long tick = midiEngine == null
+                ? 0L : midiEngine.getCurrentTick();
+
+        int ticksPerBeat = Math.max(
+                1, currentMidiLyrics.getTicksPerQuarterNote());
+
+        int activeNumber = (int) (
+                (Math.max(0L, tick) / ticksPerBeat) % 5L);
+
+        String countdown = "1   2   3   4   5";
+        SpannableString styled = new SpannableString(countdown);
+
+        int[] positions = {0, 4, 8, 12, 16};
 
         for (int i = 0; i < 5; i++) {
-            int color = i == activeDot
+            int color = i == activeNumber
                     ? Color.rgb(0, 255, 100)
                     : Color.rgb(65, 100, 75);
 
             styled.setSpan(
                     new ForegroundColorSpan(color),
-                    i * 2,
-                    i * 2 + 1,
+                    positions[i],
+                    positions[i] + 1,
                     SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
 
         cueLabel.setText(styled);
         cueLabel.setVisibility(View.VISIBLE);
-        dotFrame = (dotFrame + 1) % 5;
     }
 
     private void updatePreparationLine(long tick) {
