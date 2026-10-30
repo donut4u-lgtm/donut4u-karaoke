@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -388,33 +387,13 @@ public class Stage3PlayerActivity extends Activity {
                 || segment.endsWith(".kar");
     }
 
+    /*
+     * Donut4U automatically manages the instrument SoundFont.
+     * Users do not need to select or import a SoundFont.
+     * Stage3MidiEngine handles the built-in default SoundFont.
+     */
     private String findSoundFontUri() {
-        SharedPreferences preferences =
-                getSharedPreferences(SONGBOOK_PREFS, MODE_PRIVATE);
-        String saved = preferences.getString(SONGS_KEY, "[]");
-
-        try {
-            JSONArray songs = new JSONArray(saved);
-            for (int i = 0; i < songs.length(); i++) {
-                JSONObject item = songs.getJSONObject(i);
-                String type = item.optString("type", "");
-                String uri = item.optString("uri", "");
-
-                if ("SOUNDFONT".equalsIgnoreCase(type)
-                        && !uri.trim().isEmpty()) {
-                    return uri;
-                }
-
-                String title = item.optString("title", "")
-                        .toLowerCase(Locale.ROOT);
-                if (!uri.trim().isEmpty() && title.endsWith(".sf2")) {
-                    return uri;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-
-        return "";
+        return DEFAULT_SOUNDFONT;
     }
 
     private void initializePlayer(Stage3SongQueue.QueuedSong song) {
