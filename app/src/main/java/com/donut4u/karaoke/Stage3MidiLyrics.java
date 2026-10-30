@@ -444,10 +444,6 @@ public final class Stage3MidiLyrics {
         return new FullLyricsResult(display, activeLineStart);
     }
 
-    /*
-     * Never guess word boundaries using an English/Filipino word list.
-     * Only explicit whitespace or punctuation can establish a boundary.
-     */
     private static boolean needsWordSpace(
             String previousText,
             String nextText) {
@@ -460,12 +456,8 @@ public final class Stage3MidiLyrics {
         char previous = previousText.charAt(previousText.length() - 1);
         char next = nextText.charAt(0);
 
-        if (Character.isWhitespace(previous)
-                || Character.isWhitespace(next)) {
-            return false;
-        }
-
-        return false;
+        return Character.isWhitespace(previous)
+                || Character.isWhitespace(next);
     }
 
     private static void appendLyricFragment(
