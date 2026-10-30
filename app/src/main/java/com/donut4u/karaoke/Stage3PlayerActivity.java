@@ -539,14 +539,14 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        long tick = midiEngine == null
-                ? 0L : midiEngine.getCurrentTick();
+        int countdownNumber =
+                currentMidiLyrics.getCountdownNumberAtTick(
+                        midiEngine == null ? 0L : midiEngine.getCurrentTick());
 
-        int ticksPerBeat = Math.max(
-                1, currentMidiLyrics.getTicksPerQuarterNote());
-
-        int activeNumber = (int) (
-                (Math.max(0L, tick) / ticksPerBeat) % 5L);
+        if (countdownNumber < 1 || countdownNumber > 5) {
+            cueLabel.setVisibility(View.GONE);
+            return;
+        }
 
         String countdown = "1   2   3   4   5";
         SpannableString styled = new SpannableString(countdown);
@@ -554,7 +554,9 @@ public class Stage3PlayerActivity extends Activity {
         int[] positions = {0, 4, 8, 12, 16};
 
         for (int i = 0; i < 5; i++) {
-            int color = i == activeNumber
+            int displayedNumber = i + 1;
+
+            int color = displayedNumber == countdownNumber
                     ? Color.rgb(0, 255, 100)
                     : Color.rgb(65, 100, 75);
 
