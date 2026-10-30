@@ -88,6 +88,10 @@ public final class Stage3MidiLyrics {
         return composer;
     }
 
+    public int getTicksPerQuarterNote() {
+        return ticksPerQuarterNote;
+    }
+
     public String getMetadataText() {
         StringBuilder text = new StringBuilder();
 
