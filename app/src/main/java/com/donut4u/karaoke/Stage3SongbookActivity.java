@@ -1,4 +1,597 @@
-```java
+package com.donut4u.karaoke;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.Bundle;
+import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Locale;
+
+public class Stage3SongbookActivity extends Activity {
+
+    private static final String PREFS = "donut4u_stage3_songbook";
+    private static final String SONGS_KEY = "songs_json";
+    private static final String SELECTED_SOUNDFONT_KEY =
+            "selected_soundfont_uri";
+
+    private static final int REQUEST_IMPORT_SONGS = 3103;
+    private static final int REQUEST_IMPORT_SONGLIST = 3104;
+    private static final int REQUEST_IMPORT_SONGHUB_FOLDER = 3105;
+
+    private final ArrayList<Song> songs = new ArrayList<>();
+
+    private LinearLayout songList;
+    private EditText searchInput;
+    private TextView countLabel;
+    private SharedPreferences preferences;
+    private int nextNumber = 10000;
+
+    private static class Song {
+        String number;
+        String title;
+        String uri;
+        String type;
+
+        Song(String number, String title, String uri, String type) {
+            this.number = number;
+            this.title = title;
+            this.uri = uri;
+            this.type = type;
+        }
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        Stage3SongQueue.initialize(this);
+        preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        loadSongs();
+        buildScreen();
+        renderSongs("");
+    }
+
+    private int dp(float value) {
+        return (int) (value *
+                getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void buildScreen() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(16), dp(16), dp(12));
+        root.setBackgroundColor(Color.rgb(10, 20, 15));
+
+        TextView title = new TextView(this);
+        title.setText("DONUT4U KARAOKE");
+        title.setTextColor(Color.rgb(80, 255, 150));
+        title.setTextSize(25);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        root.addView(title, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("STAGE 3 • SONGBOOK");
+        subtitle.setTextColor(Color.WHITE);
+        subtitle.setTextSize(16);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(0, 0, 0, dp(12));
+        root.addView(subtitle);
+
+        Button songHubButton = makeButton("CONNECT SONGHUB LIBRARY");
+        songHubButton.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3SongHubRemoteActivity.class));
+            } catch (Exception e) {
+                android.util.Log.e("Stage3Songbook",
+                        "Could not open SongHub connection.", e);
+
+                Toast.makeText(Stage3SongbookActivity.this,
+                        "Could not open SongHub connection.",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        root.addView(songHubButton, buttonParams());
+
+        Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
+        importButton.setOnClickListener(v -> chooseSongs());
+        root.addView(importButton, buttonParams());
+
+        Button spreadsheetButton =
+                makeButton("IMPORT SONGLIST (XLS / XLSX)");
+        spreadsheetButton.setOnClickListener(v -> chooseSongbookFile());
+        root.addView(spreadsheetButton, buttonParams());
+
+        Button makeKaraokeButton =
+                makeButton("MAKE KARAOKE FILE (AI)");
+        makeKaraokeButton.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3KaraokeMakerActivity.class));
+            } catch (Exception e) {
+                Toast.makeText(this,
+                        "Could not open Karaoke Maker.",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        root.addView(makeKaraokeButton, buttonParams());
+
+        Button queueButton = makeButton("OPEN SONG QUEUE");
+        queueButton.setOnClickListener(v -> {
+            try {
+                Stage3SongQueue.initialize(this);
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3QueueActivity.class));
+            } catch (Exception e) {
+                Toast.makeText(this,
+                        "Could not open the song queue.",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        root.addView(queueButton, buttonParams());
+
+        searchInput = new EditText(this);
+        searchInput.setSingleLine(true);
+        searchInput.setHint("Search song number, title or singer");
+        searchInput.setHintTextColor(Color.LTGRAY);
+        searchInput.setTextColor(Color.WHITE);
+        searchInput.setTextSize(16);
+        searchInput.setPadding(dp(12), 0, dp(12), 0);
+        searchInput.setBackgroundColor(Color.rgb(35, 48, 40));
+        root.addView(searchInput,
+                new LinearLayout.LayoutParams(-1, dp(48)));
+
+        countLabel = new TextView(this);
+        countLabel.setTextColor(Color.rgb(140, 255, 180));
+        countLabel.setTextSize(13);
+        countLabel.setPadding(0, dp(10), 0, dp(8));
+        root.addView(countLabel);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+
+        songList = new LinearLayout(this);
+        songList.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(songList);
+
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        Button backButton = makeButton("BACK");
+        backButton.setOnClickListener(v -> finish());
+        root.addView(backButton, buttonParams());
+
+        setContentView(root);
+
+        searchInput.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(
+                    CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(
+                    CharSequence s, int start, int before, int count) {
+                renderSongs(s.toString());
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
+    }
+
+    private Button makeButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setAllCaps(false);
+        button.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(
+                        Color.rgb(20, 125, 65)));
+        return button;
+    }
+
+    private LinearLayout.LayoutParams buttonParams() {
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, dp(48));
+        params.bottomMargin = dp(8);
+        return params;
+    }
+
+    private void chooseSongHubFolder() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+        try {
+            startActivityForResult(
+                    intent, REQUEST_IMPORT_SONGHUB_FOLDER);
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    "Unable to open folder picker.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(
+            int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (resultCode != RESULT_OK || data == null) {
+            return;
+        }
+
+        if (requestCode == REQUEST_IMPORT_SONGHUB_FOLDER) {
+            Uri treeUri = data.getData();
+            if (treeUri == null) {
+                return;
+            }
+
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {
+            }
+
+            int imported = scanSongHubFolder(treeUri, treeUri);
+
+            saveSongs();
+            renderSongs(searchInput == null
+                    ? "" : searchInput.getText().toString());
+
+            Toast.makeText(this,
+                    imported + " SongHub catalog/media item(s) imported.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (requestCode == REQUEST_IMPORT_SONGLIST) {
+            Uri spreadsheet = data.getData();
+            if (spreadsheet != null) {
+                importSongbookSpreadsheet(spreadsheet);
+            }
+            return;
+        }
+
+        if (requestCode != REQUEST_IMPORT_SONGS) {
+            return;
+        }
+
+        int imported = 0;
+
+        if (data.getClipData() != null) {
+            android.content.ClipData clip = data.getClipData();
+
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                if (importSong(clip.getItemAt(i).getUri(), data.getFlags())) {
+                    imported++;
+                }
+            }
+        } else if (data.getData() != null) {
+            if (importSong(data.getData(), data.getFlags())) {
+                imported++;
+            }
+        }
+
+        saveSongs();
+        renderSongs(searchInput == null
+                ? "" : searchInput.getText().toString());
+
+        Toast.makeText(this,
+                imported + " media file(s) imported.",
+                Toast.LENGTH_LONG).show();
+    }
+
+    private int scanSongHubFolder(Uri treeUri, Uri folderUri) {
+        int imported = 0;
+
+        try {
+            String documentId =
+                    DocumentsContract.getDocumentId(folderUri);
+
+            Uri childrenUri =
+                    DocumentsContract.buildChildDocumentsUriUsingTree(
+                            treeUri, documentId);
+
+            String[] columns = {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+            };
+
+            try (Cursor cursor = getContentResolver().query(
+                    childrenUri, columns, null, null, null)) {
+
+                if (cursor == null) {
+                    return 0;
+                }
+
+                int idColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                int nameColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                int mimeColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_MIME_TYPE);
+
+                if (idColumn < 0 || nameColumn < 0 || mimeColumn < 0) {
+                    return 0;
+                }
+
+                while (cursor.moveToNext()) {
+                    String childId = cursor.getString(idColumn);
+                    String name = cursor.getString(nameColumn);
+                    String mime = cursor.getString(mimeColumn);
+
+                    Uri childUri =
+                            DocumentsContract.buildDocumentUriUsingTree(
+                                    treeUri, childId);
+
+                    if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                        imported += scanSongHubFolder(treeUri, childUri);
+                        continue;
+                    }
+
+                    if (name == null) {
+                        continue;
+                    }
+
+                    if ("shubidx".equalsIgnoreCase(name)) {
+                        Uri blobUri = findSiblingBlob(treeUri, folderUri);
+                        imported += importSongHubIndex(childUri, blobUri);
+                    } else if (isSupported(getExtension(name))) {
+                        if (importSong(childUri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                            imported++;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.e("Stage3Songbook",
+                    "Could not scan folder: " + folderUri, e);
+        }
+
+        return imported;
+    }
+
+    private Uri findSiblingBlob(Uri treeUri, Uri folderUri) {
+        try {
+            String documentId =
+                    DocumentsContract.getDocumentId(folderUri);
+
+            Uri childrenUri =
+                    DocumentsContract.buildChildDocumentsUriUsingTree(
+                            treeUri, documentId);
+
+            String[] columns = {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+            };
+
+            try (Cursor cursor = getContentResolver().query(
+                    childrenUri, columns, null, null, null)) {
+
+                if (cursor == null) {
+                    return null;
+                }
+
+                int idColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID);
+                int nameColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME);
+                int mimeColumn = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_MIME_TYPE);
+
+                if (idColumn < 0 || nameColumn < 0 || mimeColumn < 0) {
+                    return null;
+                }
+
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(nameColumn);
+                    String mime = cursor.getString(mimeColumn);
+
+                    if (name != null
+                            && "shubblob".equalsIgnoreCase(name)
+                            && !DocumentsContract.Document.MIME_TYPE_DIR
+                            .equals(mime)) {
+                        return DocumentsContract.buildDocumentUriUsingTree(
+                                treeUri, cursor.getString(idColumn));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("Stage3Songbook",
+                    "Could not find sibling shubblob.", e);
+        }
+
+        return null;
+    }
+
+    private int importSongHubIndex(Uri indexUri, Uri blobUri) {
+        int imported = 0;
+
+        try (InputStream input =
+                     getContentResolver().openInputStream(indexUri)) {
+
+            if (input == null) {
+                throw new Exception("Cannot read shubidx.");
+            }
+
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+
+            ArrayList<Stage3SongHubIndex.Entry> entries =
+                    new ArrayList<>(Stage3SongHubIndex.parse(
+                            output.toByteArray()));
+
+            if (entries.isEmpty()) {
+                Toast.makeText(this,
+                        "No catalog records found in shubidx.",
+                        Toast.LENGTH_LONG).show();
+                return 0;
+            }
+
+            for (Stage3SongHubIndex.Entry entry : entries) {
+                String displayTitle = entry.title
+                        + " — " + entry.artist
+                        + " [" + entry.genre + "]";
+
+                String catalogUri;
+
+                if (blobUri != null
+                        && entry.blobOffsetSectors >= 0
+                        && entry.blobLengthSectors > 0) {
+
+                    catalogUri = new Uri.Builder()
+                            .scheme("songhub-midi")
+                            .authority("play")
+                            .appendQueryParameter(
+                                    "blob", blobUri.toString())
+                            .appendQueryParameter(
+                                    "offset",
+                                    String.valueOf(
+                                            entry.blobOffsetSectors))
+                            .appendQueryParameter(
+                                    "length",
+                                    String.valueOf(
+                                            entry.blobLengthSectors))
+                            .build()
+                            .toString();
+                } else {
+                    catalogUri = "songhub-index://catalog/"
+                            + Uri.encode(entry.number) + "/"
+                            + Uri.encode(entry.title) + "/"
+                            + Uri.encode(entry.artist);
+                }
+
+                boolean exists = false;
+                for (Song song : songs) {
+                    if (catalogUri.equals(song.uri)) {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists) {
+                    songs.add(new Song(
+                            entry.number,
+                            displayTitle,
+                            catalogUri,
+                            blobUri == null ? "CATALOG" : "MIDI/KAR"));
+                    imported++;
+                }
+            }
+
+        } catch (Exception e) {
+            android.util.Log.e("Stage3Songbook",
+                    "Could not import SongHub index.", e);
+
+            Toast.makeText(this,
+                    "SongHub index import failed: "
+                            + (e.getMessage() == null
+                            ? "Unknown error" : e.getMessage()),
+                    Toast.LENGTH_LONG).show();
+        }
+
+        return imported;
+    }
+
+    private void chooseSongs() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+        try {
+            startActivityForResult(intent, REQUEST_IMPORT_SONGS);
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    "Unable to open the file picker.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void chooseSongbookFile() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/vnd.ms-excel",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/octet-stream"
+        });
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        try {
+            startActivityForResult(intent, REQUEST_IMPORT_SONGLIST);
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    "Unable to open the spreadsheet picker.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void importSongbookSpreadsheet(Uri uri) {
+        int imported = 0;
+        int duplicates = 0;
+
+        try (InputStream input =
+                     getContentResolver().openInputStream(uri)) {
+
+            if (input == null) {
+                throw new Exception("Cannot read the selected file.");
+            }
+
+            ArrayList<Stage3XlsImporter.Entry> entries =
+                    Stage3XlsImporter.read(input);
+
+            for (Stage3XlsImporter.Entry entry : entries) {
+                String number = clean(entry.number);
+                String title = clean(entry.title);
+                String artist = clean(entry.artist);
+
+                if (title.isEmpty()) {
+                    continue;
+                }
+
+                if (number.isEmpty()) {
+                    number = generateNumber();
                 }
 
                 if (catalogEntryExists(number, title, artist)) {
@@ -333,35 +926,6 @@
         }
     }
 
-    private String getSelectedSoundFontUri() {
-        return preferences.getString(SELECTED_SOUNDFONT_KEY, "");
-    }
-
-    private boolean isSelectedSoundFont(Song song) {
-        return song != null && song.uri != null
-                && song.uri.equals(getSelectedSoundFontUri());
-    }
-
-    private void selectSoundFont(Song song) {
-        if (song == null || song.uri == null
-                || song.uri.trim().isEmpty()) {
-            Toast.makeText(this, "This SoundFont has no valid file location.",
-                    Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        preferences.edit()
-                .putString(SELECTED_SOUNDFONT_KEY, song.uri)
-                .apply();
-
-        renderSongs(searchInput == null
-                ? "" : searchInput.getText().toString());
-
-        Toast.makeText(this,
-                "Selected SoundFont: " + song.title,
-                Toast.LENGTH_LONG).show();
-    }
-
     private View createSongCard(Song song) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -399,10 +963,6 @@
         } else if (soundFont) {
             addNote(card, "SOUNDFONT • MIDI/KAR INSTRUMENT BANK",
                     Color.rgb(140, 255, 180));
-            if (isSelectedSoundFont(song)) {
-                addNote(card, "CURRENTLY SELECTED FOR MIDI/KAR",
-                        Color.rgb(90, 255, 155));
-            }
         } else if (lyricsFile) {
             addNote(card, "LYRICS FILE • IMPORT THE MATCHING SONG",
                     Color.rgb(255, 210, 110));
@@ -413,19 +973,98 @@
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
 
+        Button addButton = makeButton("ADD TO QUEUE");
+        addButton.setTextSize(12);
+        addButton.setEnabled(playable);
+
+        addButton.setOnClickListener(v -> {
+            if (!playable) {
+                showCatalogNotice();
+                return;
+            }
+
+            Stage3SongQueue.initialize(this);
+
+            if (Stage3SongQueue.containsUri(song.uri)) {
+                Toast.makeText(this,
+                        "This song is already in the queue.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            boolean added = Stage3SongQueue.add(
+                    new Stage3SongQueue.QueuedSong(
+                            song.number, song.title, song.uri, song.type));
+
+            Toast.makeText(this,
+                    added ? "Added " + song.number + " to queue."
+                            : "Could not add this song.",
+                    Toast.LENGTH_SHORT).show();
+        });
+
+        Button openButton = makeButton(
+                catalog ? "SONG INFO"
+                        : soundFont ? "SOUNDFONT"
+                        : lyricsFile ? "LYRICS FILE"
+                        : "PLAY IN DONUT4U");
+
+        openButton.setTextSize(12);
+        openButton.setEnabled(playable);
+        openButton.setOnClickListener(v -> {
+            if (!playable) {
+                showCatalogNotice();
+                return;
+            }
+            playInDonutStage(song);
+        });
+
+        LinearLayout.LayoutParams half =
+                new LinearLayout.LayoutParams(0, dp(44), 1f);
+        half.setMargins(0, 0, dp(6), 0);
+        buttons.addView(addButton, half);
+
+        buttons.addView(openButton,
+                new LinearLayout.LayoutParams(0, dp(44), 1f));
+
         if (soundFont) {
-            boolean selected = isSelectedSoundFont(song);
+            String selectedUri = preferences.getString(
+                    SELECTED_SOUNDFONT_KEY, "");
+
+            boolean selected = song.uri.equals(selectedUri);
+
+            TextView selectedStatus = new TextView(this);
+            selectedStatus.setText(selected
+                    ? "CURRENTLY SELECTED FOR MIDI/KAR"
+                    : "AVAILABLE SOUNDFONT");
+            selectedStatus.setTextColor(selected
+                    ? Color.rgb(80, 255, 150)
+                    : Color.LTGRAY);
+            selectedStatus.setTextSize(12);
+            selectedStatus.setTypeface(
+                    Typeface.DEFAULT, Typeface.BOLD);
+            selectedStatus.setPadding(0, dp(8), 0, dp(6));
+            card.addView(selectedStatus);
 
             Button selectButton = makeButton(
                     selected ? "SELECTED ✓" : "SELECT FOR MIDI/KAR");
             selectButton.setTextSize(12);
             selectButton.setEnabled(!selected);
-            if (selected) {
-                selectButton.setBackgroundTintList(
-                        android.content.res.ColorStateList.valueOf(
-                                Color.rgb(20, 145, 75)));
-            }
-            selectButton.setOnClickListener(v -> selectSoundFont(song));
+
+            selectButton.setOnClickListener(v -> {
+                preferences.edit()
+                        .putString(SELECTED_SOUNDFONT_KEY, song.uri)
+                        .apply();
+
+                Toast.makeText(this,
+                        "SoundFont selected for MIDI/KAR.",
+                        Toast.LENGTH_LONG).show();
+
+                renderSongs(searchInput == null
+                        ? "" : searchInput.getText().toString());
+            });
+
+            card.addView(selectButton,
+                    new LinearLayout.LayoutParams(-1, dp(44)));
 
             Button removeButton = makeButton("REMOVE");
             removeButton.setTextSize(12);
@@ -448,13 +1087,21 @@
                             .setNegativeButton("CANCEL", null)
                             .setPositiveButton("REMOVE",
                                     (dialog, which) -> {
-                                        if (isSelectedSoundFont(song)) {
+                                        songs.remove(song);
+
+                                        String currentlySelected =
+                                                preferences.getString(
+                                                        SELECTED_SOUNDFONT_KEY,
+                                                        "");
+
+                                        if (song.uri.equals(
+                                                currentlySelected)) {
                                             preferences.edit()
-                                                    .remove(SELECTED_SOUNDFONT_KEY)
+                                                    .remove(
+                                                        SELECTED_SOUNDFONT_KEY)
                                                     .apply();
                                         }
 
-                                        songs.remove(song);
                                         saveSongs();
 
                                         renderSongs(searchInput == null
@@ -469,67 +1116,14 @@
                                     })
                             .show());
 
-            LinearLayout.LayoutParams half =
-                    new LinearLayout.LayoutParams(0, dp(44), 1f);
-            half.setMargins(0, 0, dp(6), 0);
-            buttons.addView(selectButton, half);
-            buttons.addView(removeButton,
-                    new LinearLayout.LayoutParams(0, dp(44), 1f));
+            LinearLayout.LayoutParams removeParams =
+                    new LinearLayout.LayoutParams(-1, dp(44));
+            removeParams.topMargin = dp(6);
+            card.addView(removeButton, removeParams);
         } else {
-            Button addButton = makeButton("ADD TO QUEUE");
-            addButton.setTextSize(12);
-            addButton.setEnabled(playable);
-
-            addButton.setOnClickListener(v -> {
-                if (!playable) {
-                    showCatalogNotice();
-                    return;
-                }
-
-                Stage3SongQueue.initialize(this);
-
-                if (Stage3SongQueue.containsUri(song.uri)) {
-                    Toast.makeText(this,
-                            "This song is already in the queue.",
-                            Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                boolean added = Stage3SongQueue.add(
-                        new Stage3SongQueue.QueuedSong(
-                                song.number, song.title, song.uri, song.type));
-
-                Toast.makeText(this,
-                        added ? "Added " + song.number + " to queue."
-                                : "Could not add this song.",
-                        Toast.LENGTH_SHORT).show();
-            });
-
-            Button openButton = makeButton(
-                    catalog ? "SONG INFO"
-                            : lyricsFile ? "LYRICS FILE"
-                            : "PLAY IN DONUT4U");
-
-            openButton.setTextSize(12);
-            openButton.setEnabled(playable);
-            openButton.setOnClickListener(v -> {
-                if (!playable) {
-                    showCatalogNotice();
-                    return;
-                }
-                playInDonutStage(song);
-            });
-
-            LinearLayout.LayoutParams half =
-                    new LinearLayout.LayoutParams(0, dp(44), 1f);
-            half.setMargins(0, 0, dp(6), 0);
-            buttons.addView(addButton, half);
-
-            buttons.addView(openButton,
-                    new LinearLayout.LayoutParams(0, dp(44), 1f));
+            card.addView(buttons);
         }
 
-        card.addView(buttons);
         return card;
     }
 
