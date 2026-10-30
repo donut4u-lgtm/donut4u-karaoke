@@ -10,7 +10,9 @@ import android.text.style.StyleSpan;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -203,12 +205,6 @@ public final class Stage3MidiLyrics {
         return -1L;
     }
 
-    /**
-     * Returns the countdown number for the next lyric cue.
-     *
-     * The number is based on beats remaining, not the absolute song beat:
-     * 5, 4, 3, 2, 1, then 0 when the lyric begins.
-     */
     public int getCountdownNumberAtTick(long tick) {
         if (events.isEmpty()) return 0;
 
@@ -262,14 +258,6 @@ public final class Stage3MidiLyrics {
         for (int i = events.size() - 1; i >= 0; i--) {
             LyricEvent event = events.get(i);
             if (event.tick <= tick && event.section) return i;
-        }
-        return -1;
-    }
-
-    private int nextSectionOrLyricIndex(int start) {
-        for (int i = Math.max(0, start); i < events.size(); i++) {
-            LyricEvent event = events.get(i);
-            if (event.section || !event.text.trim().isEmpty()) return i;
         }
         return -1;
     }
@@ -870,9 +858,17 @@ public final class Stage3MidiLyrics {
     }
 
     private static boolean isNonLyricTag(String value) {
-        String lower = value.toLowerCase(Locale.ROOT);
+        if (value == null) return true;
 
-        return lower.startsWith("singer:")
+        String lower = value.trim().toLowerCase(Locale.ROOT);
+
+        return lower.startsWith("@kmidi")
+                || lower.startsWith("@v")
+                || lower.startsWith("@i")
+                || lower.startsWith("@l")
+                || lower.startsWith("@t")
+                || lower.startsWith("@k")
+                || lower.startsWith("singer:")
                 || lower.startsWith("composer:")
                 || lower.startsWith("artist:")
                 || lower.startsWith("title:")
@@ -891,17 +887,41 @@ public final class Stage3MidiLyrics {
         String composer = "";
         boolean found = false;
 
+        if (value == null) {
+            return new MetadataResult(false, "", "");
+        }
+
         String[] parts = value.trim().split("[\\r\\n;]+");
 
         for (String part : parts) {
             String item = part.trim();
             String lower = item.toLowerCase(Locale.ROOT);
 
-            if (lower.startsWith("singer:")) {
+            if (lower.startsWith("@v")) {
+                singer = item.substring(2).trim();
+                found = true;
+
+            } else if (lower.startsWith("singer:")) {
                 singer = removeLabel(item, "singer:");
                 found = true;
+
             } else if (lower.startsWith("composer:")) {
                 composer = removeLabel(item, "composer:");
+                found = true;
+
+            } else if (lower.startsWith("@i")) {
+                String info = item.substring(2).trim();
+
+                if (info.toLowerCase(Locale.ROOT)
+                        .startsWith("composer:")) {
+                    composer = removeLabel(info, "composer:");
+                }
+
+                found = true;
+
+            } else if (lower.startsWith("@k")
+                    || lower.startsWith("@t")
+                    || lower.startsWith("@l")) {
                 found = true;
             }
         }
@@ -910,15 +930,33 @@ public final class Stage3MidiLyrics {
     }
 
     private static String decode(byte[] bytes) {
-        String value = new String(
-                bytes, StandardCharsets.UTF_8);
-
-        if (value.indexOf('\uFFFD') >= 0) {
-            value = new String(
-                    bytes, Charset.forName("ISO-8859-1"));
+        if (bytes == null || bytes.length == 0) {
+            return "";
         }
 
-        return value;
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
+
+        } catch (Exception ignored) {
+            // Try Shift-JIS next.
+        }
+
+        try {
+            return Charset.forName("Shift_JIS")
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
+
+        } catch (Exception ignored) {
+            return new String(
+                    bytes, StandardCharsets.ISO_8859_1);
+        }
     }
 
     private static final class TempoEvent {
