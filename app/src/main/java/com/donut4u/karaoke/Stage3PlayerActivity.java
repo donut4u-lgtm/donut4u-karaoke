@@ -388,12 +388,22 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     /*
-     * Donut4U automatically manages the instrument SoundFont.
-     * Users do not need to select or import a SoundFont.
-     * Stage3MidiEngine handles the built-in default SoundFont.
+     * Read the SoundFont selected in the Stage 3 songbook.
+     * The selected URI is loaded by Stage3MidiEngine.
+     * Use the built-in SoundFont when no custom file is selected.
      */
     private String findSoundFontUri() {
-        return DEFAULT_SOUNDFONT;
+        SharedPreferences preferences =
+                getSharedPreferences(SONGBOOK_PREFS, MODE_PRIVATE);
+
+        String selected = preferences.getString(
+                "selected_soundfont_uri", "");
+
+        if (selected == null || selected.trim().isEmpty()) {
+            return DEFAULT_SOUNDFONT;
+        }
+
+        return selected.trim();
     }
 
     private void initializePlayer(Stage3SongQueue.QueuedSong song) {
