@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -400,8 +401,8 @@ public final class Stage3MidiLyrics {
                 currentLine = event.line;
             }
 
+            // Preserve the lyric characters and their original spacing.
             // Do not invent spaces from MIDI timing gaps.
-            // The file's actual lyric characters determine spacing.
             int start = display.length();
 
             display.append(event.text);
@@ -417,7 +418,6 @@ public final class Stage3MidiLyrics {
         }
 
         // Highlight only the currently timed lyric event.
-        // This prevents adjacent unrelated fragments from merging.
         if (active >= 0 && active < events.size()
                 && !events.get(active).section
                 && starts[active] >= 0
@@ -742,7 +742,7 @@ public final class Stage3MidiLyrics {
                     }
                 });
 
-        // Assign each lyric event to its correct line.
+        // Keep the existing line assignment and lyric timing behavior.
         int line = 0;
         LyricEvent previousLyric = null;
 
@@ -902,25 +902,71 @@ public final class Stage3MidiLyrics {
     private static boolean isNonLyricTag(String value) {
         if (value == null) return true;
 
-        String lower = value.trim().toLowerCase(Locale.ROOT);
+        String lower = value.trim()
+                .toLowerCase(Locale.ROOT)
+                .replace('\u0000', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
 
-        return lower.startsWith("@kmidi")
-                || lower.startsWith("@v")
-                || lower.startsWith("@i")
-                || lower.startsWith("@l")
-                || lower.startsWith("@t")
-                || lower.startsWith("@k")
-                || lower.startsWith("singer:")
+        if (lower.isEmpty()) return true;
+
+        // Karaoke control tags and metadata directives.
+        if (lower.startsWith("@")) return true;
+
+        // Technical tags shown in the earlier screenshot.
+        if (lower.equals("xfhd")
+                || lower.startsWith("xfhd ")
+                || lower.matches("^xfhd[^a-z].*")) {
+            return true;
+        }
+
+        if (lower.equals("fln")
+                || lower.startsWith("fln ")
+                || lower.matches("^fln[^a-z].*")) {
+            return true;
+        }
+
+        // Conversion, authoring and export information.
+        if (lower.startsWith("converted with")
+                || lower.startsWith("created with")
+                || lower.startsWith("generated with")
+                || lower.startsWith("exported with")
+                || lower.startsWith("encoded with")
+                || lower.startsWith("psruti")
+                || lower.contains("converted with psruti")
+                || lower.contains("created with psruti")) {
+            return true;
+        }
+
+        // Numbered song filenames, for example:
+        // 10015 - Air Supply - I Can't Wait Forever.mid
+        if (lower.matches(
+                "^\\d+\\s*[-_.].*\\.(mid|midi|kar)$")) {
+            return true;
+        }
+
+        // Other MIDI/KAR filenames with identifying separators.
+        if ((lower.endsWith(".mid")
+                || lower.endsWith(".midi")
+                || lower.endsWith(".kar"))
+                && (lower.contains(" - ")
+                || lower.contains("_"))) {
+            return true;
+        }
+
+        // Descriptive file metadata, not sung lyrics.
+        return lower.startsWith("singer:")
                 || lower.startsWith("composer:")
                 || lower.startsWith("artist:")
                 || lower.startsWith("title:")
                 || lower.startsWith("author:")
                 || lower.startsWith("copyright:")
-                || lower.equals("xfhd")
-                || lower.equals("fln")
-                || lower.startsWith("converted with psruti")
-                || lower.startsWith("created with psruti")
-                || lower.startsWith("psruti version");
+                || lower.startsWith("arranger:")
+                || lower.startsWith("program:")
+                || lower.startsWith("software:")
+                || lower.startsWith("sequenced by:")
+                || lower.startsWith("midi file:")
+                || lower.startsWith("filename:");
     }
 
     private static String removeLabel(String value, String label) {
