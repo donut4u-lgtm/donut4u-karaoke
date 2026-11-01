@@ -40,6 +40,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".Stage3PostFileUploadActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".KaraokeStudioActivity"
             android:exported="false"
             android:hardwareAccelerated="true" />
