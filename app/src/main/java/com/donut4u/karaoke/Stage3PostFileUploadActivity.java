@@ -85,7 +85,8 @@ public class Stage3PostFileUploadActivity extends Activity {
             mainHandler.postDelayed(
                     this::showApiKeyDialog, 300);
         } else {
-            status.setText("PostFile account connected on this device.");
+            status.setText(
+                    "PostFile API key is saved on this device.");
         }
     }
 
@@ -124,11 +125,19 @@ public class Stage3PostFileUploadActivity extends Activity {
         status.setPadding(0, dp(8), 0, dp(12));
         root.addView(status);
 
-        Button keyButton = makeButton("SET / CHANGE POSTFILE API KEY");
+        Button keyButton =
+                makeButton("SET / CHANGE POSTFILE API KEY");
         keyButton.setOnClickListener(v -> showApiKeyDialog());
         root.addView(keyButton, buttonParams());
 
-        Button selectButton = makeButton("SELECT MIDI / KAR FILES");
+        Button checkButton =
+                makeButton("CHECK POSTFILE ACCOUNT & FILES");
+        checkButton.setOnClickListener(
+                v -> checkPostFileAccount());
+        root.addView(checkButton, buttonParams());
+
+        Button selectButton =
+                makeButton("SELECT MIDI / KAR FILES");
         selectButton.setOnClickListener(v -> chooseFiles());
         root.addView(selectButton, buttonParams());
 
@@ -146,7 +155,8 @@ public class Stage3PostFileUploadActivity extends Activity {
         root.addView(progressBar,
                 new LinearLayout.LayoutParams(-1, dp(12)));
 
-        uploadButton = makeButton("UPLOAD SELECTED SONGS");
+        uploadButton =
+                makeButton("UPLOAD SELECTED SONGS");
         uploadButton.setEnabled(false);
         uploadButton.setOnClickListener(v -> beginUploads());
         root.addView(uploadButton, buttonParams());
@@ -274,16 +284,6 @@ public class Stage3PostFileUploadActivity extends Activity {
                 android.text.InputType.TYPE_CLASS_TEXT
                         | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
 
-        new AlertDialog.Builder(this)
-                .setTitle("POSTFILE API KEY")
-                .setMessage(
-                        "Enter your existing PostFile API key.\n"
-                        + "It will be encrypted and saved on this phone.")
-                .setView(keyInput)
-                .setNegativeButton("CANCEL", null)
-                .setPositiveButton("SAVE", null)
-                .create();
-
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("POSTFILE API KEY")
                 .setMessage(
@@ -323,6 +323,196 @@ public class Stage3PostFileUploadActivity extends Activity {
                         }));
 
         dialog.show();
+    }
+
+    // ---------------------------------------------------------
+    // POSTFILE ACCOUNT AND FILE LIST CHECK
+    // ---------------------------------------------------------
+
+    private void checkPostFileAccount() {
+        if (uploading) {
+            Toast.makeText(this,
+                    "Wait until uploading finishes.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String apiKey = getSavedApiKey();
+
+        if (apiKey.isEmpty()) {
+            showApiKeyDialog();
+            return;
+        }
+
+        status.setText("Checking PostFile account and files...");
+
+        new Thread(() -> {
+            try {
+                JSONObject account = getPostFileJson(
+                        "https://postfile.net/v1/account",
+                        apiKey);
+
+                JSONObject listing = getPostFileJson(
+                        "https://postfile.net/v1/files?page=1&per_page=50",
+                        apiKey);
+
+                String email = account.optString(
+                        "email", "Not provided");
+
+                String plan = account.optString(
+                        "plan", "Unknown");
+
+                int uploads = account.optInt(
+                        "uploads_this_month", -1);
+
+                int limit = account.optInt(
+                        "upload_limit", -1);
+
+                int total = listing.optInt("total", -1);
+
+                JSONArray files = listing.optJSONArray("files");
+
+                StringBuilder report = new StringBuilder();
+
+                report.append("POSTFILE ACCOUNT\n\n");
+                report.append("Email: ")
+                        .append(email).append("\n");
+                report.append("Plan: ")
+                        .append(plan).append("\n");
+
+                report.append("Uploads this month: ")
+                        .append(uploads >= 0
+                                ? String.valueOf(uploads)
+                                : "Unknown");
+
+                if (limit >= 0) {
+                    report.append(" / ").append(limit);
+                }
+
+                report.append("\n\n");
+                report.append("TOTAL FILES: ")
+                        .append(total >= 0
+                                ? String.valueOf(total)
+                                : "Unknown")
+                        .append("\n\n");
+
+                report.append("FILES IN THIS ACCOUNT:\n");
+
+                if (files != null && files.length() > 0) {
+                    for (int i = 0; i < files.length(); i++) {
+                        JSONObject file =
+                                files.getJSONObject(i);
+
+                        report.append("\n")
+                                .append(i + 1)
+                                .append(". ")
+                                .append(file.optString(
+                                        "name", "Unnamed file"))
+                                .append("\nID: ")
+                                .append(file.optString(
+                                        "file_id", "Unknown"))
+                                .append("\n");
+                    }
+                } else {
+                    report.append("No files returned.\n");
+                }
+
+                String finalReport = report.toString();
+
+                mainHandler.post(() -> {
+                    status.setText(
+                            "PostFile account check completed.");
+
+                    new AlertDialog.Builder(this)
+                            .setTitle("POSTFILE ACCOUNT CHECK")
+                            .setMessage(finalReport)
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
+
+            } catch (Exception e) {
+                String error = e.getMessage() == null
+                        ? "Could not check PostFile account."
+                        : e.getMessage();
+
+                mainHandler.post(() -> {
+                    status.setText("Account check failed.");
+
+                    new AlertDialog.Builder(this)
+                            .setTitle("POSTFILE CHECK FAILED")
+                            .setMessage(error)
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
+            }
+        }).start();
+    }
+
+    private JSONObject getPostFileJson(
+            String address, String apiKey) throws Exception {
+
+        HttpURLConnection connection = null;
+
+        try {
+            URL url = new URL(address);
+
+            connection = (HttpURLConnection)
+                    url.openConnection();
+
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(20000);
+            connection.setReadTimeout(30000);
+            connection.setRequestProperty(
+                    "X-API-Key", apiKey);
+
+            int responseCode = connection.getResponseCode();
+
+            InputStream stream = responseCode >= 200
+                    && responseCode < 300
+                    ? connection.getInputStream()
+                    : connection.getErrorStream();
+
+            StringBuilder response = new StringBuilder();
+
+            if (stream != null) {
+                try (BufferedReader reader =
+                             new BufferedReader(
+                                     new InputStreamReader(
+                                             stream,
+                                             StandardCharsets.UTF_8))) {
+
+                    String line;
+
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                }
+            }
+
+            if (responseCode < 200 || responseCode >= 300) {
+                String error = "PostFile HTTP " + responseCode;
+
+                try {
+                    JSONObject errorJson =
+                            new JSONObject(response.toString());
+
+                    error += ": " + errorJson.optString(
+                            "detail", response.toString());
+
+                } catch (Exception ignored) {
+                    error += ": " + response;
+                }
+
+                throw new Exception(error);
+            }
+
+            return new JSONObject(response.toString());
+
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
     }
 
     // ---------------------------------------------------------
@@ -465,6 +655,7 @@ public class Stage3PostFileUploadActivity extends Activity {
             uploadButton.setEnabled(true);
             progressBar.setProgress(100);
             status.setText("All selected files processed.");
+
             Toast.makeText(this,
                     "Upload session finished.",
                     Toast.LENGTH_LONG).show();
@@ -540,7 +731,9 @@ public class Stage3PostFileUploadActivity extends Activity {
                     saveUploadedSong(
                             currentTitle, currentArtist, cdnUrl);
 
-                    status.setText("Uploaded: " + currentTitle);
+                    status.setText(
+                            "Uploaded to PostFile: " + currentTitle);
+
                     currentIndex++;
                     requestSongDetails();
                 });
@@ -576,7 +769,8 @@ public class Stage3PostFileUploadActivity extends Activity {
     private String uploadToPostFile(
             Uri uri, String apiKey) throws Exception {
 
-        String boundary = "----Donut4U" + System.currentTimeMillis();
+        String boundary =
+                "----Donut4U" + System.currentTimeMillis();
 
         HttpURLConnection connection = null;
 
@@ -595,7 +789,10 @@ public class Stage3PostFileUploadActivity extends Activity {
                     "Content-Type",
                     "multipart/form-data; boundary=" + boundary);
 
-            String filename = getFileName(uri);
+            String filename = getFileName(uri)
+                    .replace("\"", "")
+                    .replace("\r", "")
+                    .replace("\n", "");
 
             try (DataOutputStream output =
                          new DataOutputStream(
@@ -604,8 +801,7 @@ public class Stage3PostFileUploadActivity extends Activity {
                 output.writeBytes("--" + boundary + "\r\n");
                 output.writeBytes(
                         "Content-Disposition: form-data; name=\"file\"; "
-                                + "filename=\"" + filename.replace("\"", "")
-                                + "\"\r\n");
+                                + "filename=\"" + filename + "\"\r\n");
                 output.writeBytes(
                         "Content-Type: application/octet-stream\r\n\r\n");
 
@@ -636,10 +832,12 @@ public class Stage3PostFileUploadActivity extends Activity {
                 }
 
                 if (total == 0) {
-                    throw new Exception("The selected file is empty.");
+                    throw new Exception(
+                            "The selected file is empty.");
                 }
 
-                output.writeBytes("\r\n--" + boundary + "--\r\n");
+                output.writeBytes(
+                        "\r\n--" + boundary + "--\r\n");
                 output.flush();
             }
 
@@ -653,11 +851,14 @@ public class Stage3PostFileUploadActivity extends Activity {
             StringBuilder response = new StringBuilder();
 
             if (responseStream != null) {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(
-                                responseStream, StandardCharsets.UTF_8))) {
+                try (BufferedReader reader =
+                             new BufferedReader(
+                                     new InputStreamReader(
+                                             responseStream,
+                                             StandardCharsets.UTF_8))) {
 
                     String line;
+
                     while ((line = reader.readLine()) != null) {
                         response.append(line);
                     }
@@ -671,8 +872,10 @@ public class Stage3PostFileUploadActivity extends Activity {
                 try {
                     JSONObject json =
                             new JSONObject(response.toString());
+
                     error += ": " + json.optString(
                             "detail", response.toString());
+
                 } catch (Exception ignored) {
                     error += ": " + response;
                 }
@@ -680,13 +883,16 @@ public class Stage3PostFileUploadActivity extends Activity {
                 throw new Exception(error);
             }
 
-            JSONObject result = new JSONObject(response.toString());
+            JSONObject result =
+                    new JSONObject(response.toString());
+
             String cdnUrl = result.optString("url", "");
 
             if (!cdnUrl.startsWith(
                     "https://cdn.postfile.download/file/")) {
                 throw new Exception(
-                        "PostFile did not return a valid CDN URL.");
+                        "PostFile did not return a valid CDN URL.\n"
+                                + response);
             }
 
             return cdnUrl;
@@ -715,7 +921,8 @@ public class Stage3PostFileUploadActivity extends Activity {
             for (int i = 0; i < songs.length(); i++) {
                 JSONObject existing = songs.getJSONObject(i);
 
-                if (cdnUrl.equals(existing.optString("uri", ""))) {
+                if (cdnUrl.equals(
+                        existing.optString("uri", ""))) {
                     status.setText(
                             "This uploaded URL is already registered.");
                     return;
@@ -730,7 +937,9 @@ public class Stage3PostFileUploadActivity extends Activity {
                             songs.getJSONObject(i)
                                     .optString("number", "0"));
 
-                    nextNumber = Math.max(nextNumber, number + 1);
+                    nextNumber = Math.max(
+                            nextNumber, number + 1);
+
                 } catch (Exception ignored) {
                 }
             }
@@ -752,7 +961,8 @@ public class Stage3PostFileUploadActivity extends Activity {
                     .apply();
 
             Toast.makeText(this,
-                    "Added to Stage 3: " + displayTitle,
+                    "Uploaded and added to Stage 3: "
+                            + displayTitle,
                     Toast.LENGTH_LONG).show();
 
         } catch (Exception e) {
