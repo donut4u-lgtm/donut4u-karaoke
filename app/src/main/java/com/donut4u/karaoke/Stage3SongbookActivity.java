@@ -121,7 +121,6 @@ public class Stage3SongbookActivity extends Activity {
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
 
-        // Register the supplied PostFile MIDI/KAR link.
         Button postFileButton = makeButton("ADD POSTFILE MIDI SONG");
         postFileButton.setOnClickListener(v ->
                 showPostFileMidiRegistration());
@@ -214,7 +213,8 @@ public class Stage3SongbookActivity extends Activity {
 
     /**
      * Registers the supplied PostFile MIDI/KAR URL in the Stage 3 songbook.
-     * The user enters the song title and singer.
+     * If it already exists, reveal the existing song instead of registering
+     * it again.
      */
     private void showPostFileMidiRegistration() {
         final String postFileUrl =
@@ -253,6 +253,41 @@ public class Stage3SongbookActivity extends Activity {
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE);
 
             addButton.setOnClickListener(v -> {
+
+                /*
+                 * FIRST check whether this exact PostFile URL
+                 * already exists in the saved songbook.
+                 */
+                for (Song existing : songs) {
+                    if (postFileUrl.equals(existing.uri)) {
+
+                        String existingTitle = existing.title;
+
+                        /*
+                         * Clear any previous search and reveal
+                         * the existing registered song.
+                         */
+                        if (searchInput != null) {
+                            searchInput.setText(existingTitle);
+                        }
+
+                        renderSongs(existingTitle);
+
+                        Toast.makeText(
+                                Stage3SongbookActivity.this,
+                                "Already registered: " + existingTitle
+                                        + "\nTap PLAY IN DONUT4U to play it.",
+                                Toast.LENGTH_LONG).show();
+
+                        dialog.dismiss();
+                        return;
+                    }
+                }
+
+                /*
+                 * Only ask for title and artist when this URL
+                 * has not already been registered.
+                 */
                 String title = songTitle.getText()
                         .toString().trim();
 
@@ -271,16 +306,6 @@ public class Stage3SongbookActivity extends Activity {
                     return;
                 }
 
-                for (Song existing : songs) {
-                    if (postFileUrl.equals(existing.uri)) {
-                        Toast.makeText(
-                                Stage3SongbookActivity.this,
-                                "This PostFile song is already registered.",
-                                Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                }
-
                 String displayTitle = title + " — " + artist;
 
                 songs.add(new Song(
@@ -291,8 +316,11 @@ public class Stage3SongbookActivity extends Activity {
 
                 saveSongs();
 
-                renderSongs(searchInput == null
-                        ? "" : searchInput.getText().toString());
+                if (searchInput != null) {
+                    searchInput.setText("");
+                }
+
+                renderSongs("");
 
                 Toast.makeText(
                         Stage3SongbookActivity.this,
