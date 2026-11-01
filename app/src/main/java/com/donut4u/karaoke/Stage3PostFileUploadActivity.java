@@ -76,18 +76,39 @@ public class Stage3PostFileUploadActivity extends Activity {
     private String currentArtist;
     private boolean uploading;
 
+    // Cached after being read from Android Keystore in the background.
+    private volatile String cachedApiKey = "";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildScreen();
 
-        if (getSavedApiKey().isEmpty()) {
-            mainHandler.postDelayed(
-                    this::showApiKeyDialog, 300);
-        } else {
-            status.setText(
-                    "PostFile API key is saved on this device.");
-        }
+        status.setText("Checking saved PostFile API key...");
+
+        // Android Keystore must not block the UI thread.
+        new Thread(() -> {
+            String key = getSavedApiKey();
+            cachedApiKey = key;
+
+            mainHandler.post(() -> {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+
+                if (key.isEmpty()) {
+                    status.setText("PostFile API key required.");
+                    showApiKeyDialog();
+                } else {
+                    status.setText(
+                            "PostFile API key is saved on this device.");
+                }
+
+                uploadButton.setEnabled(
+                        !selectedFiles.isEmpty()
+                                && !key.isEmpty());
+            });
+        }, "PostFile-Key-Check").start();
     }
 
     private int dp(float value) {
@@ -242,6 +263,8 @@ public class Stage3PostFileUploadActivity extends Activity {
                 .putString("key", Base64.encodeToString(
                         encrypted, Base64.NO_WRAP))
                 .apply();
+
+        cachedApiKey = apiKey;
     }
 
     private String getSavedApiKey() {
@@ -337,7 +360,7 @@ public class Stage3PostFileUploadActivity extends Activity {
             return;
         }
 
-        String apiKey = getSavedApiKey();
+        String apiKey = cachedApiKey;
 
         if (apiKey.isEmpty()) {
             showApiKeyDialog();
@@ -420,6 +443,8 @@ public class Stage3PostFileUploadActivity extends Activity {
                 String finalReport = report.toString();
 
                 mainHandler.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+
                     status.setText(
                             "PostFile account check completed.");
 
@@ -436,6 +461,8 @@ public class Stage3PostFileUploadActivity extends Activity {
                         : e.getMessage();
 
                 mainHandler.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+
                     status.setText("Account check failed.");
 
                     new AlertDialog.Builder(this)
@@ -570,7 +597,7 @@ public class Stage3PostFileUploadActivity extends Activity {
 
         uploadButton.setEnabled(
                 !selectedFiles.isEmpty()
-                        && !getSavedApiKey().isEmpty());
+                        && !cachedApiKey.isEmpty());
 
         status.setText(selectedFiles.size()
                 + " supported file(s) selected.");
@@ -637,7 +664,7 @@ public class Stage3PostFileUploadActivity extends Activity {
     private void beginUploads() {
         if (uploading || selectedFiles.isEmpty()) return;
 
-        if (getSavedApiKey().isEmpty()) {
+        if (cachedApiKey.isEmpty()) {
             showApiKeyDialog();
             return;
         }
@@ -724,15 +751,26 @@ public class Stage3PostFileUploadActivity extends Activity {
 
         new Thread(() -> {
             try {
-                String apiKey = getSavedApiKey();
+                String apiKey = cachedApiKey;
+
+                if (apiKey.isEmpty()) {
+                    throw new Exception(
+                            "PostFile API key is missing. Save it again.");
+                }
+
                 String cdnUrl = uploadToPostFile(uri, apiKey);
 
                 mainHandler.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+
+                    // This method is reached only after PostFile
+                    // returns a valid URL AND the account file list
+                    // confirms the uploaded file ID and URL.
                     saveUploadedSong(
                             currentTitle, currentArtist, cdnUrl);
 
                     status.setText(
-                            "Uploaded to PostFile: " + currentTitle);
+                            "HOSTED AND VERIFIED: " + currentTitle);
 
                     currentIndex++;
                     requestSongDetails();
@@ -743,8 +781,10 @@ public class Stage3PostFileUploadActivity extends Activity {
                         ? "Upload failed." : e.getMessage();
 
                 mainHandler.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+
                     new AlertDialog.Builder(this)
-                            .setTitle("UPLOAD FAILED")
+                            .setTitle("UPLOAD FAILED / NOT VERIFIED")
                             .setMessage(message
                                     + "\n\nContinue with the next file?")
                             .setNegativeButton("STOP", (d, w) -> {
@@ -759,7 +799,7 @@ public class Stage3PostFileUploadActivity extends Activity {
                             .show();
                 });
             }
-        }).start();
+        }, "PostFile-Upload").start();
     }
 
     // ---------------------------------------------------------
@@ -886,14 +926,39 @@ public class Stage3PostFileUploadActivity extends Activity {
             JSONObject result =
                     new JSONObject(response.toString());
 
-            String cdnUrl = result.optString("url", "");
+            String fileId =
+                    result.optString("file_id", "").trim();
+
+            String cdnUrl =
+                    result.optString("url", "").trim();
+
+            long returnedSize =
+                    result.optLong("size", 0L);
+
+            if (fileId.isEmpty()) {
+                throw new Exception(
+                        "PostFile did not return a file ID. "
+                                + "The app will not mark this song as hosted.\n"
+                                + response);
+            }
 
             if (!cdnUrl.startsWith(
                     "https://cdn.postfile.download/file/")) {
                 throw new Exception(
-                        "PostFile did not return a valid CDN URL.\n"
+                        "PostFile did not return a valid CDN URL. "
+                                + "The app will not save this song locally.\n"
                                 + response);
             }
+
+            if (returnedSize <= 0L) {
+                throw new Exception(
+                        "PostFile returned an invalid file size. "
+                                + "Hosting could not be verified.\n"
+                                + response);
+            }
+
+            // Verify that this exact file is visible in the account.
+            verifyPostFileHosting(fileId, cdnUrl, apiKey);
 
             return cdnUrl;
 
@@ -902,6 +967,77 @@ public class Stage3PostFileUploadActivity extends Activity {
                 connection.disconnect();
             }
         }
+    }
+
+    // ---------------------------------------------------------
+    // VERIFY FILE IN POSTFILE HOSTING ACCOUNT
+    // ---------------------------------------------------------
+
+    private void verifyPostFileHosting(
+            String fileId, String expectedUrl, String apiKey)
+            throws Exception {
+
+        Exception lastError = null;
+
+        // Retry because the account file list may take a moment
+        // to show a newly uploaded file.
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                JSONObject listing = getPostFileJson(
+                        "https://postfile.net/v1/files?page=1&per_page=200",
+                        apiKey);
+
+                JSONArray files = listing.optJSONArray("files");
+
+                if (files != null) {
+                    for (int i = 0; i < files.length(); i++) {
+                        JSONObject file = files.getJSONObject(i);
+
+                        String listedId =
+                                file.optString("file_id", "");
+
+                        if (fileId.equals(listedId)) {
+                            String listedUrl =
+                                    file.optString("url", "").trim();
+
+                            if (!expectedUrl.equals(listedUrl)) {
+                                throw new Exception(
+                                        "PostFile returned this file ID, "
+                                                + "but the hosted URL does not match. "
+                                                + "Song not added to the songbook.");
+                            }
+
+                            return;
+                        }
+                    }
+                }
+
+                lastError = new Exception(
+                        "File ID " + fileId
+                                + " was not found in the PostFile account file list.");
+
+            } catch (Exception e) {
+                lastError = e;
+            }
+
+            if (attempt < 2) {
+                try {
+                    Thread.sleep(1200L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new Exception(
+                            "PostFile hosting verification was interrupted.", e);
+                }
+            }
+        }
+
+        throw new Exception(
+                "HOSTING NOT VERIFIED. Donut4U will not report this "
+                        + "song as successfully hosted. PostFile file ID: "
+                        + fileId + ". "
+                        + (lastError == null
+                        ? "The file was not found in the account list."
+                        : lastError.getMessage()));
     }
 
     // ---------------------------------------------------------
@@ -961,14 +1097,14 @@ public class Stage3PostFileUploadActivity extends Activity {
                     .apply();
 
             Toast.makeText(this,
-                    "Uploaded and added to Stage 3: "
+                    "Hosted and verified on PostFile: "
                             + displayTitle,
                     Toast.LENGTH_LONG).show();
 
         } catch (Exception e) {
             Toast.makeText(this,
-                    "Upload succeeded, but songbook registration failed. "
-                            + "CDN link: " + cdnUrl,
+                    "PostFile hosting succeeded, but songbook "
+                            + "registration failed. CDN link: " + cdnUrl,
                     Toast.LENGTH_LONG).show();
         }
     }
