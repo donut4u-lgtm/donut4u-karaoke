@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -124,8 +125,6 @@ public final class Stage3MidiLyrics {
     }
 
     public CharSequence styledFullTextAtTick(long tick) {
-        // Compatibility with Stage3PlayerActivity.
-        // This now deliberately displays only the current stanza.
         return build(tick).text;
     }
 
@@ -249,6 +248,7 @@ public final class Stage3MidiLyrics {
         return 0;
     }
 
+    // 🔴 CHANGED: A section marker ends the previous active lyric.
     private int activeIndex(long tick) {
         int low = 0;
         int high = events.size() - 1;
@@ -265,13 +265,14 @@ public final class Stage3MidiLyrics {
             }
         }
 
-        while (found >= 0 && events.get(found).section) {
-            found--;
+        if (found >= 0 && events.get(found).section) {
+            return -1;
         }
 
         return found;
     }
 
+    // 🔴 CHANGED: Render the active stanza and track the active line.
     private FullText build(long tick) {
         SpannableStringBuilder out =
                 new SpannableStringBuilder();
@@ -283,16 +284,24 @@ public final class Stage3MidiLyrics {
 
         int active = activeIndex(tick);
 
-        // Before the first lyric event, show the first stanza.
-        int targetStanza = active >= 0
-                ? events.get(active).stanza : firstStanza();
+        int latest = -1;
+        int low = 0;
+        int high = events.size() - 1;
 
-        // If playback is between section markers and the next stanza,
-        // prefer the next lyric stanza when its section has started.
-        if (active < 0) {
-            int first = nextLyricIndex(0);
-            if (first >= 0) targetStanza = events.get(first).stanza;
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+
+            if (events.get(mid).tick <= tick) {
+                latest = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
         }
+
+        int targetStanza = latest >= 0
+                ? events.get(latest).stanza
+                : firstStanza();
 
         int[] starts = new int[events.size()];
         int[] ends = new int[events.size()];
@@ -303,13 +312,15 @@ public final class Stage3MidiLyrics {
         }
 
         int lineStart = 0;
+        int renderedLineStart = 0;
         int currentLine = Integer.MIN_VALUE;
 
-        // Render only the stanza containing the active lyric event.
         for (int i = 0; i < events.size(); i++) {
             LyricEvent e = events.get(i);
 
-            if (e.stanza != targetStanza) continue;
+            if (e.stanza != targetStanza) {
+                continue;
+            }
 
             if (e.section) {
                 trimTrailingNewlines(out);
@@ -338,6 +349,8 @@ public final class Stage3MidiLyrics {
 
                 out.append('\n');
                 currentLine = Integer.MIN_VALUE;
+                renderedLineStart = out.length();
+
                 continue;
             }
 
@@ -349,6 +362,7 @@ public final class Stage3MidiLyrics {
                 }
 
                 currentLine = e.line;
+                renderedLineStart = out.length();
             }
 
             starts[i] = out.length();
@@ -356,12 +370,11 @@ public final class Stage3MidiLyrics {
             ends[i] = out.length();
 
             if (i == active) {
-                lineStart = starts[i];
+                lineStart = renderedLineStart;
             }
         }
 
-        // Highlight the complete active word, not an individual MIDI
-        // lyric fragment. Adjacent fragments without spaces are joined.
+        // Highlight the complete active word in green.
         if (active >= 0
                 && starts[active] >= 0
                 && ends[active] > starts[active]) {
@@ -648,7 +661,6 @@ public final class Stage3MidiLyrics {
                     : Integer.compare(a.sequence, b.sequence);
         });
 
-        // Assign line and stanza numbers.
         int line = 0;
         int stanza = 0;
         LyricEvent previous = null;
@@ -686,8 +698,6 @@ public final class Stage3MidiLyrics {
     private static boolean hasStanzaBreak(String s) {
         if (s == null || s.isEmpty()) return false;
 
-        // Two or more consecutive slash/backslash markers mean
-        // a stanza break. A single marker means a line break.
         int trailing = 0;
 
         for (int i = s.length() - 1; i >= 0; i--) {
@@ -716,8 +726,6 @@ public final class Stage3MidiLyrics {
 
         if (leading >= 2) return true;
 
-        // Two or more newline characters indicate a blank line
-        // and therefore a stanza boundary.
         int newlines = 0;
 
         for (int i = 0; i < s.length(); i++) {
@@ -877,7 +885,7 @@ public final class Stage3MidiLyrics {
                 found = true;
 
             } else if (lower.startsWith("composer:")) {
-                composer = item.substring(8).trim();
+                composer = item.substring(9).trim();
                 found = true;
 
             } else if (lower.startsWith("@i")) {
