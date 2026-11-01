@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -316,7 +317,6 @@ public class Stage3PlayerActivity extends Activity {
                                     * progress / 1000.0d);
 
                     midiEngine.seekTo(targetTick);
-
                     updateMidiLyricsAtTick(targetTick);
 
                 } else if (!midiMode && player != null
@@ -355,7 +355,7 @@ public class Stage3PlayerActivity extends Activity {
                 controls,
                 new LinearLayout.LayoutParams(-1, dp(48)));
 
-        Button backButton = makeButton("BACK TO QUEUE");
+        Button backButton = makeButton("BACK TO SONGBOOK");
         backButton.setOnClickListener(v -> finish());
 
         root.addView(
@@ -428,7 +428,7 @@ public class Stage3PlayerActivity extends Activity {
             titleLabel.setText("No song selected");
 
             statusLabel.setText(
-                    "Return to the songbook and add songs to the queue.");
+                    "Return to the songbook and select a song.");
 
             lyricsLabel.setText("No song selected.");
             lyricsScroll.setVisibility(View.VISIBLE);
@@ -650,10 +650,7 @@ public class Stage3PlayerActivity extends Activity {
                     public void onFinished() {
                         if (released || !midiMode) return;
 
-                        statusLabel.setText("MIDI finished");
-                        cueLabel.setVisibility(View.GONE);
-
-                        playNextSong();
+                        finishCurrentSong();
                     }
                 });
             });
@@ -1177,8 +1174,7 @@ public class Stage3PlayerActivity extends Activity {
                                         : "Ready");
 
                     } else if (playbackState == Player.STATE_ENDED) {
-                        statusLabel.setText("Song finished");
-                        playNextSong();
+                        finishCurrentSong();
                     }
                 }
 
@@ -1262,24 +1258,57 @@ public class Stage3PlayerActivity extends Activity {
         }
     }
 
+    /*
+     * One-song-at-a-time completion.
+     * Clears only the temporary playback queue.
+     * Persistent Songbook entries and uploaded files remain untouched.
+     */
+    private void finishCurrentSong() {
+
+        if (released) return;
+
+        midiReady = false;
+        midiMode = false;
+
+        Stage3SongQueue.stopAndClear();
+
+        currentSong = null;
+
+        releasePlayback();
+
+        statusLabel.setText("SONG FINISHED");
+        titleLabel.setText("Ready for another song");
+
+        lyricsLabel.setText(
+                "Your song has finished.\n\n"
+                        + "Return to the Songbook and search "
+                        + "for another karaoke song."
+        );
+
+        lyricsScroll.setVisibility(View.VISIBLE);
+        videoSurface.setVisibility(View.GONE);
+
+        cueLabel.setVisibility(View.GONE);
+        metadataLabel.setVisibility(View.GONE);
+        preparationLabel.setVisibility(View.GONE);
+
+        playPauseButton.setEnabled(false);
+        playPauseButton.setText("PLAY");
+
+        seekBar.setProgress(0);
+        timeLabel.setText("00:00 / 00:00");
+    }
+
+    /*
+     * Manual NEXT remains available while a song is playing.
+     * Automatic playback after song completion is disabled.
+     */
     private void playNextSong() {
         Stage3SongQueue.QueuedSong next =
                 Stage3SongQueue.playNext();
 
         if (next == null) {
-            releasePlayback();
-
-            statusLabel.setText("Queue finished");
-            titleLabel.setText("No more queued songs");
-            lyricsLabel.setText("Queue finished.");
-
-            lyricsScroll.setVisibility(View.VISIBLE);
-            videoSurface.setVisibility(View.GONE);
-
-            playPauseButton.setEnabled(false);
-            seekBar.setProgress(0);
-            timeLabel.setText("00:00 / 00:00");
-
+            finishCurrentSong();
             return;
         }
 
