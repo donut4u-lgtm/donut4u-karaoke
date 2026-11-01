@@ -200,7 +200,8 @@ class Stage3MidiEngine private constructor(
     }
 
     private fun checkSession(sessionId: Long) {
-        if (Thread.currentThread().isInterrupted ||
+        if (
+            Thread.currentThread().isInterrupted ||
             !isSessionActive(sessionId)
         ) {
             throw CancellationException(
@@ -372,12 +373,11 @@ class Stage3MidiEngine private constructor(
                 connection.inputStream.use { input ->
                     FileOutputStream(destination).use { output ->
                         val buffer = ByteArray(8192)
-                        var read: Int
 
                         while (true) {
                             checkSession(sessionId)
 
-                            read = input.read(buffer)
+                            val read = input.read(buffer)
                             if (read == -1) break
 
                             output.write(buffer, 0, read)
@@ -512,7 +512,6 @@ class Stage3MidiEngine private constructor(
     }
 
     private fun stopCurrentTask() {
-        // Invalidate callbacks before stopping or deleting files.
         activeSessionId++
 
         activeCallback = null
@@ -577,6 +576,18 @@ class Stage3MidiEngine private constructor(
     ): File {
         checkSession(sessionId)
 
+        val uri = Uri.parse(uriString)
+        val scheme = uri.scheme?.lowercase()
+
+        if (scheme == "http" || scheme == "https") {
+            return copyHttpUrlToFile(
+                uriString,
+                directory,
+                fileName,
+                sessionId
+            )
+        }
+
         if (!directory.exists() && !directory.mkdirs()) {
             throw IllegalStateException(
                 "Could not create temporary Stage 3 storage."
@@ -589,8 +600,6 @@ class Stage3MidiEngine private constructor(
         destination.delete()
         temporary.delete()
 
-        val uri = Uri.parse(uriString)
-
         val input = context.contentResolver.openInputStream(uri)
             ?: throw IllegalStateException(
                 "Cannot read the selected file. Import it again."
@@ -600,12 +609,11 @@ class Stage3MidiEngine private constructor(
             input.use { source ->
                 FileOutputStream(temporary).use { output ->
                     val buffer = ByteArray(8192)
-                    var read: Int
 
                     while (true) {
                         checkSession(sessionId)
 
-                        read = source.read(buffer)
+                        val read = source.read(buffer)
                         if (read == -1) break
 
                         output.write(buffer, 0, read)
@@ -636,6 +644,114 @@ class Stage3MidiEngine private constructor(
             temporary.delete()
             destination.delete()
             throw error
+        }
+    }
+
+    private fun copyHttpUrlToFile(
+        urlString: String,
+        directory: File,
+        fileName: String,
+        sessionId: Long
+    ): File {
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IllegalStateException(
+                "Could not create temporary Stage 3 storage."
+            )
+        }
+
+        val destination = File(directory, fileName)
+        val temporary = File(directory, "$fileName.tmp")
+
+        destination.delete()
+        temporary.delete()
+
+        val connection = (URL(urlString).openConnection()
+            as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 30000
+            readTimeout = 120000
+            instanceFollowRedirects = true
+
+            setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Android) Donut4U-Karaoke"
+            )
+
+            setRequestProperty(
+                "Accept",
+                "application/octet-stream,*/*"
+            )
+        }
+
+        try {
+            checkSession(sessionId)
+            connection.connect()
+
+            val status = connection.responseCode
+
+            if (status !in 200..299) {
+                throw IllegalStateException(
+                    "Online song download failed (HTTP $status)."
+                )
+            }
+
+            val contentType =
+                connection.contentType?.lowercase() ?: ""
+
+            if (contentType.contains("text/html")) {
+                throw IllegalStateException(
+                    "The song link returned a webpage instead of a file. " +
+                        "Use the direct download URL."
+                )
+            }
+
+            connection.inputStream.use { source ->
+                FileOutputStream(temporary).use { output ->
+                    val buffer = ByteArray(8192)
+
+                    while (true) {
+                        checkSession(sessionId)
+
+                        val read = source.read(buffer)
+                        if (read == -1) break
+
+                        output.write(buffer, 0, read)
+                    }
+
+                    output.flush()
+                }
+            }
+
+            checkSession(sessionId)
+
+            if (temporary.length() == 0L) {
+                throw IllegalStateException(
+                    "The online karaoke file is empty."
+                )
+            }
+
+            if (!isValidMidiFile(temporary)) {
+                throw IllegalStateException(
+                    "The downloaded file is not a valid MIDI/KAR file."
+                )
+            }
+
+            if (!temporary.renameTo(destination)) {
+                throw IllegalStateException(
+                    "Could not save the downloaded karaoke file."
+                )
+            }
+
+            checkSession(sessionId)
+            return destination
+
+        } catch (error: Exception) {
+            temporary.delete()
+            destination.delete()
+            throw error
+
+        } finally {
+            connection.disconnect()
         }
     }
 
