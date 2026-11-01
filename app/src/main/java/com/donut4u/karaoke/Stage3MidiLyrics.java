@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -272,7 +271,7 @@ public final class Stage3MidiLyrics {
         return found;
     }
 
-    // 🔴 CHANGED: Render the active stanza and track the active line.
+    // 🔴 CHANGED: Render only the active stanza and highlight its active word.
     private FullText build(long tick) {
         SpannableStringBuilder out =
                 new SpannableStringBuilder();
@@ -355,6 +354,7 @@ public final class Stage3MidiLyrics {
             }
 
             if (currentLine != e.line) {
+                // Preserve intentional blank lines already inside this event.
                 trimTrailingNewlines(out);
 
                 if (out.length() > 0) {
@@ -549,7 +549,7 @@ public final class Stage3MidiLyrics {
                             }
 
                             if (lower.startsWith("composer:")) {
-                                composer = trimmed.substring(8).trim();
+                                composer = trimmed.substring(9).trim();
                             }
                         }
 
@@ -594,6 +594,7 @@ public final class Stage3MidiLyrics {
                         boolean finish = endsBreak(value);
                         boolean stanzaBreak = hasStanzaBreak(value);
 
+                        // 🔴 CHANGED: Keep embedded newlines in lyric text.
                         String clean = clean(value);
 
                         if (clean.trim().isEmpty()
@@ -695,6 +696,7 @@ public final class Stage3MidiLyrics {
                 all, singer, composer, ppq, tempos);
     }
 
+    // 🔴 CHANGED: Detect stanza breaks from slash markers or blank lines.
     private static boolean hasStanzaBreak(String s) {
         if (s == null || s.isEmpty()) return false;
 
@@ -726,15 +728,24 @@ public final class Stage3MidiLyrics {
 
         if (leading >= 2) return true;
 
-        int newlines = 0;
+        String normalized = s.replace("\r\n", "\n")
+                .replace('\r', '\n');
 
-        for (int i = 0; i < s.length(); i++) {
-            if (s.charAt(i) == '\n') {
-                newlines++;
+        int consecutive = 0;
+
+        for (int i = 0; i < normalized.length(); i++) {
+            if (normalized.charAt(i) == '\n') {
+                consecutive++;
+
+                if (consecutive >= 2) {
+                    return true;
+                }
+            } else if (!Character.isWhitespace(normalized.charAt(i))) {
+                consecutive = 0;
             }
         }
 
-        return newlines >= 2;
+        return false;
     }
 
     private static String heading(String value) {
@@ -766,12 +777,13 @@ public final class Stage3MidiLyrics {
         return null;
     }
 
+    // 🔴 CHANGED: Remove slash markers but preserve line breaks.
     private static String clean(String s) {
         if (s == null) return "";
 
         s = s.replace("\u0000", "")
-                .replace("\r", "")
-                .replace("\n", "");
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
 
         int start = 0;
         int end = s.length();
