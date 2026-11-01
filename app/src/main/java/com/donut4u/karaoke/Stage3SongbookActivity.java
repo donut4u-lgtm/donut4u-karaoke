@@ -121,6 +121,12 @@ public class Stage3SongbookActivity extends Activity {
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
 
+        // Register the supplied PostFile MIDI/KAR link.
+        Button postFileButton = makeButton("ADD POSTFILE MIDI SONG");
+        postFileButton.setOnClickListener(v ->
+                showPostFileMidiRegistration());
+        root.addView(postFileButton, buttonParams());
+
         Button spreadsheetButton =
                 makeButton("IMPORT SONGLIST (XLS / XLSX)");
         spreadsheetButton.setOnClickListener(v -> chooseSongbookFile());
@@ -204,6 +210,100 @@ public class Stage3SongbookActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {
             }
         });
+    }
+
+    /**
+     * Registers the supplied PostFile MIDI/KAR URL in the Stage 3 songbook.
+     * The user enters the song title and singer.
+     */
+    private void showPostFileMidiRegistration() {
+        final String postFileUrl =
+                "https://cdn.postfile.download/file/postfile/uploads/0f/0fcd06c316bf4282b770ad5cc7155628.mid";
+
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(12), dp(20), dp(8));
+
+        EditText songTitle = new EditText(this);
+        songTitle.setSingleLine(true);
+        songTitle.setHint("Song title");
+        form.addView(songTitle);
+
+        EditText singer = new EditText(this);
+        singer.setSingleLine(true);
+        singer.setHint("Singer / Artist");
+        form.addView(singer);
+
+        TextView linkInfo = new TextView(this);
+        linkInfo.setText("POSTFILE MIDI LINK\n" + postFileUrl);
+        linkInfo.setTextColor(Color.DKGRAY);
+        linkInfo.setTextSize(12);
+        linkInfo.setPadding(0, dp(12), 0, dp(8));
+        form.addView(linkInfo);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("REGISTER POSTFILE MIDI")
+                .setView(form)
+                .setNegativeButton("CANCEL", null)
+                .setPositiveButton("ADD TO SONGBOOK", null)
+                .create();
+
+        dialog.setOnShowListener(d -> {
+            Button addButton =
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+
+            addButton.setOnClickListener(v -> {
+                String title = songTitle.getText()
+                        .toString().trim();
+
+                String artist = singer.getText()
+                        .toString().trim();
+
+                if (title.isEmpty()) {
+                    songTitle.setError("Enter the song title");
+                    songTitle.requestFocus();
+                    return;
+                }
+
+                if (artist.isEmpty()) {
+                    singer.setError("Enter the singer or artist");
+                    singer.requestFocus();
+                    return;
+                }
+
+                for (Song existing : songs) {
+                    if (postFileUrl.equals(existing.uri)) {
+                        Toast.makeText(
+                                Stage3SongbookActivity.this,
+                                "This PostFile song is already registered.",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                }
+
+                String displayTitle = title + " — " + artist;
+
+                songs.add(new Song(
+                        generateNumber(),
+                        displayTitle,
+                        postFileUrl,
+                        "MIDI/KAR"));
+
+                saveSongs();
+
+                renderSongs(searchInput == null
+                        ? "" : searchInput.getText().toString());
+
+                Toast.makeText(
+                        Stage3SongbookActivity.this,
+                        "PostFile MIDI song added to Stage 3!",
+                        Toast.LENGTH_LONG).show();
+
+                dialog.dismiss();
+            });
+        });
+
+        dialog.show();
     }
 
     private Button makeButton(String text) {
