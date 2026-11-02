@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -18,7 +19,6 @@ import java.util.Locale;
 
 public final class Stage3MidiLyrics {
 
-    // DONUT4U ACTIVE KARAOKE COLOR: GREEN
     private static final int ACTIVE_GREEN = Color.rgb(0, 255, 100);
     private static final int SECTION_GOLD = Color.rgb(255, 205, 90);
     private static final long DEFAULT_TEMPO = 500000L;
@@ -136,15 +136,25 @@ public final class Stage3MidiLyrics {
     }
 
     public CharSequence styledTextAtTick(long tick) {
-        return build(tick).text;
+        return build(tick, Long.MAX_VALUE).text;
+    }
+
+    public CharSequence styledTextAtTick(
+            long tick, long durationTicks) {
+        return build(tick, durationTicks).text;
     }
 
     public CharSequence styledFullTextAtTick(long tick) {
-        return build(tick).text;
+        return build(tick, Long.MAX_VALUE).text;
+    }
+
+    public CharSequence styledFullTextAtTick(
+            long tick, long durationTicks) {
+        return build(tick, durationTicks).text;
     }
 
     public int activeLineStartOffsetAtTick(long tick) {
-        return build(tick).activeLineStart;
+        return build(tick, Long.MAX_VALUE).activeLineStart;
     }
 
     public int activeEventIndexAtTick(long tick) {
@@ -170,7 +180,7 @@ public final class Stage3MidiLyrics {
             if (e.section || e.stanza != stanza) break;
             if (e.line == line) continue;
 
-            if (b.length() > 0 && e.line != line) break;
+            if (b.length() > 0) break;
 
             line = e.line;
             b.append(e.text);
@@ -188,6 +198,7 @@ public final class Stage3MidiLyrics {
 
     public boolean shouldShowDotsAtTick(long tick) {
         int active = activeIndex(tick);
+
         if (active < 0) {
             int first = firstLyricIndex();
             if (first < 0) return false;
@@ -259,7 +270,7 @@ public final class Stage3MidiLyrics {
         return result;
     }
 
-    private FullResult build(long tick) {
+    private FullResult build(long tick, long durationTicks) {
         SpannableStringBuilder output = new SpannableStringBuilder();
 
         if (events.isEmpty()) {
@@ -279,7 +290,8 @@ public final class Stage3MidiLyrics {
                     output.append(events.get(active).text);
                     output.setSpan(
                             new ForegroundColorSpan(SECTION_GOLD),
-                            0, output.length(),
+                            0,
+                            output.length(),
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }
                 return new FullResult(output, 0);
@@ -290,26 +302,14 @@ public final class Stage3MidiLyrics {
 
         LyricEvent activeEvent = events.get(active);
 
-        int firstLine = activeEvent.line;
-        int lastLine = activeEvent.line;
-        int stanza = activeEvent.stanza;
+        /*
+         * Keep a five-line window around the active lyric.
+         * This window can cross stanza boundaries.
+         */
+        int firstLine = Math.max(
+                0, activeEvent.line - 2);
 
-        if (hasExplicitStanzas) {
-            for (LyricEvent e : events) {
-                if (e.section || e.stanza != stanza) continue;
-                firstLine = Math.min(firstLine, e.line);
-                lastLine = Math.max(lastLine, e.line);
-            }
-
-            if (lastLine - firstLine + 1 > MAX_VISIBLE_LINES) {
-                firstLine = Math.max(
-                        firstLine, activeEvent.line - 2);
-                lastLine = firstLine + MAX_VISIBLE_LINES - 1;
-            }
-        } else {
-            firstLine = Math.max(0, activeEvent.line - 2);
-            lastLine = firstLine + MAX_VISIBLE_LINES - 1;
-        }
+        int lastLine = firstLine + MAX_VISIBLE_LINES - 1;
 
         int activeStart = -1;
         int activeEnd = -1;
@@ -324,18 +324,29 @@ public final class Stage3MidiLyrics {
         }
 
         int previousLine = Integer.MIN_VALUE;
+        int previousStanza = Integer.MIN_VALUE;
 
         for (int i = 0; i < events.size(); i++) {
             LyricEvent e = events.get(i);
 
-            if (e.section || e.stanza != stanza
-                    || e.line < firstLine || e.line > lastLine) {
+            if (e.section
+                    || e.line < firstLine
+                    || e.line > lastLine) {
                 continue;
             }
 
             if (previousLine != e.line) {
-                if (output.length() > 0) output.append('\n');
+                if (output.length() > 0) {
+                    if (previousStanza != Integer.MIN_VALUE
+                            && previousStanza != e.stanza) {
+                        output.append("\n\n");
+                    } else {
+                        output.append('\n');
+                    }
+                }
+
                 previousLine = e.line;
+                previousStanza = e.stanza;
             }
 
             int start = output.length();
@@ -353,26 +364,33 @@ public final class Stage3MidiLyrics {
         if (output.length() == 0) {
             int next = nextLyricIndex(active + 1);
             if (next >= 0) {
-                return build(events.get(next).tick);
+                return build(events.get(next).tick, durationTicks);
             }
             return new FullResult(output, 0);
         }
 
         /*
+         * Do not highlight any word after the MIDI duration.
+         * This prevents the final word remaining green indefinitely.
+         */
+        boolean allowHighlight =
+                durationTicks <= 0 || tick < durationTicks;
+
+        /*
          * WHOLE-WORD HIGHLIGHTING
          *
-         * A MIDI/KAR word may be split into several timed syllable events.
-         * Keep the whole adjacent word green until a real whitespace
-         * boundary is reached. No spaces are invented between events.
+         * Adjacent MIDI syllable fragments are highlighted together
+         * until an actual whitespace boundary is reached.
          */
-        if (active >= 0 && active < events.size()
+        if (allowHighlight
+                && active >= 0
+                && active < events.size()
                 && starts[active] >= 0
                 && ends[active] > starts[active]) {
 
             int firstWordEvent = active;
             int lastWordEvent = active;
 
-            // Find the first syllable belonging to this word.
             while (firstWordEvent > 0) {
                 LyricEvent previous = events.get(firstWordEvent - 1);
                 LyricEvent current = events.get(firstWordEvent);
@@ -391,7 +409,6 @@ public final class Stage3MidiLyrics {
                 firstWordEvent--;
             }
 
-            // Find the final syllable belonging to this word.
             while (lastWordEvent + 1 < events.size()) {
                 LyricEvent current = events.get(lastWordEvent);
                 LyricEvent next = events.get(lastWordEvent + 1);
@@ -401,7 +418,8 @@ public final class Stage3MidiLyrics {
                         || current.line != next.line
                         || starts[lastWordEvent + 1] < 0
                         || ends[lastWordEvent] < 0
-                        || ends[lastWordEvent] <= starts[lastWordEvent]
+                        || ends[lastWordEvent]
+                        <= starts[lastWordEvent]
                         || endsWithWordSpace(current.text)
                         || startsWithWordSpace(next.text)) {
                     break;
@@ -414,7 +432,9 @@ public final class Stage3MidiLyrics {
             activeEnd = ends[lastWordEvent];
         }
 
-        if (activeStart >= 0 && activeEnd > activeStart) {
+        if (allowHighlight
+                && activeStart >= 0
+                && activeEnd > activeStart) {
             output.setSpan(
                     new ForegroundColorSpan(ACTIVE_GREEN),
                     activeStart,
@@ -452,7 +472,7 @@ public final class Stage3MidiLyrics {
                 return empty();
             }
 
-            r.u16(); // MIDI format
+            r.u16();
             int trackCount = r.u16();
             int division = r.u16();
 
@@ -566,7 +586,6 @@ public final class Stage3MidiLyrics {
 
                         if (type != 0x01 && type != 0x05) continue;
 
-                        // KAR metadata must not appear as sung lyrics.
                         if (trimmed.startsWith("@")) {
                             String lower = trimmed.toLowerCase(Locale.ROOT);
 
@@ -641,7 +660,6 @@ public final class Stage3MidiLyrics {
                         if (isCredit(trimmed)) continue;
                         if (isNonLyricTag(trimmed)) continue;
 
-                        // Preserve original syllable fragments and spacing.
                         List<LyricEvent> parsed = parseLyricEvents(
                                 value, tick, sequence);
 
@@ -687,15 +705,6 @@ public final class Stage3MidiLyrics {
                 r.position = end;
             }
 
-            /*
-             * STANDARD MIDI STREAM SELECTION
-             *
-             * 0x05 = dedicated Lyric meta-event.
-             * 0x01 = generic Text meta-event, used by many legacy KAR files.
-             *
-             * Do not compare event counts and do not merge both streams:
-             * doing so can discard valid lyrics or display duplicates.
-             */
             List<LyricEvent> chosen = !lyricEvents.isEmpty()
                     ? lyricEvents : textEvents;
 
@@ -747,17 +756,6 @@ public final class Stage3MidiLyrics {
         }
     }
 
-    /**
-     * Splits embedded KAR/MIDI separators into lyric display lines.
-     *
-     * /  = new lyric line
-     * \  = new verse/section
-     * CR = new line
-     * LF = paragraph break
-     *
-     * Original spaces and syllable fragments are retained.
-     * Separator flags apply only to the next actual lyric fragment.
-     */
     private static List<LyricEvent> parseLyricEvents(
             String value,
             long tick,
@@ -803,7 +801,6 @@ public final class Stage3MidiLyrics {
                     pendingStanzaBreak = true;
                 }
 
-                // CRLF is one line break, not two.
                 if (c == '\r' && i + 1 < source.length()
                         && source.charAt(i + 1) == '\n') {
                     i++;
