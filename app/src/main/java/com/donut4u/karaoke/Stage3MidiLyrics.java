@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -65,8 +66,7 @@ public final class Stage3MidiLyrics {
         List<TempoEvent> t = new ArrayList<>();
         t.add(new TempoEvent(0, DEFAULT_TEMPO));
 
-        return new Stage3MidiLyrics(
-                e, t, "", "", "", 480, false);
+        return new Stage3MidiLyrics(e, t, "", "", "", 480, false);
     }
 
     public String getTitle() {
@@ -140,8 +140,7 @@ public final class Stage3MidiLyrics {
         return build(tick, Long.MAX_VALUE).text;
     }
 
-    public CharSequence styledTextAtTick(
-            long tick, long durationTicks) {
+    public CharSequence styledTextAtTick(long tick, long durationTicks) {
         return build(tick, durationTicks).text;
     }
 
@@ -149,8 +148,7 @@ public final class Stage3MidiLyrics {
         return build(tick, Long.MAX_VALUE).text;
     }
 
-    public CharSequence styledFullTextAtTick(
-            long tick, long durationTicks) {
+    public CharSequence styledFullTextAtTick(long tick, long durationTicks) {
         return build(tick, durationTicks).text;
     }
 
@@ -164,12 +162,12 @@ public final class Stage3MidiLyrics {
 
     public int activeLineNumberAtTick(long tick) {
         int i = activeIndex(tick);
-        return i < 0 ? -1 : events.get(i).line;
+        return i < 0 || events.get(i).section ? -1 : events.get(i).line;
     }
 
     public String upcomingLineAtTick(long tick) {
         int active = activeIndex(tick);
-        if (active < 0) return "";
+        if (active < 0 || events.get(active).section) return "";
 
         int line = events.get(active).line;
         int stanza = events.get(active).stanza;
@@ -274,9 +272,9 @@ public final class Stage3MidiLyrics {
     /*
      * KARAOKE LYRIC RENDERER
      *
-     * Shows a maximum of five lines from the active stanza.
-     * Stanzas are never joined together.
-     * The active word is highlighted green.
+     * Displays up to five lines from the active stanza.
+     * Keeps stanza boundaries separate.
+     * Highlights the active lyric event in green.
      */
     private FullResult build(long tick, long durationTicks) {
         SpannableStringBuilder output = new SpannableStringBuilder();
@@ -315,20 +313,14 @@ public final class Stage3MidiLyrics {
             return new FullResult(output, 0);
         }
 
-        int firstLine = Math.max(
-                stanzaFirstLine,
-                activeEvent.line - 2);
-
+        int firstLine = Math.max(stanzaFirstLine, activeEvent.line - 2);
         int lastLine = Math.min(
-                stanzaLastLine,
-                firstLine + MAX_VISIBLE_LINES - 1);
+                stanzaLastLine, firstLine + MAX_VISIBLE_LINES - 1);
 
         firstLine = Math.max(
-                stanzaFirstLine,
-                lastLine - MAX_VISIBLE_LINES + 1);
+                stanzaFirstLine, lastLine - MAX_VISIBLE_LINES + 1);
 
         int activeLineStart = 0;
-
         int[] starts = new int[events.size()];
         int[] ends = new int[events.size()];
 
@@ -342,10 +334,8 @@ public final class Stage3MidiLyrics {
         for (int i = 0; i < events.size(); i++) {
             LyricEvent e = events.get(i);
 
-            if (e.section
-                    || e.stanza != stanza
-                    || e.line < firstLine
-                    || e.line > lastLine) {
+            if (e.section || e.stanza != stanza
+                    || e.line < firstLine || e.line > lastLine) {
                 continue;
             }
 
@@ -353,7 +343,6 @@ public final class Stage3MidiLyrics {
                 if (output.length() > 0) {
                     output.append('\n');
                 }
-
                 previousLine = e.line;
             }
 
@@ -364,8 +353,7 @@ public final class Stage3MidiLyrics {
             starts[i] = start;
             ends[i] = end;
 
-            if (e.line == activeEvent.line
-                    && activeLineStart == 0) {
+            if (e.line == activeEvent.line && activeLineStart == 0) {
                 activeLineStart = start;
             }
         }
@@ -380,10 +368,7 @@ public final class Stage3MidiLyrics {
         int activeStart = -1;
         int activeEnd = -1;
 
-        if (allowHighlight
-                && active >= 0
-                && active < events.size()
-                && starts[active] >= 0
+        if (allowHighlight && starts[active] >= 0
                 && ends[active] > starts[active]) {
 
             int firstWordEvent = active;
@@ -391,12 +376,10 @@ public final class Stage3MidiLyrics {
 
             while (firstWordEvent > 0) {
                 int previousIndex = firstWordEvent - 1;
-
                 LyricEvent previous = events.get(previousIndex);
                 LyricEvent current = events.get(firstWordEvent);
 
-                if (previous.section
-                        || current.section
+                if (previous.section || current.section
                         || previous.stanza != current.stanza
                         || previous.line != current.line
                         || starts[previousIndex] < 0
@@ -411,12 +394,10 @@ public final class Stage3MidiLyrics {
 
             while (lastWordEvent + 1 < events.size()) {
                 int nextIndex = lastWordEvent + 1;
-
                 LyricEvent current = events.get(lastWordEvent);
                 LyricEvent next = events.get(nextIndex);
 
-                if (current.section
-                        || next.section
+                if (current.section || next.section
                         || current.stanza != next.stanza
                         || current.line != next.line
                         || starts[nextIndex] < 0
@@ -434,10 +415,7 @@ public final class Stage3MidiLyrics {
             activeEnd = ends[lastWordEvent];
         }
 
-        if (allowHighlight
-                && activeStart >= 0
-                && activeEnd > activeStart) {
-
+        if (allowHighlight && activeStart >= 0 && activeEnd > activeStart) {
             output.setSpan(
                     new ForegroundColorSpan(ACTIVE_GREEN),
                     activeStart,
@@ -450,8 +428,7 @@ public final class Stage3MidiLyrics {
 
     private static boolean endsWithWordSpace(String value) {
         return value != null && !value.isEmpty()
-                && Character.isWhitespace(
-                value.charAt(value.length() - 1));
+                && Character.isWhitespace(value.charAt(value.length() - 1));
     }
 
     private static boolean startsWithWordSpace(String value) {
@@ -500,7 +477,6 @@ public final class Stage3MidiLyrics {
 
             int titleField = 0;
             int sequence = 0;
-
             boolean explicitStanzas = false;
 
             for (int track = 0;
@@ -533,7 +509,6 @@ public final class Stage3MidiLyrics {
 
                     if (first < 0x80) {
                         if (runningStatus == 0) break;
-
                         status = runningStatus;
                         firstData = first;
                     } else {
@@ -561,20 +536,16 @@ public final class Stage3MidiLyrics {
                             if (tempo > 0) {
                                 tempos.add(new TempoEvent(tick, tempo));
                             }
-
                             continue;
                         }
 
-                        String value = decode(raw)
-                                .replace("\u0000", "");
-
+                        String value = decode(raw).replace("\u0000", "");
                         String trimmed = value.trim();
 
                         if (trimmed.isEmpty()) continue;
 
                         if (type == 0x03) {
-                            String lower =
-                                    trimmed.toLowerCase(Locale.ROOT);
+                            String lower = trimmed.toLowerCase(Locale.ROOT);
 
                             if (lower.startsWith("singer:")) {
                                 singer = removeLabel(trimmed, "singer:");
@@ -588,48 +559,37 @@ public final class Stage3MidiLyrics {
 
                             if (heading != null) {
                                 sectionEvents.add(new LyricEvent(
-                                        tick,
-                                        heading,
-                                        sequence++,
-                                        false,
-                                        true,
-                                        false));
+                                        tick, heading, sequence++,
+                                        false, true, false));
                             }
-
                             continue;
                         }
 
                         if (type != 0x01 && type != 0x05) continue;
 
                         if (trimmed.startsWith("@")) {
-                            String lower =
-                                    trimmed.toLowerCase(Locale.ROOT);
+                            String lower = trimmed.toLowerCase(Locale.ROOT);
 
                             if (lower.startsWith("@v")) {
                                 singer = trimmed.substring(2).trim();
 
                             } else if (lower.startsWith("@t")) {
-                                String field =
-                                        trimmed.substring(2).trim();
+                                String field = trimmed.substring(2).trim();
 
                                 if (!field.isEmpty()) {
                                     titleField++;
 
                                     if (titleField == 1 && title.isEmpty()) {
                                         title = field;
-                                    } else if (titleField == 2
-                                            && singer.isEmpty()) {
+                                    } else if (titleField == 2 && singer.isEmpty()) {
                                         singer = field;
                                     } else if (titleField >= 3) {
-                                        String credit =
-                                                field.toLowerCase(Locale.ROOT);
+                                        String credit = field.toLowerCase(Locale.ROOT);
 
                                         if (credit.contains("music")
                                                 || credit.contains("word")
                                                 || credit.contains("copyright")) {
-                                            if (composer.isEmpty()) {
-                                                composer = field;
-                                            }
+                                            if (composer.isEmpty()) composer = field;
                                         }
                                     }
                                 }
@@ -638,10 +598,8 @@ public final class Stage3MidiLyrics {
                                 String info = trimmed.substring(2).trim();
 
                                 if (composer.isEmpty()
-                                        && (info.toLowerCase(Locale.ROOT)
-                                        .contains("music")
-                                        || info.toLowerCase(Locale.ROOT)
-                                        .contains("word"))) {
+                                        && (info.toLowerCase(Locale.ROOT).contains("music")
+                                        || info.toLowerCase(Locale.ROOT).contains("word"))) {
                                     composer = info;
                                 }
                             }
@@ -673,8 +631,15 @@ public final class Stage3MidiLyrics {
                             continue;
                         }
 
-                        if (isCredit(trimmed)) continue;
-                        if (isNonLyricTag(trimmed)) continue;
+                        if (isCredit(trimmed) || isNonLyricTag(trimmed)) {
+                            continue;
+                        }
+
+                        // Type 0x05 is the dedicated MIDI lyric event.
+                        // Type 0x01 is accepted only when it resembles lyrics.
+                        if (type == 0x01 && !isLikelyLyricText(trimmed)) {
+                            continue;
+                        }
 
                         List<LyricEvent> parsed =
                                 parseLyricEvents(value, tick, sequence);
@@ -682,9 +647,7 @@ public final class Stage3MidiLyrics {
                         sequence += parsed.size();
 
                         for (LyricEvent event : parsed) {
-                            if (event.stanzaBreak) {
-                                explicitStanzas = true;
-                            }
+                            if (event.stanzaBreak) explicitStanzas = true;
 
                             if (type == 0x01) {
                                 textEvents.add(event);
@@ -697,9 +660,7 @@ public final class Stage3MidiLyrics {
                         runningStatus = 0;
 
                         int size = r.vlq(end);
-
                         if (size > end - r.position) break;
-
                         r.skip(size);
 
                     } else if (status >= 0x80 && status <= 0xEF) {
@@ -730,7 +691,6 @@ public final class Stage3MidiLyrics {
                 @Override
                 public int compare(LyricEvent a, LyricEvent b) {
                     int byTick = Long.compare(a.tick, b.tick);
-
                     return byTick != 0
                             ? byTick
                             : Integer.compare(a.sequence, b.sequence);
@@ -744,7 +704,6 @@ public final class Stage3MidiLyrics {
                 if (e.stanzaBreak) {
                     stanza++;
                     line++;
-
                 } else if (e.lineBreak) {
                     line++;
                 }
@@ -759,17 +718,66 @@ public final class Stage3MidiLyrics {
             }
 
             return new Stage3MidiLyrics(
-                    chosen,
-                    tempos,
-                    title,
-                    singer,
-                    composer,
-                    ppq,
-                    explicitStanzas);
+                    chosen, tempos, title, singer, composer,
+                    ppq, explicitStanzas);
 
         } catch (Exception ignored) {
             return empty();
         }
+    }
+
+    /*
+     * Conservative filter for ordinary MIDI text events.
+     * Real lyric sentences are retained, including short lines.
+     * Obvious technical data, labels and file metadata are rejected.
+     */
+    private static boolean isLikelyLyricText(String value) {
+        if (value == null) return false;
+
+        String s = value.trim();
+        if (s.isEmpty()) return false;
+
+        String lower = s.toLowerCase(Locale.ROOT);
+
+        if (isControlToken(s)
+                || isCredit(s)
+                || isNonLyricTag(s)
+                || extractHeading(s) != null) {
+            return false;
+        }
+
+        if (lower.matches("^(track|channel|tempo|time signature|"
+                + "key signature|program|instrument|copyright|"
+                + "sequence|midi|karaoke|kar)\\s*[:=].*$")) {
+            return false;
+        }
+
+        if (lower.matches("^(gm|gs|xg)\\s*[:=].*$")) {
+            return false;
+        }
+
+        if (lower.matches("^[0-9]+([.,][0-9]+)?\\s*(bpm|ms|hz)$")) {
+            return false;
+        }
+
+        if (lower.matches("^(ch\\.?\\s*)?[0-9]{1,2}$")) {
+            return false;
+        }
+
+        if (lower.matches("^(\\d{1,3}\\s*){2,}$")) {
+            return false;
+        }
+
+        if (s.matches("^[#=<>\\[\\]{}|]+$")) return false;
+
+        // Reject long technical-looking strings with no normal lyric words.
+        if (s.length() > 3
+                && s.matches("^[A-Fa-f0-9:/\\\\._-]+$")) {
+            return false;
+        }
+
+        // Preserve ordinary words and punctuation as possible lyrics.
+        return s.matches("(?s).*[\\p{L}].*");
     }
 
     private static List<LyricEvent> parseLyricEvents(
@@ -793,16 +801,12 @@ public final class Stage3MidiLyrics {
             char c = source.charAt(i);
 
             if (c == '/' || c == '\\' || c == '\r' || c == '\n') {
-                String text = fragment.toString();
+                String text = cleanLyricFragment(fragment.toString());
 
-                if (!text.trim().isEmpty() && !isControlToken(text)) {
+                if (!text.isEmpty() && !isControlToken(text)) {
                     result.add(new LyricEvent(
-                            tick,
-                            text,
-                            sequence++,
-                            pendingLineBreak,
-                            false,
-                            pendingStanzaBreak));
+                            tick, text, sequence++,
+                            pendingLineBreak, false, pendingStanzaBreak));
 
                     pendingLineBreak = false;
                     pendingStanzaBreak = false;
@@ -826,19 +830,23 @@ public final class Stage3MidiLyrics {
             }
         }
 
-        String text = fragment.toString();
+        String text = cleanLyricFragment(fragment.toString());
 
-        if (!text.trim().isEmpty() && !isControlToken(text)) {
+        if (!text.isEmpty() && !isControlToken(text)) {
             result.add(new LyricEvent(
-                    tick,
-                    text,
-                    sequence,
-                    pendingLineBreak,
-                    false,
-                    pendingStanzaBreak));
+                    tick, text, sequence,
+                    pendingLineBreak, false, pendingStanzaBreak));
         }
 
         return result;
+    }
+
+    private static String cleanLyricFragment(String value) {
+        if (value == null) return "";
+
+        return value.replace("\u0000", "")
+                .replaceAll("[\\p{Cntrl}&&[^\\t]]", "")
+                .trim();
     }
 
     private static boolean isCredit(String value) {
@@ -852,7 +860,7 @@ public final class Stage3MidiLyrics {
     }
 
     private static boolean isNonLyricTag(String value) {
-        String s = value.toLowerCase(Locale.ROOT);
+        String s = value.trim().toLowerCase(Locale.ROOT);
 
         return s.startsWith("singer:")
                 || s.startsWith("composer:")
@@ -928,8 +936,7 @@ public final class Stage3MidiLyrics {
         String value = new String(bytes, StandardCharsets.UTF_8);
 
         if (value.indexOf('\uFFFD') >= 0) {
-            value = new String(
-                    bytes, Charset.forName("ISO-8859-1"));
+            value = new String(bytes, Charset.forName("ISO-8859-1"));
         }
 
         return value;
@@ -981,10 +988,7 @@ public final class Stage3MidiLyrics {
         final SpannableStringBuilder text;
         final int activeLineStart;
 
-        FullResult(
-                SpannableStringBuilder text,
-                int activeLineStart) {
-
+        FullResult(SpannableStringBuilder text, int activeLineStart) {
             this.text = text;
             this.activeLineStart = activeLineStart;
         }
@@ -1006,7 +1010,6 @@ public final class Stage3MidiLyrics {
             if (position >= data.length) {
                 throw new IOException("Unexpected end of MIDI file");
             }
-
             return data[position++] & 255;
         }
 
@@ -1027,10 +1030,7 @@ public final class Stage3MidiLyrics {
             }
 
             String s = new String(
-                    data,
-                    position,
-                    count,
-                    StandardCharsets.US_ASCII);
+                    data, position, count, StandardCharsets.US_ASCII);
 
             position += count;
             return s;
@@ -1042,10 +1042,7 @@ public final class Stage3MidiLyrics {
             }
 
             byte[] b = new byte[count];
-
-            System.arraycopy(
-                    data, position, b, 0, count);
-
+            System.arraycopy(data, position, b, 0, count);
             position += count;
             return b;
         }
@@ -1054,7 +1051,6 @@ public final class Stage3MidiLyrics {
             if (count < 0 || count > remaining()) {
                 throw new IOException("Invalid MIDI length");
             }
-
             position += count;
         }
 
