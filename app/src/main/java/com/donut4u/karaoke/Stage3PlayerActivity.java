@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -177,7 +178,7 @@ public class Stage3PlayerActivity extends Activity {
 
         stage.addView(overlay, overlayParams);
 
-        // Song title.
+        // SONG TITLE
         songTitleLabel = new TextView(this);
         songTitleLabel.setText("");
         songTitleLabel.setTextColor(WHITE);
@@ -195,16 +196,16 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // Singer name appears only when MIDI metadata provides one.
+        // SINGER — directly below the song title.
         singerLabel = new TextView(this);
         singerLabel.setText("");
         singerLabel.setTextColor(WHITE);
-        singerLabel.setTextSize(15);
+        singerLabel.setTextSize(16);
         singerLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         singerLabel.setGravity(Gravity.CENTER);
         singerLabel.setPadding(
-                dp(8), dp(2), dp(8), dp(6));
+                dp(8), dp(2), dp(8), dp(4));
         singerLabel.setVisibility(View.GONE);
 
         overlay.addView(
@@ -213,7 +214,16 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // Lyrics area.
+        // CLEAR GAP BETWEEN SINGER AND LYRICS.
+        View lyricsTopGap = new View(this);
+
+        overlay.addView(
+                lyricsTopGap,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(18)));
+
+        // LYRICS AREA.
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(true);
         lyricsScroll.setVerticalScrollBarEnabled(false);
@@ -232,13 +242,13 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("");
         lyricsLabel.setTextColor(WHITE);
-        lyricsLabel.setTextSize(22);
+        lyricsLabel.setTextSize(26);
         lyricsLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         lyricsLabel.setGravity(Gravity.CENTER);
         lyricsLabel.setPadding(
-                dp(12), dp(16), dp(12), dp(16));
-        lyricsLabel.setLineSpacing(dp(5), 1.02f);
+                dp(12), dp(20), dp(12), dp(20));
+        lyricsLabel.setLineSpacing(dp(7), 1.05f);
         lyricsLabel.setIncludeFontPadding(true);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
 
@@ -325,17 +335,18 @@ public class Stage3PlayerActivity extends Activity {
             }
         });
 
+        // CLEAR PLAY / PAUSE BUTTON.
         playPauseButton = new TextView(this);
-        playPauseButton.setText("▶");
+        playPauseButton.setText("▶  PLAY");
         playPauseButton.setTextColor(WHITE);
-        playPauseButton.setTextSize(25);
+        playPauseButton.setTextSize(18);
         playPauseButton.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         playPauseButton.setGravity(Gravity.CENTER);
         playPauseButton.setPadding(
                 dp(24), dp(8), dp(24), dp(8));
         playPauseButton.setBackgroundColor(Color.TRANSPARENT);
-        playPauseButton.setContentDescription("Play or pause");
+        playPauseButton.setContentDescription("Play");
 
         playPauseButton.setOnClickListener(
                 v -> togglePlayback());
@@ -670,7 +681,7 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         playPauseButton.setText(
-                playing ? "Ⅱ" : "▶");
+                playing ? "Ⅱ  PAUSE" : "▶  PLAY");
 
         playPauseButton.setContentDescription(
                 playing ? "Pause" : "Play");
@@ -792,6 +803,8 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
+        // AUTOMATIC SEEK-BAR PROGRESS.
+        // This updates during playback without requiring manual dragging.
         if (!userSeeking && seekBar != null) {
 
             int progress = (int) Math.max(
@@ -1084,11 +1097,13 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     /*
-     * Updated karaoke lyrics display:
-     * - Upcoming words remain white.
-     * - Active word remains green.
-     * - The active lyric line is kept near the screen center.
-     * - Scrolling is smooth and does not jump to the top.
+     * KARAOKE LYRICS DISPLAY:
+     * - Upcoming and previously sung words remain white.
+     * - The currently sung word is bright green.
+     * - Several lyric lines remain visible.
+     * - The active lyric line stays near the screen center.
+     * - Scrolling is smooth and does not repeatedly jump to the top.
+     * - MIDI duration is passed to the duration-aware renderer.
      */
     private void updateMidiLyricsAtTick(long tick) {
 
@@ -1111,7 +1126,8 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         CharSequence candidate =
-                currentMidiLyrics.styledFullTextAtTick(tick);
+                currentMidiLyrics.styledFullTextAtTick(
+                        tick, midiDurationTicks);
 
         int activeStart = -1;
         int activeEnd = -1;
