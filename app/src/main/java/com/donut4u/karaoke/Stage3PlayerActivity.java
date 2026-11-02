@@ -18,6 +18,7 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -40,11 +41,14 @@ public class Stage3PlayerActivity extends Activity {
 
     private static final String SONGBOOK_PREFS =
             "donut4u_stage3_songbook";
+
     private static final String SONGS_KEY = "songs_json";
+
     private static final String DEFAULT_SOUNDFONT =
             "builtin://default";
 
     private static final int SONGHUB_SECTOR_SIZE = 2048;
+
     private static final long MAX_SONGHUB_SLICE_BYTES =
             64L * 1024L * 1024L;
 
@@ -53,6 +57,11 @@ public class Stage3PlayerActivity extends Activity {
 
     private static final int ACTIVE_GREEN =
             Color.rgb(0, 255, 100);
+
+    private static final int WHITE =
+            Color.WHITE;
+
+    private static final int SEEK_MAX = 1000;
 
     private ExoPlayer player;
     private ExoPlayer backgroundPlayer;
@@ -67,16 +76,22 @@ public class Stage3PlayerActivity extends Activity {
     private TextView lyricsLabel;
     private ScrollView lyricsScroll;
 
+    private TextView playPauseButton;
+    private SeekBar seekBar;
+
     private boolean released;
     private boolean midiMode;
     private boolean midiReady;
     private boolean midiPausedByLifecycle;
     private boolean backgroundAvailable;
+    private boolean userSeeking;
+    private boolean updatingSeekBar;
 
     private long midiDurationTicks;
 
     private int lastRenderedLyricStart = -2;
     private int lastRenderedLyricEnd = -2;
+
     private String lastRenderedLyricText;
 
     private final Handler handler =
@@ -90,11 +105,21 @@ public class Stage3PlayerActivity extends Activity {
     private final Runnable progressUpdater = new Runnable() {
         @Override
         public void run() {
-            if (released) return;
+
+            if (released) {
+                return;
+            }
 
             if (midiMode && midiReady && midiEngine != null) {
-                updateMidiLyricsAtTick(
-                        midiEngine.getCurrentTick());
+
+                long tick = midiEngine.getCurrentTick();
+
+                updateMidiLyricsAtTick(tick);
+                updateMidiControls(tick);
+
+            } else if (!midiMode && player != null) {
+
+                updateMediaControls();
             }
 
             handler.postDelayed(this, 100);
@@ -106,9 +131,11 @@ public class Stage3PlayerActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         Stage3SongQueue.initialize(this);
+
         midiEngine = Stage3MidiEngine.create(this);
 
         buildScreen();
+
         startSelectedSong();
 
         handler.post(progressUpdater);
@@ -139,7 +166,8 @@ public class Stage3PlayerActivity extends Activity {
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
         overlay.setPadding(
-                dp(16), dp(12), dp(16), dp(12));
+                dp(18), dp(12), dp(18), dp(12));
+
         overlay.setBackgroundColor(Color.TRANSPARENT);
 
         FrameLayout.LayoutParams overlayParams =
@@ -149,15 +177,16 @@ public class Stage3PlayerActivity extends Activity {
 
         stage.addView(overlay, overlayParams);
 
+        // Singer name appears only when MIDI metadata provides one.
         singerLabel = new TextView(this);
         singerLabel.setText("");
-        singerLabel.setTextColor(Color.WHITE);
-        singerLabel.setTextSize(19);
+        singerLabel.setTextColor(WHITE);
+        singerLabel.setTextSize(17);
         singerLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         singerLabel.setGravity(Gravity.CENTER);
         singerLabel.setPadding(
-                dp(8), dp(8), dp(8), dp(14));
+                dp(8), dp(4), dp(8), dp(10));
         singerLabel.setVisibility(View.GONE);
 
         overlay.addView(
@@ -166,6 +195,7 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        // Lyrics area.
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(true);
         lyricsScroll.setVerticalScrollBarEnabled(false);
@@ -183,14 +213,19 @@ public class Stage3PlayerActivity extends Activity {
 
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("");
-        lyricsLabel.setTextColor(Color.WHITE);
-        lyricsLabel.setTextSize(31);
+        lyricsLabel.setTextColor(WHITE);
+
+        // Readable karaoke font without occupying the whole screen.
+        lyricsLabel.setTextSize(22);
+
         lyricsLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
+
         lyricsLabel.setGravity(Gravity.CENTER);
         lyricsLabel.setPadding(
-                dp(12), dp(24), dp(12), dp(24));
-        lyricsLabel.setLineSpacing(dp(10), 1.05f);
+                dp(12), dp(16), dp(12), dp(16));
+
+        lyricsLabel.setLineSpacing(dp(5), 1.02f);
         lyricsLabel.setIncludeFontPadding(true);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
 
@@ -199,6 +234,9 @@ public class Stage3PlayerActivity extends Activity {
                 new ScrollView.LayoutParams(
                         ScrollView.LayoutParams.MATCH_PARENT,
                         ScrollView.LayoutParams.WRAP_CONTENT));
+
+        // Compact playback controls at the bottom.
+        buildPlaybackControls();
 
         setContentView(stage);
 
@@ -209,6 +247,100 @@ public class Stage3PlayerActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    }
+
+    private void buildPlaybackControls() {
+
+        LinearLayout controls =
+                new LinearLayout(this);
+
+        controls.setOrientation(
+                LinearLayout.VERTICAL);
+
+        controls.setGravity(Gravity.CENTER);
+
+        controls.setPadding(
+                dp(8), dp(8), dp(8), dp(4));
+
+        controls.setBackgroundColor(Color.TRANSPARENT);
+
+        // Seek slider.
+        seekBar = new SeekBar(this);
+        seekBar.setMax(SEEK_MAX);
+        seekBar.setProgress(0);
+        seekBar.setEnabled(false);
+
+        LinearLayout.LayoutParams seekParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(38));
+
+        controls.addView(seekBar, seekParams);
+
+        seekBar.setOnSeekBarChangeListener(
+                new SeekBar.OnSeekBarChangeListener() {
+
+            @Override
+            public void onProgressChanged(
+                    SeekBar bar,
+                    int progress,
+                    boolean fromUser) {
+
+                if (fromUser) {
+                    userSeeking = true;
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(
+                    SeekBar bar) {
+
+                userSeeking = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(
+                    SeekBar bar) {
+
+                userSeeking = false;
+
+                seekToProgress(bar.getProgress());
+            }
+        });
+
+        // Play / pause button.
+        playPauseButton = new TextView(this);
+
+        playPauseButton.setText("▶");
+        playPauseButton.setTextColor(WHITE);
+        playPauseButton.setTextSize(25);
+        playPauseButton.setTypeface(
+                Typeface.DEFAULT, Typeface.BOLD);
+
+        playPauseButton.setGravity(Gravity.CENTER);
+        playPauseButton.setPadding(
+                dp(24), dp(8), dp(24), dp(8));
+
+        playPauseButton.setBackgroundColor(
+                Color.TRANSPARENT);
+
+        playPauseButton.setContentDescription(
+                "Play or pause");
+
+        playPauseButton.setOnClickListener(
+                v -> togglePlayback());
+
+        controls.addView(
+                playPauseButton,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        dp(48)));
+
+        overlay.addView(
+                controls,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
     private void startSelectedSong() {
@@ -223,6 +355,7 @@ public class Stage3PlayerActivity extends Activity {
             lyricsLabel.setText(
                     "No song selected.\n\n"
                             + "Return to the Songbook.");
+            setControlsEnabled(false);
             return;
         }
 
@@ -232,7 +365,9 @@ public class Stage3PlayerActivity extends Activity {
     private boolean isSongHubMidi(
             Stage3SongQueue.QueuedSong song) {
 
-        if (song == null || song.uri == null) return false;
+        if (song == null || song.uri == null) {
+            return false;
+        }
 
         try {
             return "songhub-midi".equalsIgnoreCase(
@@ -245,9 +380,13 @@ public class Stage3PlayerActivity extends Activity {
     private boolean isMidiSong(
             Stage3SongQueue.QueuedSong song) {
 
-        if (song == null) return false;
+        if (song == null) {
+            return false;
+        }
 
-        if (isSongHubMidi(song)) return true;
+        if (isSongHubMidi(song)) {
+            return true;
+        }
 
         String type = song.type == null
                 ? ""
@@ -317,8 +456,9 @@ public class Stage3PlayerActivity extends Activity {
         singerLabel.setVisibility(View.GONE);
 
         resetLyricTracking();
+        setControlsEnabled(false);
+        setPlayPauseText(false);
 
-        // Start the separate silent video, if a matching MP4 exists.
         startMatchingBackgroundVideo(song);
 
         String soundFontUri = findSoundFontUri();
@@ -347,7 +487,9 @@ public class Stage3PlayerActivity extends Activity {
                         : e.getMessage();
 
                 runOnUiThread(() -> {
+
                     if (!released && midiMode) {
+
                         lyricsLabel.setText(
                                 "Unable to load this MIDI/KAR song.");
 
@@ -376,9 +518,12 @@ public class Stage3PlayerActivity extends Activity {
                     @Override
                     public void onReady(long durationTicks) {
 
-                        if (released || !midiMode) return;
+                        if (released || !midiMode) {
+                            return;
+                        }
 
                         midiReady = true;
+
                         midiDurationTicks =
                                 Math.max(0L, durationTicks);
 
@@ -405,16 +550,25 @@ public class Stage3PlayerActivity extends Activity {
                                     View.GONE);
                         }
 
+                        setControlsEnabled(true);
+
                         updateMidiLyricsAtTick(
+                                midiEngine.getCurrentTick());
+
+                        updateMidiControls(
                                 midiEngine.getCurrentTick());
                     }
 
                     @Override
                     public void onError(String message) {
 
-                        if (released || !midiMode) return;
+                        if (released || !midiMode) {
+                            return;
+                        }
 
                         midiReady = false;
+
+                        setControlsEnabled(false);
 
                         lyricsLabel.setText(
                                 "Unable to play this MIDI/KAR song.");
@@ -428,7 +582,9 @@ public class Stage3PlayerActivity extends Activity {
                     @Override
                     public void onFinished() {
 
-                        if (released || !midiMode) return;
+                        if (released || !midiMode) {
+                            return;
+                        }
 
                         finishCurrentSong();
                     }
@@ -438,6 +594,190 @@ public class Stage3PlayerActivity extends Activity {
         }, "Stage3MidiPrepare").start();
     }
 
+    private void setControlsEnabled(boolean enabled) {
+
+        if (seekBar != null) {
+            seekBar.setEnabled(enabled);
+        }
+
+        if (playPauseButton != null) {
+            playPauseButton.setEnabled(enabled);
+            playPauseButton.setAlpha(enabled ? 1f : 0.45f);
+        }
+    }
+
+    private void setPlayPauseText(boolean playing) {
+
+        if (playPauseButton == null) {
+            return;
+        }
+
+        playPauseButton.setText(
+                playing ? "Ⅱ" : "▶");
+
+        playPauseButton.setContentDescription(
+                playing ? "Pause" : "Play");
+    }
+
+    private void togglePlayback() {
+
+        if (released) {
+            return;
+        }
+
+        if (midiMode) {
+
+            if (!midiReady || midiEngine == null) {
+                return;
+            }
+
+            try {
+                if (midiEngine.isPlaying()) {
+
+                    midiEngine.pause();
+                    setPlayPauseText(false);
+
+                    if (backgroundPlayer != null) {
+                        backgroundPlayer.pause();
+                    }
+
+                } else {
+
+                    midiEngine.resume();
+                    setPlayPauseText(true);
+
+                    if (backgroundPlayer != null) {
+                        backgroundPlayer.play();
+                    }
+                }
+
+            } catch (Exception e) {
+                Toast.makeText(
+                        this,
+                        "Playback control failed.",
+                        Toast.LENGTH_SHORT).show();
+            }
+
+            return;
+        }
+
+        if (player != null) {
+
+            if (player.isPlaying()) {
+                player.pause();
+                setPlayPauseText(false);
+            } else {
+                player.play();
+                setPlayPauseText(true);
+            }
+        }
+    }
+
+    private void seekToProgress(int progress) {
+
+        int safeProgress = Math.max(
+                0, Math.min(SEEK_MAX, progress));
+
+        if (midiMode) {
+
+            if (!midiReady
+                    || midiEngine == null
+                    || midiDurationTicks <= 0) {
+                return;
+            }
+
+            long targetTick =
+                    midiDurationTicks * safeProgress / SEEK_MAX;
+
+            targetTick = Math.max(
+                    0L,
+                    Math.min(targetTick, midiDurationTicks));
+
+            try {
+                midiEngine.seekTo(targetTick);
+
+                updateMidiLyricsAtTick(
+                        midiEngine.getCurrentTick());
+
+                updateMidiControls(
+                        midiEngine.getCurrentTick());
+
+            } catch (Exception e) {
+
+                Toast.makeText(
+                        this,
+                        "Could not seek in this MIDI song.",
+                        Toast.LENGTH_SHORT).show();
+            }
+
+            return;
+        }
+
+        if (player != null) {
+
+            long duration = player.getDuration();
+
+            if (duration > 0) {
+
+                long target =
+                        duration * safeProgress / SEEK_MAX;
+
+                player.seekTo(target);
+                updateMediaControls();
+            }
+        }
+    }
+
+    private void updateMidiControls(long tick) {
+
+        if (!midiReady || midiDurationTicks <= 0) {
+            return;
+        }
+
+        if (!userSeeking && seekBar != null) {
+
+            int progress = (int) Math.max(
+                    0,
+                    Math.min(
+                            SEEK_MAX,
+                            tick * SEEK_MAX / midiDurationTicks));
+
+            updatingSeekBar = true;
+            seekBar.setProgress(progress);
+            updatingSeekBar = false;
+        }
+
+        if (midiEngine != null) {
+            setPlayPauseText(midiEngine.isPlaying());
+        }
+    }
+
+    private void updateMediaControls() {
+
+        if (player == null) {
+            return;
+        }
+
+        long duration = player.getDuration();
+        long position = player.getCurrentPosition();
+
+        if (duration > 0 && !userSeeking
+                && seekBar != null) {
+
+            int progress = (int) Math.max(
+                    0,
+                    Math.min(
+                            SEEK_MAX,
+                            position * SEEK_MAX / duration));
+
+            updatingSeekBar = true;
+            seekBar.setProgress(progress);
+            updatingSeekBar = false;
+        }
+
+        setPlayPauseText(player.isPlaying());
+    }
+
     /*
      * Find an MP4 in the existing Songbook.
      * The MP4 is visual only. It never supplies the song audio.
@@ -445,12 +785,16 @@ public class Stage3PlayerActivity extends Activity {
     private void startMatchingBackgroundVideo(
             Stage3SongQueue.QueuedSong midiSong) {
 
-        String videoUri = findMatchingBackgroundVideo(midiSong);
+        String videoUri =
+                findMatchingBackgroundVideo(midiSong);
 
         if (videoUri == null) {
+
             backgroundAvailable = false;
+
             backgroundTexture.setVisibility(View.GONE);
             stage.setBackgroundColor(DARK_GREEN);
+
             return;
         }
 
@@ -462,6 +806,7 @@ public class Stage3PlayerActivity extends Activity {
                     backgroundTexture);
 
             backgroundPlayer.setVolume(0f);
+
             backgroundPlayer.setRepeatMode(
                     Player.REPEAT_MODE_ONE);
 
@@ -512,11 +857,16 @@ public class Stage3PlayerActivity extends Activity {
     private String findMatchingBackgroundVideo(
             Stage3SongQueue.QueuedSong midiSong) {
 
-        if (midiSong == null) return null;
+        if (midiSong == null) {
+            return null;
+        }
 
-        String wanted = normalizeSongTitle(midiSong.title);
+        String wanted =
+                normalizeSongTitle(midiSong.title);
 
-        if (wanted.isEmpty()) return null;
+        if (wanted.isEmpty()) {
+            return null;
+        }
 
         SharedPreferences preferences =
                 getSharedPreferences(
@@ -535,15 +885,20 @@ public class Stage3PlayerActivity extends Activity {
 
             for (int i = 0; i < songs.length(); i++) {
 
-                JSONObject item = songs.optJSONObject(i);
+                JSONObject item =
+                        songs.optJSONObject(i);
 
-                if (item == null) continue;
+                if (item == null) {
+                    continue;
+                }
 
                 String uri = item.optString("uri", "");
                 String type = item.optString("type", "");
                 String title = item.optString("title", "");
 
-                if (uri.isEmpty()) continue;
+                if (uri.isEmpty()) {
+                    continue;
+                }
 
                 String lowerUri =
                         uri.toLowerCase(Locale.ROOT);
@@ -554,10 +909,12 @@ public class Stage3PlayerActivity extends Activity {
                 boolean isMp4 =
                         lowerUri.endsWith(".mp4")
                         || lowerUri.contains(".mp4?")
-                        || lowerType.contains("VIDEO")
-                        && lowerUri.contains(".mp4");
+                        || (lowerType.contains("VIDEO")
+                        && lowerUri.contains(".mp4"));
 
-                if (!isMp4) continue;
+                if (!isMp4) {
+                    continue;
+                }
 
                 String candidate =
                         normalizeSongTitle(title);
@@ -567,7 +924,9 @@ public class Stage3PlayerActivity extends Activity {
                             Uri.parse(uri).getLastPathSegment());
                 }
 
-                if (candidate.isEmpty()) continue;
+                if (candidate.isEmpty()) {
+                    continue;
+                }
 
                 if (wanted.equals(candidate)) {
                     exactMatch = uri;
@@ -587,7 +946,6 @@ public class Stage3PlayerActivity extends Activity {
                 return exactMatch;
             }
 
-            // Only accept a very close title match.
             if (bestScore >= 90) {
                 return bestMatch;
             }
@@ -600,7 +958,9 @@ public class Stage3PlayerActivity extends Activity {
 
     private String normalizeSongTitle(String value) {
 
-        if (value == null) return "";
+        if (value == null) {
+            return "";
+        }
 
         String s = value.trim();
 
@@ -616,16 +976,16 @@ public class Stage3PlayerActivity extends Activity {
         s = s.replaceAll(
                 "[^a-z0-9]+", " ");
 
-        s = s.replaceAll("\\s+", " ").trim();
-
-        return s;
+        return s.replaceAll("\\s+", " ").trim();
     }
 
     private int similarityScore(
             String first,
             String second) {
 
-        if (first.equals(second)) return 100;
+        if (first.equals(second)) {
+            return 100;
+        }
 
         if (first.isEmpty() || second.isEmpty()) {
             return 0;
@@ -657,6 +1017,10 @@ public class Stage3PlayerActivity extends Activity {
                 : common * 100 / total;
     }
 
+    /*
+     * Update the lyric display using the MIDI engine's current tick.
+     * Stage3MidiLyrics supplies the current stanza and active green word.
+     */
     private void updateMidiLyricsAtTick(long tick) {
 
         if (lyricsLabel == null
@@ -717,14 +1081,23 @@ public class Stage3PlayerActivity extends Activity {
 
         if (changed) {
 
+            boolean stanzaTextChanged =
+                    !candidateText.equals(lastRenderedLyricText);
+
             lyricsLabel.setText(candidate);
 
             lastRenderedLyricText = candidateText;
             lastRenderedLyricStart = activeStart;
             lastRenderedLyricEnd = activeEnd;
+
+            if (stanzaTextChanged && lyricsScroll != null) {
+                lyricsScroll.scrollTo(0, 0);
+            }
         }
 
-        if (activeStart < 0) return;
+        if (activeStart < 0) {
+            return;
+        }
 
         final int activeOffset = Math.max(
                 0,
@@ -733,7 +1106,8 @@ public class Stage3PlayerActivity extends Activity {
 
         lyricsLabel.post(() -> {
 
-            if (released || lyricsLabel == null
+            if (released
+                    || lyricsLabel == null
                     || lyricsScroll == null) {
                 return;
             }
@@ -757,7 +1131,7 @@ public class Stage3PlayerActivity extends Activity {
             int scrollY = lyricsScroll.getScrollY();
             int viewport = lyricsScroll.getHeight();
 
-            int margin = dp(28);
+            int margin = dp(24);
 
             boolean outside =
                     lineTop < scrollY + margin
@@ -781,6 +1155,7 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     private void resetLyricTracking() {
+
         lastRenderedLyricStart = -2;
         lastRenderedLyricEnd = -2;
         lastRenderedLyricText = null;
@@ -821,6 +1196,7 @@ public class Stage3PlayerActivity extends Activity {
             sectorLength = Long.parseLong(lengthString);
 
         } catch (NumberFormatException e) {
+
             throw new IOException(
                     "Invalid SongHub sector reference.");
         }
@@ -843,6 +1219,7 @@ public class Stage3PlayerActivity extends Activity {
                     (long) SONGHUB_SECTOR_SIZE);
 
         } catch (ArithmeticException e) {
+
             throw new IOException(
                     "SongHub data range is too large.");
         }
@@ -922,6 +1299,7 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         if (temporary.length() < 14) {
+
             temporary.delete();
 
             throw new IOException(
@@ -948,6 +1326,7 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         if (destination.exists() && !destination.delete()) {
+
             temporary.delete();
 
             throw new IOException(
@@ -955,6 +1334,7 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         if (!temporary.renameTo(destination)) {
+
             temporary.delete();
 
             throw new IOException(
@@ -978,6 +1358,7 @@ public class Stage3PlayerActivity extends Activity {
                 remaining -= skipped;
 
             } else {
+
                 if (input.read() == -1) {
                     throw new IOException(
                             "Blob file ended before the song data.");
@@ -989,7 +1370,7 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     /*
-     * Non-MIDI songs retain their normal media playback.
+     * Non-MIDI files retain normal Media3 playback.
      */
     private void initializeMediaPlayer(
             Stage3SongQueue.QueuedSong song) {
@@ -1005,6 +1386,8 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel.setText(
                 "This file is not a MIDI/KAR karaoke song.");
 
+        resetLyricTracking();
+
         try {
             player = new ExoPlayer.Builder(this).build();
 
@@ -1016,7 +1399,9 @@ public class Stage3PlayerActivity extends Activity {
                 public void onPlaybackStateChanged(
                         int playbackState) {
 
-                    if (player == null || midiMode) return;
+                    if (player == null || midiMode) {
+                        return;
+                    }
 
                     if (playbackState == Player.STATE_ENDED) {
                         finishCurrentSong();
@@ -1041,7 +1426,12 @@ public class Stage3PlayerActivity extends Activity {
             player.prepare();
             player.play();
 
+            setControlsEnabled(true);
+            setPlayPauseText(true);
+
         } catch (Exception e) {
+
+            setControlsEnabled(false);
 
             Toast.makeText(
                     this,
@@ -1052,7 +1442,9 @@ public class Stage3PlayerActivity extends Activity {
 
     private void finishCurrentSong() {
 
-        if (released) return;
+        if (released) {
+            return;
+        }
 
         midiReady = false;
         midiMode = false;
@@ -1067,6 +1459,9 @@ public class Stage3PlayerActivity extends Activity {
                 "SONG FINISHED\n\n"
                 + "Return to the Songbook "
                 + "to choose another song.");
+
+        setControlsEnabled(false);
+        setPlayPauseText(false);
     }
 
     private void releaseBackgroundPlayer() {
@@ -1111,8 +1506,10 @@ public class Stage3PlayerActivity extends Activity {
         releaseBackgroundPlayer();
 
         if (midiEngine != null) {
+
             try {
                 midiEngine.stop();
+
             } catch (Exception ignored) {
             }
         }
@@ -1135,6 +1532,15 @@ public class Stage3PlayerActivity extends Activity {
             lyricsLabel.setText("");
         }
 
+        setControlsEnabled(false);
+        setPlayPauseText(false);
+
+        if (seekBar != null) {
+            updatingSeekBar = true;
+            seekBar.setProgress(0);
+            updatingSeekBar = false;
+        }
+
         if (stage != null) {
             stage.setBackgroundColor(DARK_GREEN);
         }
@@ -1151,6 +1557,7 @@ public class Stage3PlayerActivity extends Activity {
 
             if (midiPausedByLifecycle) {
                 midiEngine.pause();
+                setPlayPauseText(false);
             }
 
             if (backgroundPlayer != null) {
@@ -1158,7 +1565,9 @@ public class Stage3PlayerActivity extends Activity {
             }
 
         } else if (player != null) {
+
             player.pause();
+            setPlayPauseText(false);
         }
     }
 
@@ -1172,7 +1581,10 @@ public class Stage3PlayerActivity extends Activity {
                 && midiReady && midiPausedByLifecycle) {
 
             midiEngine.resume();
+
             midiPausedByLifecycle = false;
+
+            setPlayPauseText(true);
 
             if (backgroundPlayer != null) {
                 backgroundPlayer.play();
@@ -1191,8 +1603,10 @@ public class Stage3PlayerActivity extends Activity {
         handler.removeCallbacks(progressUpdater);
 
         if (player != null) {
+
             try {
                 player.release();
+
             } catch (Exception ignored) {
             }
 
@@ -1202,6 +1616,7 @@ public class Stage3PlayerActivity extends Activity {
         releaseBackgroundPlayer();
 
         if (midiEngine != null) {
+
             midiEngine.release();
             midiEngine = null;
         }
