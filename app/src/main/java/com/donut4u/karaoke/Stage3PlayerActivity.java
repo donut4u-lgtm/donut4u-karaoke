@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -238,18 +237,18 @@ public class Stage3PlayerActivity extends Activity {
         lyricsScroll.setClipToPadding(false);
         lyricsScroll.setPadding(0, dp(4), 0, dp(4));
 
+        // Fixed-height lyrics viewport leaves room for controls.
         LinearLayout.LayoutParams scrollParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        0,
-                        1f);
+                        dp(220));
 
         overlay.addView(lyricsScroll, scrollParams);
 
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("");
         lyricsLabel.setTextColor(WHITE);
-        lyricsLabel.setTextSize(24);
+        lyricsLabel.setTextSize(20);
         lyricsLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         lyricsLabel.setGravity(Gravity.CENTER);
