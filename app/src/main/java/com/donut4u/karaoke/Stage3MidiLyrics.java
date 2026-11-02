@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -355,11 +354,6 @@ public final class Stage3MidiLyrics {
                 previousEvent = -1;
             }
 
-            /*
-             * Restore spaces removed by trimming the original
-             * MIDI/KAR lyric fragments. Do not insert spaces between
-             * syllables when the source did not contain a word boundary.
-             */
             if (previousEvent >= 0) {
                 LyricEvent previous = events.get(previousEvent);
 
@@ -395,10 +389,6 @@ public final class Stage3MidiLyrics {
         if (allowHighlight && starts[active] >= 0
                 && ends[active] > starts[active]) {
 
-            /*
-             * Expand only across fragments belonging to the same word.
-             * A real source whitespace boundary stops expansion.
-             */
             int firstWordEvent = active;
             int lastWordEvent = active;
 
@@ -519,6 +509,10 @@ public final class Stage3MidiLyrics {
                 long tick = 0;
                 int runningStatus = 0;
 
+                // Each track and MIDI text type gets independent break state.
+                LyricBreakState textBreakState = new LyricBreakState();
+                LyricBreakState lyricBreakState = new LyricBreakState();
+
                 while (r.position < end) {
                     tick += r.vlq(end);
 
@@ -563,7 +557,14 @@ public final class Stage3MidiLyrics {
                         String value = decode(raw).replace("\u0000", "");
                         String trimmed = value.trim();
 
-                        if (trimmed.isEmpty()) continue;
+                        boolean separatorOnlyLyricEvent =
+                                (type == 0x01 || type == 0x05)
+                                && containsLyricSeparator(value)
+                                && trimmed.isEmpty();
+
+                        if (trimmed.isEmpty() && !separatorOnlyLyricEvent) {
+                            continue;
+                        }
 
                         if (type == 0x03) {
                             String lower = trimmed.toLowerCase(Locale.ROOT);
@@ -657,12 +658,16 @@ public final class Stage3MidiLyrics {
                             continue;
                         }
 
-                        if (type == 0x01 && !isLikelyLyricText(trimmed)) {
+                        if (type == 0x01 && !separatorOnlyLyricEvent
+                                && !isLikelyLyricText(trimmed)) {
                             continue;
                         }
 
+                        LyricBreakState breakState = type == 0x05
+                                ? lyricBreakState : textBreakState;
+
                         List<LyricEvent> parsed =
-                                parseLyricEvents(value, tick, sequence);
+                                parseLyricEvents(value, tick, sequence, breakState);
 
                         sequence += parsed.size();
 
@@ -746,6 +751,20 @@ public final class Stage3MidiLyrics {
         }
     }
 
+    private static boolean containsLyricSeparator(String value) {
+        if (value == null) return false;
+
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+
+            if (c == '/' || c == '\\' || c == '\r' || c == '\n') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static boolean isLikelyLyricText(String value) {
         if (value == null) return false;
 
@@ -793,20 +812,28 @@ public final class Stage3MidiLyrics {
         return s.matches("(?s).*[\\p{L}].*");
     }
 
+    /*
+     * Break markers are carried forward when a MIDI event ends
+     * immediately after a slash, backslash, CR, or LF.
+     *
+     * The state is separate for MIDI text (0x01) and lyric (0x05)
+     * events, preventing one stream from changing the other.
+     */
     private static List<LyricEvent> parseLyricEvents(
             String value,
             long tick,
-            int firstSequence) {
+            int firstSequence,
+            LyricBreakState breakState) {
 
         List<LyricEvent> result = new ArrayList<>();
 
-        if (value == null) return result;
+        if (value == null || breakState == null) return result;
 
         String source = value.replace("\u0000", "");
         StringBuilder fragment = new StringBuilder();
 
-        boolean pendingLineBreak = false;
-        boolean pendingStanzaBreak = false;
+        boolean pendingLineBreak = breakState.pendingLineBreak;
+        boolean pendingStanzaBreak = breakState.pendingStanzaBreak;
 
         int sequence = firstSequence;
 
@@ -830,6 +857,7 @@ public final class Stage3MidiLyrics {
                 }
 
                 fragment.setLength(0);
+
                 pendingLineBreak = true;
 
                 if (c == '\\' || c == '\n') {
@@ -857,7 +885,14 @@ public final class Stage3MidiLyrics {
                     hasLeadingSpace(rawFragment),
                     hasTrailingSpace(rawFragment),
                     false));
+
+            pendingLineBreak = false;
+            pendingStanzaBreak = false;
         }
+
+        // Preserve unfinished breaks for the next MIDI lyric event.
+        breakState.pendingLineBreak = pendingLineBreak;
+        breakState.pendingStanzaBreak = pendingStanzaBreak;
 
         return result;
     }
@@ -975,6 +1010,11 @@ public final class Stage3MidiLyrics {
 
     private static String safe(String s) {
         return s == null ? "" : s.trim();
+    }
+
+    private static final class LyricBreakState {
+        boolean pendingLineBreak;
+        boolean pendingStanzaBreak;
     }
 
     private static final class LyricEvent {
