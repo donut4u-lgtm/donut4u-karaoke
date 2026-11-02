@@ -272,9 +272,10 @@ public final class Stage3MidiLyrics {
     /*
      * KARAOKE LYRIC RENDERER
      *
-     * Displays up to five lines from the active stanza.
-     * Keeps stanza boundaries separate.
-     * Highlights the active lyric event in green.
+     * Five-line window.
+     * Word spaces are preserved.
+     * Only the word containing the active timed event is green.
+     * Other words remain white through the TextView default color.
      */
     private FullResult build(long tick, long durationTicks) {
         SpannableStringBuilder output = new SpannableStringBuilder();
@@ -313,14 +314,19 @@ public final class Stage3MidiLyrics {
             return new FullResult(output, 0);
         }
 
-        int firstLine = Math.max(stanzaFirstLine, activeEvent.line - 2);
+        int firstLine = Math.max(
+                stanzaFirstLine, activeEvent.line - 2);
+
         int lastLine = Math.min(
-                stanzaLastLine, firstLine + MAX_VISIBLE_LINES - 1);
+                stanzaLastLine,
+                firstLine + MAX_VISIBLE_LINES - 1);
 
         firstLine = Math.max(
-                stanzaFirstLine, lastLine - MAX_VISIBLE_LINES + 1);
+                stanzaFirstLine,
+                lastLine - MAX_VISIBLE_LINES + 1);
 
         int activeLineStart = 0;
+
         int[] starts = new int[events.size()];
         int[] ends = new int[events.size()];
 
@@ -330,6 +336,7 @@ public final class Stage3MidiLyrics {
         }
 
         int previousLine = Integer.MIN_VALUE;
+        int previousEvent = -1;
 
         for (int i = 0; i < events.size(); i++) {
             LyricEvent e = events.get(i);
@@ -343,7 +350,22 @@ public final class Stage3MidiLyrics {
                 if (output.length() > 0) {
                     output.append('\n');
                 }
+
                 previousLine = e.line;
+                previousEvent = -1;
+            }
+
+            /*
+             * Restore spaces removed by trimming the original
+             * MIDI/KAR lyric fragments. Do not insert spaces between
+             * syllables when the source did not contain a word boundary.
+             */
+            if (previousEvent >= 0) {
+                LyricEvent previous = events.get(previousEvent);
+
+                if (previous.spaceAfter || e.spaceBefore) {
+                    output.append(' ');
+                }
             }
 
             int start = output.length();
@@ -356,6 +378,8 @@ public final class Stage3MidiLyrics {
             if (e.line == activeEvent.line && activeLineStart == 0) {
                 activeLineStart = start;
             }
+
+            previousEvent = i;
         }
 
         if (output.length() == 0) {
@@ -371,11 +395,16 @@ public final class Stage3MidiLyrics {
         if (allowHighlight && starts[active] >= 0
                 && ends[active] > starts[active]) {
 
+            /*
+             * Expand only across fragments belonging to the same word.
+             * A real source whitespace boundary stops expansion.
+             */
             int firstWordEvent = active;
             int lastWordEvent = active;
 
             while (firstWordEvent > 0) {
                 int previousIndex = firstWordEvent - 1;
+
                 LyricEvent previous = events.get(previousIndex);
                 LyricEvent current = events.get(firstWordEvent);
 
@@ -384,8 +413,8 @@ public final class Stage3MidiLyrics {
                         || previous.line != current.line
                         || starts[previousIndex] < 0
                         || ends[previousIndex] <= starts[previousIndex]
-                        || endsWithWordSpace(previous.text)
-                        || startsWithWordSpace(current.text)) {
+                        || previous.spaceAfter
+                        || current.spaceBefore) {
                     break;
                 }
 
@@ -394,6 +423,7 @@ public final class Stage3MidiLyrics {
 
             while (lastWordEvent + 1 < events.size()) {
                 int nextIndex = lastWordEvent + 1;
+
                 LyricEvent current = events.get(lastWordEvent);
                 LyricEvent next = events.get(nextIndex);
 
@@ -401,10 +431,9 @@ public final class Stage3MidiLyrics {
                         || current.stanza != next.stanza
                         || current.line != next.line
                         || starts[nextIndex] < 0
-                        || ends[lastWordEvent] < 0
                         || ends[lastWordEvent] <= starts[lastWordEvent]
-                        || endsWithWordSpace(current.text)
-                        || startsWithWordSpace(next.text)) {
+                        || current.spaceAfter
+                        || next.spaceBefore) {
                     break;
                 }
 
@@ -415,7 +444,9 @@ public final class Stage3MidiLyrics {
             activeEnd = ends[lastWordEvent];
         }
 
-        if (allowHighlight && activeStart >= 0 && activeEnd > activeStart) {
+        if (allowHighlight && activeStart >= 0
+                && activeEnd > activeStart) {
+
             output.setSpan(
                     new ForegroundColorSpan(ACTIVE_GREEN),
                     activeStart,
@@ -424,16 +455,6 @@ public final class Stage3MidiLyrics {
         }
 
         return new FullResult(output, activeLineStart);
-    }
-
-    private static boolean endsWithWordSpace(String value) {
-        return value != null && !value.isEmpty()
-                && Character.isWhitespace(value.charAt(value.length() - 1));
-    }
-
-    private static boolean startsWithWordSpace(String value) {
-        return value != null && !value.isEmpty()
-                && Character.isWhitespace(value.charAt(0));
     }
 
     public static Stage3MidiLyrics read(File file) {
@@ -560,6 +581,7 @@ public final class Stage3MidiLyrics {
                             if (heading != null) {
                                 sectionEvents.add(new LyricEvent(
                                         tick, heading, sequence++,
+                                        false, false, false,
                                         false, true, false));
                             }
                             continue;
@@ -635,8 +657,6 @@ public final class Stage3MidiLyrics {
                             continue;
                         }
 
-                        // Type 0x05 is the dedicated MIDI lyric event.
-                        // Type 0x01 is accepted only when it resembles lyrics.
                         if (type == 0x01 && !isLikelyLyricText(trimmed)) {
                             continue;
                         }
@@ -726,11 +746,6 @@ public final class Stage3MidiLyrics {
         }
     }
 
-    /*
-     * Conservative filter for ordinary MIDI text events.
-     * Real lyric sentences are retained, including short lines.
-     * Obvious technical data, labels and file metadata are rejected.
-     */
     private static boolean isLikelyLyricText(String value) {
         if (value == null) return false;
 
@@ -770,13 +785,11 @@ public final class Stage3MidiLyrics {
 
         if (s.matches("^[#=<>\\[\\]{}|]+$")) return false;
 
-        // Reject long technical-looking strings with no normal lyric words.
         if (s.length() > 3
                 && s.matches("^[A-Fa-f0-9:/\\\\._-]+$")) {
             return false;
         }
 
-        // Preserve ordinary words and punctuation as possible lyrics.
         return s.matches("(?s).*[\\p{L}].*");
     }
 
@@ -801,12 +814,16 @@ public final class Stage3MidiLyrics {
             char c = source.charAt(i);
 
             if (c == '/' || c == '\\' || c == '\r' || c == '\n') {
-                String text = cleanLyricFragment(fragment.toString());
+                String rawFragment = fragment.toString();
+                String text = cleanLyricFragment(rawFragment);
 
                 if (!text.isEmpty() && !isControlToken(text)) {
                     result.add(new LyricEvent(
                             tick, text, sequence++,
-                            pendingLineBreak, false, pendingStanzaBreak));
+                            pendingLineBreak, false, pendingStanzaBreak,
+                            hasLeadingSpace(rawFragment),
+                            hasTrailingSpace(rawFragment),
+                            false));
 
                     pendingLineBreak = false;
                     pendingStanzaBreak = false;
@@ -830,15 +847,29 @@ public final class Stage3MidiLyrics {
             }
         }
 
-        String text = cleanLyricFragment(fragment.toString());
+        String rawFragment = fragment.toString();
+        String text = cleanLyricFragment(rawFragment);
 
         if (!text.isEmpty() && !isControlToken(text)) {
             result.add(new LyricEvent(
                     tick, text, sequence,
-                    pendingLineBreak, false, pendingStanzaBreak));
+                    pendingLineBreak, false, pendingStanzaBreak,
+                    hasLeadingSpace(rawFragment),
+                    hasTrailingSpace(rawFragment),
+                    false));
         }
 
         return result;
+    }
+
+    private static boolean hasLeadingSpace(String value) {
+        return value != null && !value.isEmpty()
+                && Character.isWhitespace(value.charAt(0));
+    }
+
+    private static boolean hasTrailingSpace(String value) {
+        return value != null && !value.isEmpty()
+                && Character.isWhitespace(value.charAt(value.length() - 1));
     }
 
     private static String cleanLyricFragment(String value) {
@@ -953,6 +984,8 @@ public final class Stage3MidiLyrics {
         final boolean section;
         final boolean stanzaBreak;
         final boolean lineBreak;
+        final boolean spaceBefore;
+        final boolean spaceAfter;
 
         int line;
         int stanza;
@@ -963,7 +996,10 @@ public final class Stage3MidiLyrics {
                 int sequence,
                 boolean lineBreak,
                 boolean section,
-                boolean stanzaBreak) {
+                boolean stanzaBreak,
+                boolean spaceBefore,
+                boolean spaceAfter,
+                boolean unused) {
 
             this.tick = tick;
             this.text = text;
@@ -971,6 +1007,8 @@ public final class Stage3MidiLyrics {
             this.lineBreak = lineBreak;
             this.section = section;
             this.stanzaBreak = stanzaBreak;
+            this.spaceBefore = spaceBefore;
+            this.spaceAfter = spaceAfter;
         }
     }
 
