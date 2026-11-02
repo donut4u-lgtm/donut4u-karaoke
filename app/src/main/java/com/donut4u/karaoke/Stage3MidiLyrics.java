@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -21,6 +20,7 @@ import java.util.Locale;
 
 public final class Stage3MidiLyrics {
 
+    // DONUT4U ACTIVE KARAOKE COLOR: GREEN
     private static final int ACTIVE_GREEN = Color.rgb(0, 255, 100);
     private static final int SECTION_GOLD = Color.rgb(255, 205, 90);
     private static final long DEFAULT_TEMPO = 500000L;
@@ -362,38 +362,14 @@ public final class Stage3MidiLyrics {
             return new FullResult(output, 0);
         }
 
+        // FIX: Highlight only the lyric event active at this MIDI tick.
+        // Do not expand across an entire unspaced lyric line.
         if (active >= 0 && active < events.size()
-                && starts[active] >= 0) {
+                && starts[active] >= 0
+                && ends[active] > starts[active]) {
 
-            int first = active;
-            int last = active;
-
-            while (first > 0) {
-                LyricEvent p = events.get(first - 1);
-                LyricEvent c = events.get(first);
-
-                if (p.section || p.stanza != stanza
-                        || p.line != c.line
-                        || !sameWord(p.text, c.text)) break;
-
-                first--;
-            }
-
-            while (last + 1 < events.size()) {
-                LyricEvent c = events.get(last);
-                LyricEvent n = events.get(last + 1);
-
-                if (n.section || n.stanza != stanza
-                        || n.line != c.line
-                        || !sameWord(c.text, n.text)) break;
-
-                last++;
-            }
-
-            if (starts[first] >= 0 && ends[last] >= starts[first]) {
-                activeStart = starts[first];
-                activeEnd = ends[last];
-            }
+            activeStart = starts[active];
+            activeEnd = ends[active];
         }
 
         if (activeStart >= 0 && activeEnd > activeStart) {
@@ -704,10 +680,11 @@ public final class Stage3MidiLyrics {
             for (int i = 0; i < chosen.size(); i++) {
                 LyricEvent e = chosen.get(i);
 
+                // FIX: Apply break markers to the event they prefix.
                 if (e.stanzaBreak) {
                     stanza++;
                     line++;
-                } else if (i > 0 && chosen.get(i - 1).lineBreak) {
+                } else if (e.lineBreak) {
                     line++;
                 }
 
