@@ -93,6 +93,9 @@ public class Stage3PlayerActivity extends Activity {
     private int lastRenderedLyricStart = -2;
     private int lastRenderedLyricEnd = -2;
 
+    // Absolute MIDI lyric line last brought into the viewing area.
+    private int lastScrolledLyricLine = Integer.MIN_VALUE;
+
     private String lastRenderedLyricText;
 
     private final Handler handler =
@@ -167,7 +170,7 @@ public class Stage3PlayerActivity extends Activity {
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
         overlay.setPadding(
-                dp(18), dp(12), dp(18), dp(12));
+                dp(14), dp(8), dp(14), dp(8));
 
         overlay.setBackgroundColor(Color.TRANSPARENT);
 
@@ -188,7 +191,7 @@ public class Stage3PlayerActivity extends Activity {
         songTitleLabel.setGravity(Gravity.CENTER);
         songTitleLabel.setMaxLines(2);
         songTitleLabel.setPadding(
-                dp(8), dp(4), dp(8), dp(6));
+                dp(8), dp(3), dp(8), dp(4));
 
         overlay.addView(
                 songTitleLabel,
@@ -196,16 +199,16 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // SINGER — directly below the song title.
+        // SINGER
         singerLabel = new TextView(this);
         singerLabel.setText("");
         singerLabel.setTextColor(WHITE);
-        singerLabel.setTextSize(16);
+        singerLabel.setTextSize(15);
         singerLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         singerLabel.setGravity(Gravity.CENTER);
         singerLabel.setPadding(
-                dp(8), dp(2), dp(8), dp(4));
+                dp(8), dp(1), dp(8), dp(3));
         singerLabel.setVisibility(View.GONE);
 
         overlay.addView(
@@ -214,22 +217,26 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // CLEAR GAP BETWEEN SINGER AND LYRICS.
+        // GAP BETWEEN SINGER AND LYRICS
         View lyricsTopGap = new View(this);
 
         overlay.addView(
                 lyricsTopGap,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(18)));
+                        dp(10)));
 
-        // LYRICS AREA.
+        // LYRICS AREA
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(true);
         lyricsScroll.setVerticalScrollBarEnabled(false);
+        lyricsScroll.setHorizontalScrollBarEnabled(false);
         lyricsScroll.setBackgroundColor(Color.TRANSPARENT);
         lyricsScroll.setOverScrollMode(
                 ScrollView.OVER_SCROLL_NEVER);
+        lyricsScroll.setSmoothScrollingEnabled(true);
+        lyricsScroll.setClipToPadding(false);
+        lyricsScroll.setPadding(0, dp(4), 0, dp(4));
 
         LinearLayout.LayoutParams scrollParams =
                 new LinearLayout.LayoutParams(
@@ -242,15 +249,19 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("");
         lyricsLabel.setTextColor(WHITE);
-        lyricsLabel.setTextSize(26);
+        lyricsLabel.setTextSize(24);
         lyricsLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         lyricsLabel.setGravity(Gravity.CENTER);
         lyricsLabel.setPadding(
-                dp(12), dp(20), dp(12), dp(20));
-        lyricsLabel.setLineSpacing(dp(7), 1.05f);
+                dp(10), dp(10), dp(10), dp(10));
+        lyricsLabel.setLineSpacing(dp(5), 1.02f);
         lyricsLabel.setIncludeFontPadding(true);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
+        lyricsLabel.setBreakStrategy(
+                android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY);
+        lyricsLabel.setHyphenationFrequency(
+                android.text.Layout.HYPHENATION_FREQUENCY_NONE);
 
         lyricsScroll.addView(
                 lyricsLabel,
@@ -278,7 +289,7 @@ public class Stage3PlayerActivity extends Activity {
         controls.setOrientation(LinearLayout.VERTICAL);
         controls.setGravity(Gravity.CENTER);
         controls.setPadding(
-                dp(8), dp(8), dp(8), dp(4));
+                dp(8), dp(5), dp(8), dp(2));
         controls.setBackgroundColor(Color.TRANSPARENT);
 
         playbackTimeLabel = new TextView(this);
@@ -305,7 +316,7 @@ public class Stage3PlayerActivity extends Activity {
         LinearLayout.LayoutParams seekParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(38));
+                        dp(36));
 
         controls.addView(seekBar, seekParams);
 
@@ -335,7 +346,6 @@ public class Stage3PlayerActivity extends Activity {
             }
         });
 
-        // CLEAR PLAY / PAUSE BUTTON.
         playPauseButton = new TextView(this);
         playPauseButton.setText("▶  PLAY");
         playPauseButton.setTextColor(WHITE);
@@ -344,7 +354,7 @@ public class Stage3PlayerActivity extends Activity {
                 Typeface.DEFAULT, Typeface.BOLD);
         playPauseButton.setGravity(Gravity.CENTER);
         playPauseButton.setPadding(
-                dp(24), dp(8), dp(24), dp(8));
+                dp(24), dp(6), dp(24), dp(6));
         playPauseButton.setBackgroundColor(Color.TRANSPARENT);
         playPauseButton.setContentDescription("Play");
 
@@ -355,7 +365,7 @@ public class Stage3PlayerActivity extends Activity {
                 playPauseButton,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
-                        dp(48)));
+                        dp(44)));
 
         overlay.addView(
                 controls,
@@ -764,6 +774,9 @@ public class Stage3PlayerActivity extends Activity {
             try {
                 midiEngine.seekTo(targetTick);
 
+                // A seek can jump to a different lyric line.
+                lastScrolledLyricLine = Integer.MIN_VALUE;
+
                 updateMidiLyricsAtTick(
                         midiEngine.getCurrentTick());
 
@@ -803,8 +816,6 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        // AUTOMATIC SEEK-BAR PROGRESS.
-        // This updates during playback without requiring manual dragging.
         if (!userSeeking && seekBar != null) {
 
             int progress = (int) Math.max(
@@ -1097,13 +1108,12 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     /*
-     * KARAOKE LYRICS DISPLAY:
-     * - Upcoming and previously sung words remain white.
-     * - The currently sung word is bright green.
-     * - Several lyric lines remain visible.
-     * - The active lyric line stays near the screen center.
-     * - Scrolling is smooth and does not repeatedly jump to the top.
-     * - MIDI duration is passed to the duration-aware renderer.
+     * KARAOKE LYRIC DISPLAY
+     *
+     * The parser supplies the active lyric in green.
+     * Other lyric text remains white.
+     * The active line is automatically kept near the
+     * center of the visible lyrics area.
      */
     private void updateMidiLyricsAtTick(long tick) {
 
@@ -1171,13 +1181,36 @@ public class Stage3PlayerActivity extends Activity {
             lastRenderedLyricEnd = activeEnd;
         }
 
-        if (activeStart < 0) {
+        /*
+         * Do not stop scrolling just because the current
+         * tick is between lyric events and no green span
+         * is currently present.
+         */
+        final int activeLine =
+                currentMidiLyrics.activeLineNumberAtTick(tick);
+
+        if (activeLine < 0) {
             return;
         }
 
+        /*
+         * The parser returns the offset of the active line
+         * inside the currently rendered five-line window.
+         */
         final int activeOffset = Math.max(
                 0,
                 currentMidiLyrics.activeLineStartOffsetAtTick(tick));
+
+        /*
+         * Avoid posting a new animation every 100 ms.
+         * Only a change in the active MIDI line triggers
+         * automatic scrolling.
+         */
+        if (activeLine == lastScrolledLyricLine) {
+            return;
+        }
+
+        lastScrolledLyricLine = activeLine;
 
         lyricsLabel.post(() -> {
 
@@ -1197,34 +1230,40 @@ public class Stage3PlayerActivity extends Activity {
                     activeOffset,
                     lyricsLabel.length());
 
-            int line = layout.getLineForOffset(offset);
+            int textLine = layout.getLineForOffset(offset);
 
-            int lineTop = layout.getLineTop(line);
-            int lineBottom = layout.getLineBottom(line);
+            int lineTop = layout.getLineTop(textLine);
+            int lineBottom = layout.getLineBottom(textLine);
 
-            int viewport = lyricsScroll.getHeight();
+            int viewportHeight =
+                    lyricsScroll.getHeight()
+                            - lyricsScroll.getPaddingTop()
+                            - lyricsScroll.getPaddingBottom();
 
-            if (viewport <= 0) {
+            if (viewportHeight <= 0) {
                 return;
             }
 
-            // Center the currently sung lyric line.
             int lineHeight = lineBottom - lineTop;
 
             int target = lineTop
-                    - (viewport - lineHeight) / 2;
+                    - (viewportHeight - lineHeight) / 2;
 
             int maxScroll = Math.max(
                     0,
-                    lyricsLabel.getHeight() - viewport);
+                    lyricsLabel.getHeight()
+                            - viewportHeight);
 
             target = Math.max(
                     0,
                     Math.min(target, maxScroll));
 
+            /*
+             * Use a single smooth movement for each new line.
+             * The 18dp threshold prevents unnecessary tiny moves.
+             */
             int currentScroll = lyricsScroll.getScrollY();
 
-            // Prevent repeated animations for tiny position changes.
             if (Math.abs(target - currentScroll) > dp(18)) {
                 lyricsScroll.smoothScrollTo(0, target);
             }
@@ -1237,9 +1276,11 @@ public class Stage3PlayerActivity extends Activity {
         lastRenderedLyricEnd = -2;
         lastRenderedLyricText = null;
 
+        lastScrolledLyricLine = Integer.MIN_VALUE;
+
         if (lyricsScroll != null) {
             lyricsScroll.stopNestedScroll();
-            lyricsScroll.scrollTo(0, 0);
+            lyricsScroll.smoothScrollTo(0, 0);
         }
     }
 
