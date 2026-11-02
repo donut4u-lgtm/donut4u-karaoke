@@ -57,8 +57,7 @@ public class Stage3PlayerActivity extends Activity {
     private static final int ACTIVE_GREEN =
             Color.rgb(0, 255, 100);
 
-    private static final int WHITE =
-            Color.WHITE;
+    private static final int WHITE = Color.WHITE;
 
     private static final int SEEK_MAX = 1000;
 
@@ -71,10 +70,12 @@ public class Stage3PlayerActivity extends Activity {
     private TextureView backgroundTexture;
 
     private LinearLayout overlay;
+    private TextView songTitleLabel;
     private TextView singerLabel;
     private TextView lyricsLabel;
     private ScrollView lyricsScroll;
 
+    private TextView playbackTimeLabel;
     private TextView playPauseButton;
     private SeekBar seekBar;
 
@@ -176,16 +177,34 @@ public class Stage3PlayerActivity extends Activity {
 
         stage.addView(overlay, overlayParams);
 
+        // Song title.
+        songTitleLabel = new TextView(this);
+        songTitleLabel.setText("");
+        songTitleLabel.setTextColor(WHITE);
+        songTitleLabel.setTextSize(19);
+        songTitleLabel.setTypeface(
+                Typeface.DEFAULT, Typeface.BOLD);
+        songTitleLabel.setGravity(Gravity.CENTER);
+        songTitleLabel.setMaxLines(2);
+        songTitleLabel.setPadding(
+                dp(8), dp(4), dp(8), dp(6));
+
+        overlay.addView(
+                songTitleLabel,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+
         // Singer name appears only when MIDI metadata provides one.
         singerLabel = new TextView(this);
         singerLabel.setText("");
         singerLabel.setTextColor(WHITE);
-        singerLabel.setTextSize(17);
+        singerLabel.setTextSize(15);
         singerLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         singerLabel.setGravity(Gravity.CENTER);
         singerLabel.setPadding(
-                dp(8), dp(4), dp(8), dp(10));
+                dp(8), dp(2), dp(8), dp(6));
         singerLabel.setVisibility(View.GONE);
 
         overlay.addView(
@@ -213,17 +232,12 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("");
         lyricsLabel.setTextColor(WHITE);
-
-        // Readable karaoke font without occupying the whole screen.
         lyricsLabel.setTextSize(22);
-
         lyricsLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
-
         lyricsLabel.setGravity(Gravity.CENTER);
         lyricsLabel.setPadding(
                 dp(12), dp(16), dp(12), dp(16));
-
         lyricsLabel.setLineSpacing(dp(5), 1.02f);
         lyricsLabel.setIncludeFontPadding(true);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
@@ -234,7 +248,6 @@ public class Stage3PlayerActivity extends Activity {
                         ScrollView.LayoutParams.MATCH_PARENT,
                         ScrollView.LayoutParams.WRAP_CONTENT));
 
-        // Compact playback controls at the bottom.
         buildPlaybackControls();
 
         setContentView(stage);
@@ -250,18 +263,30 @@ public class Stage3PlayerActivity extends Activity {
 
     private void buildPlaybackControls() {
 
-        LinearLayout controls =
-                new LinearLayout(this);
+        LinearLayout controls = new LinearLayout(this);
 
-        controls.setOrientation(
-                LinearLayout.VERTICAL);
-
+        controls.setOrientation(LinearLayout.VERTICAL);
         controls.setGravity(Gravity.CENTER);
-
         controls.setPadding(
                 dp(8), dp(8), dp(8), dp(4));
-
         controls.setBackgroundColor(Color.TRANSPARENT);
+
+        // Elapsed / total playback time.
+        playbackTimeLabel = new TextView(this);
+        playbackTimeLabel.setText("00:00 / 00:00");
+        playbackTimeLabel.setTextColor(WHITE);
+        playbackTimeLabel.setTextSize(13);
+        playbackTimeLabel.setGravity(Gravity.CENTER);
+        playbackTimeLabel.setTypeface(
+                Typeface.DEFAULT, Typeface.BOLD);
+        playbackTimeLabel.setPadding(
+                dp(4), dp(2), dp(4), dp(2));
+
+        controls.addView(
+                playbackTimeLabel,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
 
         // Seek slider.
         seekBar = new SeekBar(this);
@@ -291,40 +316,29 @@ public class Stage3PlayerActivity extends Activity {
             }
 
             @Override
-            public void onStartTrackingTouch(
-                    SeekBar bar) {
-
+            public void onStartTrackingTouch(SeekBar bar) {
                 userSeeking = true;
             }
 
             @Override
-            public void onStopTrackingTouch(
-                    SeekBar bar) {
-
+            public void onStopTrackingTouch(SeekBar bar) {
                 userSeeking = false;
-
                 seekToProgress(bar.getProgress());
             }
         });
 
         // Play / pause button.
         playPauseButton = new TextView(this);
-
         playPauseButton.setText("▶");
         playPauseButton.setTextColor(WHITE);
         playPauseButton.setTextSize(25);
         playPauseButton.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
-
         playPauseButton.setGravity(Gravity.CENTER);
         playPauseButton.setPadding(
                 dp(24), dp(8), dp(24), dp(8));
-
-        playPauseButton.setBackgroundColor(
-                Color.TRANSPARENT);
-
-        playPauseButton.setContentDescription(
-                "Play or pause");
+        playPauseButton.setBackgroundColor(Color.TRANSPARENT);
+        playPauseButton.setContentDescription("Play or pause");
 
         playPauseButton.setOnClickListener(
                 v -> togglePlayback());
@@ -342,6 +356,42 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
+    private String formatPlaybackTime(long millis) {
+
+        long safeMillis = Math.max(0L, millis);
+        long totalSeconds = safeMillis / 1000L;
+
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+
+        if (hours > 0) {
+            return String.format(
+                    Locale.ROOT,
+                    "%d:%02d:%02d",
+                    hours, minutes, seconds);
+        }
+
+        return String.format(
+                Locale.ROOT,
+                "%02d:%02d",
+                minutes, seconds);
+    }
+
+    private void updatePlaybackTime(
+            long elapsedMillis,
+            long totalMillis) {
+
+        if (playbackTimeLabel == null) {
+            return;
+        }
+
+        playbackTimeLabel.setText(
+                formatPlaybackTime(elapsedMillis)
+                        + " / "
+                        + formatPlaybackTime(totalMillis));
+    }
+
     private void startSelectedSong() {
 
         currentSong = Stage3SongQueue.getNowPlaying();
@@ -354,6 +404,8 @@ public class Stage3PlayerActivity extends Activity {
             lyricsLabel.setText(
                     "No song selected.\n\n"
                             + "Return to the Songbook.");
+            songTitleLabel.setText("Donut4U Karaoke");
+            updatePlaybackTime(0L, 0L);
             setControlsEnabled(false);
             return;
         }
@@ -417,6 +469,17 @@ public class Stage3PlayerActivity extends Activity {
 
         currentSong = song;
 
+        String title = song.title == null
+                ? ""
+                : song.title.trim();
+
+        songTitleLabel.setText(
+                title.isEmpty()
+                        ? "Donut4U Karaoke"
+                        : title);
+
+        updatePlaybackTime(0L, 0L);
+
         if (isMidiSong(song)) {
             initializeMidiPlayer(song);
         } else {
@@ -457,6 +520,7 @@ public class Stage3PlayerActivity extends Activity {
         resetLyricTracking();
         setControlsEnabled(false);
         setPlayPauseText(false);
+        updatePlaybackTime(0L, 0L);
 
         startMatchingBackgroundVideo(song);
 
@@ -539,14 +603,11 @@ public class Stage3PlayerActivity extends Activity {
                         if (singer != null
                                 && !singer.trim().isEmpty()) {
 
-                            singerLabel.setText(
-                                    singer.trim());
+                            singerLabel.setText(singer.trim());
+                            singerLabel.setVisibility(View.VISIBLE);
 
-                            singerLabel.setVisibility(
-                                    View.VISIBLE);
                         } else {
-                            singerLabel.setVisibility(
-                                    View.GONE);
+                            singerLabel.setVisibility(View.GONE);
                         }
 
                         setControlsEnabled(true);
@@ -730,6 +791,7 @@ public class Stage3PlayerActivity extends Activity {
     private void updateMidiControls(long tick) {
 
         if (!midiReady || midiDurationTicks <= 0) {
+            updatePlaybackTime(0L, 0L);
             return;
         }
 
@@ -745,6 +807,17 @@ public class Stage3PlayerActivity extends Activity {
             seekBar.setProgress(progress);
             updatingSeekBar = false;
         }
+
+        // MIDI tick values are converted using the MIDI lyric timeline.
+        long elapsedMillis = Math.max(
+                0L,
+                currentMidiLyrics.tickToMillis(tick));
+
+        long totalMillis = Math.max(
+                elapsedMillis,
+                currentMidiLyrics.tickToMillis(midiDurationTicks));
+
+        updatePlaybackTime(elapsedMillis, totalMillis);
 
         if (midiEngine != null) {
             setPlayPauseText(midiEngine.isPlaying());
@@ -773,6 +846,10 @@ public class Stage3PlayerActivity extends Activity {
             seekBar.setProgress(progress);
             updatingSeekBar = false;
         }
+
+        updatePlaybackTime(
+                Math.max(0L, position),
+                duration > 0 ? duration : 0L);
 
         setPlayPauseText(player.isPlaying());
     }
@@ -823,9 +900,7 @@ public class Stage3PlayerActivity extends Activity {
                         backgroundPlayer = null;
                     }
 
-                    backgroundTexture.setVisibility(
-                            View.GONE);
-
+                    backgroundTexture.setVisibility(View.GONE);
                     stage.setBackgroundColor(DARK_GREEN);
                 }
             });
@@ -1017,8 +1092,9 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     /*
-     * Update the lyric display using the MIDI engine's current tick.
-     * Stage3MidiLyrics supplies the current stanza and active green word.
+     * Update lyrics using the MIDI engine's current tick.
+     * Upcoming words remain white; active words remain green.
+     * Scrolling follows the active line without resetting to the top.
      */
     private void updateMidiLyricsAtTick(long tick) {
 
@@ -1080,18 +1156,11 @@ public class Stage3PlayerActivity extends Activity {
 
         if (changed) {
 
-            boolean stanzaTextChanged =
-                    !candidateText.equals(lastRenderedLyricText);
-
             lyricsLabel.setText(candidate);
 
             lastRenderedLyricText = candidateText;
             lastRenderedLyricStart = activeStart;
             lastRenderedLyricEnd = activeEnd;
-
-            if (stanzaTextChanged && lyricsScroll != null) {
-                lyricsScroll.scrollTo(0, 0);
-            }
         }
 
         if (activeStart < 0) {
@@ -1138,8 +1207,7 @@ public class Stage3PlayerActivity extends Activity {
 
             if (outside) {
 
-                int target =
-                        lineTop - viewport / 3;
+                int target = lineTop - viewport / 3;
 
                 int max = Math.max(
                         0,
@@ -1454,10 +1522,14 @@ public class Stage3PlayerActivity extends Activity {
 
         releasePlayback();
 
+        songTitleLabel.setText("SONG FINISHED");
+
         lyricsLabel.setText(
                 "SONG FINISHED\n\n"
                 + "Return to the Songbook "
                 + "to choose another song.");
+
+        updatePlaybackTime(0L, 0L);
 
         setControlsEnabled(false);
         setPlayPauseText(false);
@@ -1533,6 +1605,8 @@ public class Stage3PlayerActivity extends Activity {
 
         setControlsEnabled(false);
         setPlayPauseText(false);
+
+        updatePlaybackTime(0L, 0L);
 
         if (seekBar != null) {
             updatingSeekBar = true;
