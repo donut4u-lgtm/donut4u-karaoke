@@ -64,6 +64,7 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     private void buildScreen() {
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(8), dp(8), dp(8), dp(8));
@@ -125,6 +126,8 @@ public class Stage3MediaFireActivity extends Activity {
 
         webView = new WebView(this);
 
+        // WEBVIEW SETTINGS
+
         WebSettings settings = webView.getSettings();
 
         settings.setJavaScriptEnabled(true);
@@ -156,8 +159,11 @@ public class Stage3MediaFireActivity extends Activity {
         cookies.setAcceptThirdPartyCookies(webView, true);
 
         webView.setWebChromeClient(new WebChromeClient() {
+
             @Override
-            public void onProgressChanged(WebView view, int value) {
+            public void onProgressChanged(
+                    WebView view, int value) {
+
                 progress.setProgress(value);
 
                 if (value < 100) {
@@ -170,17 +176,20 @@ public class Stage3MediaFireActivity extends Activity {
 
             @Override
             public void onPageStarted(
-                    WebView view, String url,
+                    WebView view,
+                    String url,
                     android.graphics.Bitmap favicon) {
 
                 autoLoadingFolder = false;
+
                 status.setText("Loading MediaFire folder...");
                 progress.setVisibility(View.VISIBLE);
             }
 
             @Override
             public void onPageFinished(
-                    WebView view, String url) {
+                    WebView view,
+                    String url) {
 
                 if (url == null ||
                         !url.contains("mediafire.com")) {
@@ -189,7 +198,7 @@ public class Stage3MediaFireActivity extends Activity {
                 }
 
                 status.setText(
-                        "Loading the complete folder list. Please wait...");
+                        "Loading more songs. Please wait...");
 
                 progress.setVisibility(View.VISIBLE);
 
@@ -198,7 +207,8 @@ public class Stage3MediaFireActivity extends Activity {
 
             @Override
             public boolean shouldOverrideUrlLoading(
-                    WebView view, String url) {
+                    WebView view,
+                    String url) {
 
                 Uri uri = Uri.parse(url);
                 String scheme = uri.getScheme();
@@ -225,8 +235,11 @@ public class Stage3MediaFireActivity extends Activity {
             }
         });
 
+        // MIDI/KAR DOWNLOAD LISTENER
+
         webView.setDownloadListener(
                 new DownloadListener() {
+
                     @Override
                     public void onDownloadStart(
                             String url,
@@ -262,11 +275,16 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     /*
-     * Ask MediaFire's page to progressively scroll through
-     * its scrollable areas so lazy-loaded entries can appear.
+     * AUTOMATIC MEDIAFIRE FOLDER SCROLLING
      *
-     * This does not download files. It only loads folder entries.
+     * Progressively scrolls the page to encourage
+     * MediaFire to load additional folder entries.
+     *
+     * IMPORTANT:
+     * It does not return to the top.
+     * It does not reset internal scrolling containers.
      */
+
     private void loadAllFolderEntries(WebView view) {
 
         if (autoLoadingFolder) {
@@ -275,8 +293,12 @@ public class Stage3MediaFireActivity extends Activity {
 
         autoLoadingFolder = true;
 
+        status.setText(
+                "Loading more songs. Please wait...");
+
         String script =
                 "(function() {" +
+
                 "if (window.__donut4uFolderLoader) return;" +
                 "window.__donut4uFolderLoader = true;" +
 
@@ -288,48 +310,28 @@ public class Stage3MediaFireActivity extends Activity {
                 "function measure() {" +
                 "var root = document.scrollingElement || document.documentElement;" +
                 "var links = document.querySelectorAll('a').length;" +
-                "var height = Math.max(" +
-                "root.scrollHeight," +
+                "var height = Math.max(root.scrollHeight," +
                 "document.body ? document.body.scrollHeight : 0);" +
                 "return links + ':' + height;" +
                 "}" +
 
                 "function moveDown() {" +
                 "var root = document.scrollingElement || document.documentElement;" +
-                "var amount = Math.max(400, window.innerHeight * 0.75);" +
-
+                "var amount = Math.max(350, window.innerHeight * 0.65);" +
                 "window.scrollBy(0, amount);" +
                 "root.scrollTop = root.scrollTop + amount;" +
-
-                "var elements = document.querySelectorAll('*');" +
-                "for (var i = 0; i < elements.length; i++) {" +
-                "var el = elements[i];" +
-                "var style = window.getComputedStyle(el);" +
-                "if ((style.overflowY === 'auto' || style.overflowY === 'scroll')" +
-                " && el.scrollHeight > el.clientHeight + 100) {" +
-                "el.scrollTop = el.scrollTop + amount;" +
-                "}" +
-                "}" +
                 "}" +
 
                 "function finish() {" +
-                "window.scrollTo(0, 0);" +
-                "var root = document.scrollingElement || document.documentElement;" +
-                "root.scrollTop = 0;" +
-                "var elements = document.querySelectorAll('*');" +
-                "for (var i = 0; i < elements.length; i++) {" +
-                "var el = elements[i];" +
-                "var style = window.getComputedStyle(el);" +
-                "if (style.overflowY === 'auto' || style.overflowY === 'scroll') {" +
-                "el.scrollTop = 0;" +
-                "}" +
-                "}" +
                 "window.__donut4uFolderLoader = false;" +
                 "}" +
 
                 "function step() {" +
+
                 "steps++;" +
+
                 "var current = measure();" +
+
                 "if (current === previous) {" +
                 "unchanged++;" +
                 "} else {" +
@@ -337,45 +339,52 @@ public class Stage3MediaFireActivity extends Activity {
                 "previous = current;" +
                 "}" +
 
-                "if (steps >= maxSteps || unchanged >= 8) {" +
+                "if (steps >= maxSteps || unchanged >= 12) {" +
                 "finish();" +
                 "return;" +
                 "}" +
 
                 "moveDown();" +
-                "setTimeout(step, 700);" +
+
+                "setTimeout(step, 900);" +
                 "}" +
 
-                "setTimeout(step, 1000);" +
+                "setTimeout(step, 1500);" +
+
                 "})();";
 
         view.evaluateJavascript(script, null);
 
         view.postDelayed(() -> {
+
             autoLoadingFolder = false;
 
             progress.setVisibility(View.GONE);
 
             status.setText(
-                    "Folder loading attempt finished. " +
-                    "Scroll down to browse the available songs.");
+                    "Loading attempt finished. " +
+                    "Browse the folder and scroll to see more songs.");
 
-        }, 75000);
+        }, 100000);
     }
 
     private Button makeButton(String value) {
+
         Button button = new Button(this);
         button.setText(value);
         button.setTextColor(Color.WHITE);
         button.setTextSize(12);
         button.setAllCaps(false);
+
         button.setBackgroundTintList(
                 android.content.res.ColorStateList.valueOf(
                         Color.rgb(20, 125, 65)));
+
         return button;
     }
 
     private void goBack() {
+
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
@@ -389,6 +398,7 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     private boolean isAllowedMediaFireUrl(String address) {
+
         try {
             Uri uri = Uri.parse(address);
             String host = uri.getHost();
@@ -398,6 +408,7 @@ public class Stage3MediaFireActivity extends Activity {
                     && (host.equalsIgnoreCase("mediafire.com")
                     || host.toLowerCase(Locale.ROOT)
                     .endsWith(".mediafire.com"));
+
         } catch (Exception e) {
             return false;
         }
@@ -420,9 +431,11 @@ public class Stage3MediaFireActivity extends Activity {
         progress.setIndeterminate(true);
 
         new Thread(() -> {
+
             File downloaded = null;
 
             try {
+
                 downloaded = downloadFile(
                         address,
                         userAgent,
@@ -430,6 +443,7 @@ public class Stage3MediaFireActivity extends Activity {
                         mimeType);
 
                 File finalFile = downloaded;
+
                 String title = removeExtension(
                         finalFile.getName());
 
@@ -439,6 +453,7 @@ public class Stage3MediaFireActivity extends Activity {
                 String number = registerSong(title, localUri);
 
                 runOnUiThread(() -> {
+
                     progress.setIndeterminate(false);
                     progress.setVisibility(View.GONE);
 
@@ -465,6 +480,7 @@ public class Stage3MediaFireActivity extends Activity {
                 });
 
             } catch (Exception e) {
+
                 if (downloaded != null && downloaded.exists()) {
                     downloaded.delete();
                 }
@@ -474,11 +490,15 @@ public class Stage3MediaFireActivity extends Activity {
                         : e.getMessage();
 
                 runOnUiThread(() -> {
+
                     progress.setIndeterminate(false);
                     progress.setVisibility(View.GONE);
-                    status.setText("DOWNLOAD FAILED:\n" + message);
+
+                    status.setText(
+                            "DOWNLOAD FAILED:\n" + message);
                 });
             }
+
         }, "Donut4U-MediaFire").start();
     }
 
@@ -492,6 +512,7 @@ public class Stage3MediaFireActivity extends Activity {
         File outputFile = null;
 
         try {
+
             URL url = new URL(address);
 
             connection = (HttpURLConnection)
@@ -544,6 +565,7 @@ public class Stage3MediaFireActivity extends Activity {
                     .contains("text/html"))
                     || (mimeType != null && mimeType.toLowerCase(Locale.ROOT)
                     .contains("text/html"))) {
+
                 throw new Exception(
                         "MediaFire returned a web page instead of a song file. " +
                         "The download may require browser verification.");
@@ -569,6 +591,7 @@ public class Stage3MediaFireActivity extends Activity {
             try (InputStream input =
                          new BufferedInputStream(
                                  connection.getInputStream());
+
                  FileOutputStream output =
                          new FileOutputStream(outputFile)) {
 
@@ -576,6 +599,7 @@ public class Stage3MediaFireActivity extends Activity {
                 int count;
 
                 while ((count = input.read(buffer)) != -1) {
+
                     total += count;
 
                     if (total > 100L * 1024L * 1024L) {
@@ -595,12 +619,15 @@ public class Stage3MediaFireActivity extends Activity {
             return outputFile;
 
         } catch (Exception e) {
+
             if (outputFile != null && outputFile.exists()) {
                 outputFile.delete();
             }
+
             throw e;
 
         } finally {
+
             if (connection != null) {
                 connection.disconnect();
             }
@@ -616,15 +643,18 @@ public class Stage3MediaFireActivity extends Activity {
                 ? firstDisposition : secondDisposition;
 
         if (disposition != null) {
+
             Matcher matcher = Pattern.compile(
                     "filename\\*?=(?:UTF-8''|\"?)([^\";]+)",
                     Pattern.CASE_INSENSITIVE)
                     .matcher(disposition);
 
             if (matcher.find()) {
+
                 try {
                     return URLDecoder.decode(
                             matcher.group(1).trim(), "UTF-8");
+
                 } catch (Exception ignored) {
                     return matcher.group(1).trim();
                 }
@@ -634,7 +664,9 @@ public class Stage3MediaFireActivity extends Activity {
         Uri uri = Uri.parse(address);
         String path = uri.getLastPathSegment();
 
-        if (path != null && getMidiExtension(path).length() > 0) {
+        if (path != null &&
+                getMidiExtension(path).length() > 0) {
+
             return Uri.decode(path);
         }
 
@@ -643,6 +675,7 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     private String getMidiExtension(String name) {
+
         String lower = name.toLowerCase(Locale.ROOT);
 
         if (lower.endsWith(".midi")) return ".midi";
@@ -653,6 +686,7 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     private boolean hasMidiHeader(File file) {
+
         try (InputStream input =
                      new java.io.FileInputStream(file)) {
 
@@ -673,8 +707,12 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     private String removeExtension(String name) {
+
         int dot = name.lastIndexOf('.');
-        return dot > 0 ? name.substring(0, dot) : name;
+
+        return dot > 0
+                ? name.substring(0, dot)
+                : name;
     }
 
     private String registerSong(
@@ -690,6 +728,7 @@ public class Stage3MediaFireActivity extends Activity {
         int nextNumber = 10000;
 
         for (int i = 0; i < songs.length(); i++) {
+
             JSONObject item = songs.getJSONObject(i);
 
             if (uri.equals(item.optString("uri", ""))) {
@@ -697,6 +736,7 @@ public class Stage3MediaFireActivity extends Activity {
             }
 
             try {
+
                 int oldNumber = Integer.parseInt(
                         item.optString("number", "0"));
 
@@ -711,6 +751,7 @@ public class Stage3MediaFireActivity extends Activity {
                 Locale.US, "%05d", nextNumber);
 
         JSONObject song = new JSONObject();
+
         song.put("number", number);
         song.put("title", title);
         song.put("uri", uri);
