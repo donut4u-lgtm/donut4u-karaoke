@@ -50,6 +50,8 @@ public class Stage3MediaFireActivity extends Activity {
     private ProgressBar progress;
     private Button backButton;
 
+    private boolean autoLoadingFolder = false;
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -123,7 +125,6 @@ public class Stage3MediaFireActivity extends Activity {
 
         webView = new WebView(this);
 
-        // MEDIAFIRE WEBVIEW SETTINGS
         WebSettings settings = webView.getSettings();
 
         settings.setJavaScriptEnabled(true);
@@ -134,18 +135,14 @@ public class Stage3MediaFireActivity extends Activity {
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
 
-        // Responsive MediaFire folder display
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
 
-        // Allow zooming to browse the complete file list
         settings.setSupportZoom(true);
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
 
-        // Use normal browser caching
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-
         settings.setAllowFileAccess(false);
 
         settings.setMixedContentMode(
@@ -162,8 +159,10 @@ public class Stage3MediaFireActivity extends Activity {
             @Override
             public void onProgressChanged(WebView view, int value) {
                 progress.setProgress(value);
-                progress.setVisibility(
-                        value >= 100 ? View.GONE : View.VISIBLE);
+
+                if (value < 100) {
+                    progress.setVisibility(View.VISIBLE);
+                }
             }
         });
 
@@ -174,6 +173,7 @@ public class Stage3MediaFireActivity extends Activity {
                     WebView view, String url,
                     android.graphics.Bitmap favicon) {
 
+                autoLoadingFolder = false;
                 status.setText("Loading MediaFire folder...");
                 progress.setVisibility(View.VISIBLE);
             }
@@ -182,11 +182,18 @@ public class Stage3MediaFireActivity extends Activity {
             public void onPageFinished(
                     WebView view, String url) {
 
-                status.setText(
-                        "Browse your MediaFire folder. " +
-                        "Open a song and tap its Download button.");
+                if (url == null ||
+                        !url.contains("mediafire.com")) {
+                    progress.setVisibility(View.GONE);
+                    return;
+                }
 
-                progress.setVisibility(View.GONE);
+                status.setText(
+                        "Loading the complete folder list. Please wait...");
+
+                progress.setVisibility(View.VISIBLE);
+
+                loadAllFolderEntries(view);
             }
 
             @Override
@@ -240,7 +247,9 @@ public class Stage3MediaFireActivity extends Activity {
                 new LinearLayout.LayoutParams(
                         -1, 0, 1f));
 
-        Button openFolder = makeButton("OPEN MY MEDIAFIRE SONG FOLDER");
+        Button openFolder = makeButton(
+                "OPEN MY MEDIAFIRE SONG FOLDER");
+
         openFolder.setOnClickListener(v ->
                 webView.loadUrl(FOLDER_URL));
 
@@ -250,6 +259,108 @@ public class Stage3MediaFireActivity extends Activity {
         setContentView(root);
 
         webView.loadUrl(FOLDER_URL);
+    }
+
+    /*
+     * Ask MediaFire's page to progressively scroll through
+     * its scrollable areas so lazy-loaded entries can appear.
+     *
+     * This does not download files. It only loads folder entries.
+     */
+    private void loadAllFolderEntries(WebView view) {
+
+        if (autoLoadingFolder) {
+            return;
+        }
+
+        autoLoadingFolder = true;
+
+        String script =
+                "(function() {" +
+                "if (window.__donut4uFolderLoader) return;" +
+                "window.__donut4uFolderLoader = true;" +
+
+                "var steps = 0;" +
+                "var unchanged = 0;" +
+                "var previous = '';" +
+                "var maxSteps = 100;" +
+
+                "function measure() {" +
+                "var root = document.scrollingElement || document.documentElement;" +
+                "var links = document.querySelectorAll('a').length;" +
+                "var height = Math.max(" +
+                "root.scrollHeight," +
+                "document.body ? document.body.scrollHeight : 0);" +
+                "return links + ':' + height;" +
+                "}" +
+
+                "function moveDown() {" +
+                "var root = document.scrollingElement || document.documentElement;" +
+                "var amount = Math.max(400, window.innerHeight * 0.75);" +
+
+                "window.scrollBy(0, amount);" +
+                "root.scrollTop = root.scrollTop + amount;" +
+
+                "var elements = document.querySelectorAll('*');" +
+                "for (var i = 0; i < elements.length; i++) {" +
+                "var el = elements[i];" +
+                "var style = window.getComputedStyle(el);" +
+                "if ((style.overflowY === 'auto' || style.overflowY === 'scroll')" +
+                " && el.scrollHeight > el.clientHeight + 100) {" +
+                "el.scrollTop = el.scrollTop + amount;" +
+                "}" +
+                "}" +
+                "}" +
+
+                "function finish() {" +
+                "window.scrollTo(0, 0);" +
+                "var root = document.scrollingElement || document.documentElement;" +
+                "root.scrollTop = 0;" +
+                "var elements = document.querySelectorAll('*');" +
+                "for (var i = 0; i < elements.length; i++) {" +
+                "var el = elements[i];" +
+                "var style = window.getComputedStyle(el);" +
+                "if (style.overflowY === 'auto' || style.overflowY === 'scroll') {" +
+                "el.scrollTop = 0;" +
+                "}" +
+                "}" +
+                "window.__donut4uFolderLoader = false;" +
+                "}" +
+
+                "function step() {" +
+                "steps++;" +
+                "var current = measure();" +
+                "if (current === previous) {" +
+                "unchanged++;" +
+                "} else {" +
+                "unchanged = 0;" +
+                "previous = current;" +
+                "}" +
+
+                "if (steps >= maxSteps || unchanged >= 8) {" +
+                "finish();" +
+                "return;" +
+                "}" +
+
+                "moveDown();" +
+                "setTimeout(step, 700);" +
+                "}" +
+
+                "setTimeout(step, 1000);" +
+                "})();";
+
+        view.evaluateJavascript(script, null);
+
+        view.postDelayed(() -> {
+            autoLoadingFolder = false;
+
+            progress.setVisibility(View.GONE);
+
+            status.setText(
+                    "Folder loading attempt finished. " +
+                    "Scroll down to browse the available songs.");
+
+        }, 75000);
     }
 
     private Button makeButton(String value) {
