@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -222,16 +221,6 @@ public final class Stage3MidiLyrics {
 
     /*
      * COUNTDOWN BEFORE VOCALS
-     *
-     * First vocal entrance:
-     * Shows 5, 4, 3, 2, 1 during the final five beats.
-     *
-     * Later vocal entrances:
-     * Shows the same countdown after an instrumental section
-     * or a sufficiently long gap between lyric events.
-     *
-     * Ordinary words and normal lyric lines do not trigger
-     * another countdown.
      */
     public int getCountdownNumberAtTick(long tick) {
         long now = Math.max(0L, tick);
@@ -332,8 +321,7 @@ public final class Stage3MidiLyrics {
      *
      * Five-line window.
      * Word spaces are preserved.
-     * Only the word containing the active timed event is green.
-     * Other words remain white through the TextView default color.
+     * Active timed words are green.
      */
     private FullResult build(long tick, long durationTicks) {
         SpannableStringBuilder output = new SpannableStringBuilder();
@@ -568,7 +556,6 @@ public final class Stage3MidiLyrics {
                 long tick = 0;
                 int runningStatus = 0;
 
-                // Each track and MIDI text type gets independent break state.
                 LyricBreakState textBreakState = new LyricBreakState();
                 LyricBreakState lyricBreakState = new LyricBreakState();
 
@@ -641,7 +628,7 @@ public final class Stage3MidiLyrics {
                             if (heading != null) {
                                 sectionEvents.add(new LyricEvent(
                                         tick, heading, sequence++,
-                                        false, false, false,
+                                        false, true, false,
                                         false, true, false));
                             }
                             continue;
@@ -781,6 +768,8 @@ public final class Stage3MidiLyrics {
                 }
             });
 
+            applyAutomaticFormatting(chosen, ppq);
+
             int line = 0;
             int stanza = 0;
 
@@ -807,6 +796,88 @@ public final class Stage3MidiLyrics {
 
         } catch (Exception ignored) {
             return empty();
+        }
+    }
+
+    /*
+     * AUTOMATIC KARAOKE LYRIC FORMATTING
+     *
+     * Used only when the MIDI/KAR has no explicit line or stanza breaks.
+     * Original event ticks and event order remain unchanged.
+     */
+    private static void applyAutomaticFormatting(
+            List<LyricEvent> lyricEvents,
+            int ppq) {
+
+        if (lyricEvents == null || lyricEvents.isEmpty()) return;
+
+        // Preserve original formatting whenever explicit breaks exist.
+        for (LyricEvent event : lyricEvents) {
+            if (!event.section
+                    && (event.lineBreak || event.stanzaBreak)) {
+                return;
+            }
+        }
+
+        int beat = Math.max(1, ppq);
+        int maximumCharacters = 34;
+        int maximumEventsPerLine = 7;
+
+        int lineCharacters = 0;
+        int lineEvents = 0;
+
+        LyricEvent previous = null;
+
+        for (LyricEvent current : lyricEvents) {
+
+            if (current.section) {
+                previous = null;
+                lineCharacters = 0;
+                lineEvents = 0;
+                continue;
+            }
+
+            if (previous != null) {
+
+                long gap = Math.max(0L, current.tick - previous.tick);
+
+                String previousText = previous.text.trim();
+                boolean sentenceEnd =
+                        previousText.endsWith(".")
+                        || previousText.endsWith("?")
+                        || previousText.endsWith("!");
+
+                boolean phraseEnd =
+                        previousText.endsWith(",")
+                        || previousText.endsWith(";")
+                        || previousText.endsWith(":");
+
+                boolean newStanza = gap >= beat * 6L;
+
+                boolean newLine =
+                        gap >= beat * 2L
+                        || sentenceEnd
+                        || phraseEnd
+                        || lineCharacters + current.text.length() + 1
+                                > maximumCharacters
+                        || lineEvents >= maximumEventsPerLine;
+
+                if (newStanza) {
+                    current.stanzaBreak = true;
+                    lineCharacters = 0;
+                    lineEvents = 0;
+
+                } else if (newLine) {
+                    current.lineBreak = true;
+                    lineCharacters = 0;
+                    lineEvents = 0;
+                }
+            }
+
+            lineCharacters += current.text.length() + 1;
+            lineEvents++;
+
+            previous = current;
         }
     }
 
@@ -874,9 +945,6 @@ public final class Stage3MidiLyrics {
     /*
      * Break markers are carried forward when a MIDI event ends
      * immediately after a slash, backslash, CR, or LF.
-     *
-     * The state is separate for MIDI text (0x01) and lyric (0x05)
-     * events, preventing one stream from changing the other.
      */
     private static List<LyricEvent> parseLyricEvents(
             String value,
@@ -949,7 +1017,6 @@ public final class Stage3MidiLyrics {
             pendingStanzaBreak = false;
         }
 
-        // Preserve unfinished breaks for the next MIDI lyric event.
         breakState.pendingLineBreak = pendingLineBreak;
         breakState.pendingStanzaBreak = pendingStanzaBreak;
 
@@ -1081,8 +1148,11 @@ public final class Stage3MidiLyrics {
         final String text;
         final int sequence;
         final boolean section;
-        final boolean stanzaBreak;
-        final boolean lineBreak;
+
+        // Mutable because automatic formatting assigns inferred breaks.
+        boolean stanzaBreak;
+        boolean lineBreak;
+
         final boolean spaceBefore;
         final boolean spaceAfter;
 
