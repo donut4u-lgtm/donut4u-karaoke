@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -122,7 +121,6 @@ public class Stage3SongbookActivity extends Activity {
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
 
-        // NEW: Open the built-in multi-file PostFile uploader.
         Button postFileButton =
                 makeButton("UPLOAD MIDI/KAR TO POSTFILE");
 
@@ -143,6 +141,28 @@ public class Stage3SongbookActivity extends Activity {
         });
 
         root.addView(postFileButton, buttonParams());
+
+        // MEDIAFIRE MIDI/KAR SEARCH AND DOWNLOAD
+        Button mediaFireButton =
+                makeButton("SEARCH / DOWNLOAD MIDI/KAR (MEDIAFIRE)");
+
+        mediaFireButton.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(
+                        Stage3SongbookActivity.this,
+                        Stage3MediaFireActivity.class));
+            } catch (Exception e) {
+                android.util.Log.e("Stage3Songbook",
+                        "Could not open MediaFire search.", e);
+
+                Toast.makeText(
+                        Stage3SongbookActivity.this,
+                        "Could not open MediaFire search.",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+
+        root.addView(mediaFireButton, buttonParams());
 
         Button spreadsheetButton =
                 makeButton("IMPORT SONGLIST (XLS / XLSX)");
