@@ -2,15 +2,20 @@
 package com.donut4u.karaoke;
 
 import android.app.Activity;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.View;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -20,30 +25,30 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
+import java.net.URLDecoder;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class Stage3MediaFireActivity extends Activity {
 
+    private static final String FOLDER_URL =
+            "https://www.mediafire.com/folder/rmpdn8g24drnm/File_1";
+
     private static final String PREFS =
             "donut4u_stage3_songbook";
+
     private static final String SONGS_KEY = "songs_json";
 
-    private static final String TEST_LINK =
-            "https://www.mediafire.com/file/vx2ly4u4j1ky6tc/A-Ha_-_Take_On_Me.mid/file";
-
-    private EditText searchInput;
-    private EditText linkInput;
+    private WebView webView;
     private TextView status;
     private ProgressBar progress;
+    private Button backButton;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -59,97 +64,179 @@ public class Stage3MediaFireActivity extends Activity {
     private void buildScreen() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(14), dp(16), dp(12));
+        root.setPadding(dp(8), dp(8), dp(8), dp(8));
         root.setBackgroundColor(Color.rgb(5, 24, 15));
 
         TextView title = new TextView(this);
         title.setText("DONUT4U KARAOKE");
         title.setTextColor(Color.rgb(80, 255, 150));
-        title.setTextSize(24);
+        title.setTextSize(22);
         title.setTypeface(null, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
-        root.addView(title, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        root.addView(title,
+                new LinearLayout.LayoutParams(-1, dp(42)));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("STAGE 3 • MEDIAFIRE MIDI/KAR");
+        subtitle.setText("STAGE 3 • MEDIAFIRE SONGBOOK");
         subtitle.setTextColor(Color.WHITE);
-        subtitle.setTextSize(15);
         subtitle.setGravity(Gravity.CENTER);
-        root.addView(subtitle);
+        subtitle.setTextSize(13);
 
-        TextView searchLabel = label("1. SEARCH FOR A KARAOKE SONG");
-        root.addView(searchLabel);
+        root.addView(subtitle,
+                new LinearLayout.LayoutParams(-1, dp(28)));
 
-        searchInput = new EditText(this);
-        searchInput.setSingleLine(true);
-        searchInput.setTextColor(Color.WHITE);
-        searchInput.setHintTextColor(Color.LTGRAY);
-        searchInput.setHint("Song title or singer");
-        root.addView(searchInput, new LinearLayout.LayoutParams(-1, dp(50)));
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
 
-        Button searchButton = makeButton("SEARCH MEDIAFIRE SONGS");
-        searchButton.setOnClickListener(v -> openSearch());
-        root.addView(searchButton, buttonParams());
+        Button reload = makeButton("RELOAD");
+        reload.setOnClickListener(v ->
+                webView.loadUrl(FOLDER_URL));
 
-        TextView linkLabel = label("2. MEDIAFIRE FILE LINK");
-        root.addView(linkLabel);
+        backButton = makeButton("BACK");
+        backButton.setOnClickListener(v -> goBack());
 
-        linkInput = new EditText(this);
-        linkInput.setTextColor(Color.WHITE);
-        linkInput.setHintTextColor(Color.LTGRAY);
-        linkInput.setTextSize(13);
-        linkInput.setHint("Paste a public MediaFire file link");
-        linkInput.setMinLines(2);
-        linkInput.setMaxLines(3);
-        linkInput.setGravity(Gravity.TOP);
-        linkInput.setText(TEST_LINK);
-        root.addView(linkInput,
-                new LinearLayout.LayoutParams(-1, dp(82)));
+        controls.addView(reload,
+                new LinearLayout.LayoutParams(0, dp(44), 1));
 
-        Button downloadButton =
-                makeButton("DOWNLOAD MIDI/KAR & ADD TO SONGBOOK");
-        downloadButton.setOnClickListener(v -> downloadSong());
-        root.addView(downloadButton, buttonParams());
+        controls.addView(backButton,
+                new LinearLayout.LayoutParams(0, dp(44), 1));
 
-        progress = new ProgressBar(this);
-        progress.setVisibility(android.view.View.GONE);
+        root.addView(controls);
+
+        progress = new ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+
+        progress.setMax(100);
+        progress.setProgress(0);
+
         root.addView(progress,
-                new LinearLayout.LayoutParams(-1, dp(5)));
+                new LinearLayout.LayoutParams(-1, dp(4)));
 
         status = new TextView(this);
-        status.setTextColor(Color.WHITE);
-        status.setTextSize(13);
-        status.setPadding(0, dp(12), 0, dp(12));
-        status.setText(
-                "Search for a public MIDI/KAR file, paste its link, " +
-                "and download it into your Stage 3 songbook.");
+        status.setTextColor(Color.rgb(150, 255, 180));
+        status.setTextSize(12);
+        status.setPadding(dp(4), dp(5), dp(4), dp(5));
+        status.setText("Opening your MediaFire song folder...");
+
         root.addView(status);
 
-        android.view.View spacer = new android.view.View(this);
-        root.addView(spacer,
-                new LinearLayout.LayoutParams(1, 0, 1f));
+        webView = new WebView(this);
 
-        Button back = makeButton("BACK TO SONGBOOK");
-        back.setOnClickListener(v -> finish());
-        root.addView(back, buttonParams());
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setLoadsImagesAutomatically(true);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setSupportMultipleWindows(false);
+        settings.setAllowFileAccess(false);
+        settings.setMixedContentMode(
+                WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+
+        CookieManager cookies = CookieManager.getInstance();
+        cookies.setAcceptCookie(true);
+        cookies.setAcceptThirdPartyCookies(webView, true);
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int value) {
+                progress.setProgress(value);
+                progress.setVisibility(
+                        value >= 100 ? View.GONE : View.VISIBLE);
+            }
+        });
+
+        webView.setWebViewClient(new WebViewClient() {
+
+            @Override
+            public void onPageStarted(
+                    WebView view, String url,
+                    android.graphics.Bitmap favicon) {
+
+                status.setText("Loading MediaFire folder...");
+                progress.setVisibility(View.VISIBLE);
+            }
+
+            @Override
+            public void onPageFinished(
+                    WebView view, String url) {
+
+                status.setText(
+                        "Browse your MediaFire folder. " +
+                        "Open a song and tap its Download button.");
+
+                progress.setVisibility(View.GONE);
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, String url) {
+
+                Uri uri = Uri.parse(url);
+                String scheme = uri.getScheme();
+
+                if (scheme == null ||
+                        (!scheme.equalsIgnoreCase("https")
+                        && !scheme.equalsIgnoreCase("http"))) {
+                    return true;
+                }
+
+                String host = uri.getHost();
+
+                if (host == null ||
+                        !(host.equalsIgnoreCase("mediafire.com")
+                        || host.toLowerCase(Locale.ROOT)
+                        .endsWith(".mediafire.com")
+                        || host.equalsIgnoreCase("google.com")
+                        || host.toLowerCase(Locale.ROOT)
+                        .endsWith(".google.com"))) {
+                    return true;
+                }
+
+                return false;
+            }
+        });
+
+        webView.setDownloadListener(
+                new DownloadListener() {
+                    @Override
+                    public void onDownloadStart(
+                            String url,
+                            String userAgent,
+                            String contentDisposition,
+                            String mimeType,
+                            long contentLength) {
+
+                        startDownload(
+                                url,
+                                userAgent,
+                                contentDisposition,
+                                mimeType);
+                    }
+                });
+
+        root.addView(webView,
+                new LinearLayout.LayoutParams(
+                        -1, 0, 1f));
+
+        Button openFolder = makeButton("OPEN MY MEDIAFIRE SONG FOLDER");
+        openFolder.setOnClickListener(v ->
+                webView.loadUrl(FOLDER_URL));
+
+        root.addView(openFolder,
+                new LinearLayout.LayoutParams(-1, dp(46)));
 
         setContentView(root);
-    }
 
-    private TextView label(String value) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextColor(Color.rgb(140, 255, 180));
-        view.setTextSize(14);
-        view.setPadding(0, dp(12), 0, dp(4));
-        return view;
+        webView.loadUrl(FOLDER_URL);
     }
 
     private Button makeButton(String value) {
         Button button = new Button(this);
         button.setText(value);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(13);
+        button.setTextSize(12);
         button.setAllCaps(false);
         button.setBackgroundTintList(
                 android.content.res.ColorStateList.valueOf(
@@ -157,118 +244,22 @@ public class Stage3MediaFireActivity extends Activity {
         return button;
     }
 
-    private LinearLayout.LayoutParams buttonParams() {
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(-1, dp(48));
-        params.bottomMargin = dp(8);
-        return params;
+    private void goBack() {
+        if (webView != null && webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            finish();
+        }
     }
 
-    private void openSearch() {
-        String query = searchInput.getText().toString().trim();
+    @Override
+    public void onBackPressed() {
+        goBack();
+    }
 
-        if (query.isEmpty()) {
-            searchInput.setError("Enter a song title");
-            return;
-        }
-
+    private boolean isAllowedMediaFireUrl(String address) {
         try {
-            String text = URLEncoder.encode(
-                    "site:mediafire.com/file MIDI KAR " + query,
-                    "UTF-8");
-
-            Intent intent = new Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://www.google.com/search?q=" + text));
-
-            startActivity(intent);
-
-            status.setText(
-                    "Choose a public MediaFire MIDI/KAR result. " +
-                    "Copy its individual file link and return here.");
-
-        } catch (Exception e) {
-            status.setText("Could not open web search.");
-        }
-    }
-
-    private void downloadSong() {
-        String link = linkInput.getText().toString().trim();
-
-        if (!isMediaFireLink(link)) {
-            linkInput.setError(
-                    "Enter an HTTPS MediaFire file link");
-            return;
-        }
-
-        progress.setVisibility(android.view.View.VISIBLE);
-        status.setText("Resolving MediaFire download link...");
-
-        new Thread(() -> {
-            File downloaded = null;
-
-            try {
-                String directUrl = resolveDownloadUrl(link);
-
-                runOnUiThread(() ->
-                        status.setText("Downloading MIDI/KAR file..."));
-
-                downloaded = downloadFile(directUrl);
-
-                String fileName = downloaded.getName();
-                String title = removeExtension(fileName);
-                String localUri = Uri.fromFile(downloaded).toString();
-
-                String number = registerSong(title, localUri);
-
-                File finalFile = downloaded;
-
-                runOnUiThread(() -> {
-                    progress.setVisibility(
-                            android.view.View.GONE);
-
-                    Stage3SongQueue.initialize(this);
-
-                    Stage3SongQueue.setNowPlaying(
-                            new Stage3SongQueue.QueuedSong(
-                                    number,
-                                    title,
-                                    Uri.fromFile(finalFile).toString(),
-                                    "MIDI/KAR"));
-
-                    status.setText(
-                            "Downloaded and registered:\n" + title);
-
-                    Toast.makeText(
-                            this,
-                            "Opening Stage 3 player",
-                            Toast.LENGTH_LONG).show();
-
-                    startActivity(new Intent(
-                            this,
-                            Stage3PlayerActivity.class));
-                });
-
-            } catch (Exception e) {
-                if (downloaded != null && downloaded.exists()) {
-                    downloaded.delete();
-                }
-
-                String message = e.getMessage() == null
-                        ? "Unknown download error" : e.getMessage();
-
-                runOnUiThread(() -> {
-                    progress.setVisibility(
-                            android.view.View.GONE);
-                    status.setText("DOWNLOAD FAILED:\n" + message);
-                });
-            }
-        }, "Donut4U-MediaFire").start();
-    }
-
-    private boolean isMediaFireLink(String value) {
-        try {
-            Uri uri = Uri.parse(value);
+            Uri uri = Uri.parse(address);
             String host = uri.getHost();
 
             return "https".equalsIgnoreCase(uri.getScheme())
@@ -281,196 +272,150 @@ public class Stage3MediaFireActivity extends Activity {
         }
     }
 
-    private String resolveDownloadUrl(String pageUrl)
-            throws Exception {
+    private void startDownload(
+            String address,
+            String userAgent,
+            String contentDisposition,
+            String mimeType) {
 
-        HttpURLConnection connection = null;
-
-        try {
-            connection = openConnection(pageUrl);
-            connection.connect();
-
-            int response = connection.getResponseCode();
-
-            if (response < 200 || response >= 400) {
-                throw new Exception(
-                        "MediaFire page returned HTTP " + response);
-            }
-
-            String finalUrl = connection.getURL().toString();
-            String contentType = connection.getContentType();
-
-            // Some links redirect directly to the file.
-            if (contentType != null
-                    && !contentType.toLowerCase(Locale.ROOT)
-                    .contains("text/html")
-                    && hasMidiExtension(finalUrl)) {
-                return finalUrl;
-            }
-
-            String html = readPage(connection.getInputStream());
-
-            // Locate the MediaFire download button, regardless
-            // of the order of its HTML attributes.
-            Pattern anchorPattern = Pattern.compile(
-                    "<a\\b[^>]*id\\s*=\\s*[\"']downloadButton[\"'][^>]*>",
-                    Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-
-            Matcher anchor = anchorPattern.matcher(html);
-
-            if (anchor.find()) {
-                Matcher href = Pattern.compile(
-                        "href\\s*=\\s*[\"']([^\"']+)[\"']",
-                        Pattern.CASE_INSENSITIVE)
-                        .matcher(anchor.group());
-
-                if (href.find()) {
-                    String candidate =
-                            cleanHtmlUrl(href.group(1));
-
-                    if (isAllowedDownloadHost(candidate)) {
-                        return candidate;
-                    }
-                }
-            }
-
-            // Fallback: look for a direct MediaFire download host.
-            Pattern directPattern = Pattern.compile(
-                    "https?://download[0-9]+\\.mediafire\\.com/[^\"'\\s<>]+",
-                    Pattern.CASE_INSENSITIVE);
-
-            Matcher direct = directPattern.matcher(html);
-
-            if (direct.find()) {
-                String candidate =
-                        cleanHtmlUrl(direct.group());
-
-                if (isAllowedDownloadHost(candidate)) {
-                    return candidate;
-                }
-            }
-
-            throw new Exception(
-                    "MediaFire did not expose a direct download link. " +
-                    "It may require browser verification. Open the link " +
-                    "in your browser and try again with a direct file link.");
-
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
+        if (!isAllowedMediaFireUrl(address)) {
+            status.setText(
+                    "Download link is not a recognized MediaFire link.");
+            return;
         }
-    }
 
-    private HttpURLConnection openConnection(String address)
-            throws Exception {
+        status.setText("Preparing MIDI/KAR download...");
+        progress.setVisibility(View.VISIBLE);
+        progress.setIndeterminate(true);
 
-        URL url = new URL(address);
+        new Thread(() -> {
+            File downloaded = null;
 
-        HttpURLConnection connection =
-                (HttpURLConnection) url.openConnection();
+            try {
+                downloaded = downloadFile(
+                        address,
+                        userAgent,
+                        contentDisposition,
+                        mimeType);
 
-        connection.setConnectTimeout(20000);
-        connection.setReadTimeout(45000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty(
-                "User-Agent",
-                "Mozilla/5.0 (Linux; Android 13) " +
-                "AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36");
+                File finalFile = downloaded;
+                String title = removeExtension(
+                        finalFile.getName());
 
-        return connection;
-    }
+                String localUri =
+                        Uri.fromFile(finalFile).toString();
 
-    private String readPage(InputStream input)
-            throws Exception {
+                String number = registerSong(title, localUri);
 
-        try (InputStream in = new BufferedInputStream(input);
-             ByteArrayOutputStream out =
-                     new ByteArrayOutputStream()) {
+                runOnUiThread(() -> {
+                    progress.setIndeterminate(false);
+                    progress.setVisibility(View.GONE);
 
-            byte[] buffer = new byte[8192];
-            int count;
-            int total = 0;
+                    Stage3SongQueue.initialize(this);
 
-            while ((count = in.read(buffer)) != -1) {
-                total += count;
+                    Stage3SongQueue.setNowPlaying(
+                            new Stage3SongQueue.QueuedSong(
+                                    number,
+                                    title,
+                                    localUri,
+                                    "MIDI/KAR"));
 
-                if (total > 4 * 1024 * 1024) {
-                    break;
+                    status.setText(
+                            "Downloaded successfully:\n" + title);
+
+                    Toast.makeText(
+                            this,
+                            "Song added to Stage 3 songbook",
+                            Toast.LENGTH_LONG).show();
+
+                    startActivity(new android.content.Intent(
+                            this,
+                            Stage3PlayerActivity.class));
+                });
+
+            } catch (Exception e) {
+                if (downloaded != null && downloaded.exists()) {
+                    downloaded.delete();
                 }
 
-                out.write(buffer, 0, count);
+                String message = e.getMessage() == null
+                        ? "Unknown download error"
+                        : e.getMessage();
+
+                runOnUiThread(() -> {
+                    progress.setIndeterminate(false);
+                    progress.setVisibility(View.GONE);
+                    status.setText("DOWNLOAD FAILED:\n" + message);
+                });
             }
-
-            return out.toString("UTF-8");
-        }
+        }, "Donut4U-MediaFire").start();
     }
 
-    private String cleanHtmlUrl(String value) {
-        return value.replace("&amp;", "&")
-                .replace("&#38;", "&")
-                .replace("\\/", "/")
-                .trim();
-    }
-
-    private boolean isAllowedDownloadHost(String value) {
-        try {
-            Uri uri = Uri.parse(value);
-            String host = uri.getHost();
-
-            return "https".equalsIgnoreCase(uri.getScheme())
-                    && host != null
-                    && host.toLowerCase(Locale.ROOT)
-                    .matches("download[0-9]+\\.mediafire\\.com");
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private boolean hasMidiExtension(String value) {
-        String lower = value.toLowerCase(Locale.ROOT);
-        return lower.contains(".mid")
-                || lower.contains(".midi")
-                || lower.contains(".kar");
-    }
-
-    private File downloadFile(String address)
-            throws Exception {
-
-        if (!isAllowedDownloadHost(address)) {
-            throw new Exception(
-                    "The resolved download host is not a MediaFire file host.");
-        }
+    private File downloadFile(
+            String address,
+            String userAgent,
+            String contentDisposition,
+            String mimeType) throws Exception {
 
         HttpURLConnection connection = null;
         File outputFile = null;
 
         try {
-            connection = openConnection(address);
+            URL url = new URL(address);
+
+            connection = (HttpURLConnection)
+                    url.openConnection();
+
+            connection.setConnectTimeout(25000);
+            connection.setReadTimeout(60000);
+            connection.setInstanceFollowRedirects(true);
+
+            connection.setRequestProperty(
+                    "User-Agent",
+                    userAgent == null || userAgent.isEmpty()
+                            ? webView.getSettings().getUserAgentString()
+                            : userAgent);
+
+            connection.setRequestProperty(
+                    "Referer", FOLDER_URL);
+
+            String cookie = CookieManager.getInstance()
+                    .getCookie(address);
+
+            if (cookie != null && !cookie.isEmpty()) {
+                connection.setRequestProperty("Cookie", cookie);
+            }
+
             connection.connect();
 
             int response = connection.getResponseCode();
 
             if (response < 200 || response >= 300) {
                 throw new Exception(
-                        "File download returned HTTP " + response);
+                        "MediaFire download returned HTTP " + response);
             }
 
-            String contentType = connection.getContentType();
+            String fileName = getFileName(
+                    contentDisposition,
+                    connection.getHeaderField("Content-Disposition"),
+                    address);
 
-            if (contentType != null
-                    && contentType.toLowerCase(Locale.ROOT)
-                    .contains("text/html")) {
-                throw new Exception(
-                        "MediaFire returned a web page instead of a file.");
-            }
-
-            String fileName = getFileName(connection, address);
             String extension = getMidiExtension(fileName);
 
             if (extension.isEmpty()) {
                 throw new Exception(
-                        "The file is not identified as MID, MIDI or KAR.");
+                        "This download is not identified as MID, MIDI or KAR.");
+            }
+
+            String type = connection.getContentType();
+
+            if ((type != null && type.toLowerCase(Locale.ROOT)
+                    .contains("text/html"))
+                    || (mimeType != null && mimeType.toLowerCase(Locale.ROOT)
+                    .contains("text/html"))) {
+                throw new Exception(
+                        "MediaFire returned a web page instead of a song file. " +
+                        "The download may require browser verification.");
             }
 
             File folder = new File(
@@ -478,16 +423,11 @@ public class Stage3MediaFireActivity extends Activity {
 
             if (!folder.exists() && !folder.mkdirs()) {
                 throw new Exception(
-                        "Could not create the Stage 3 download folder.");
+                        "Could not create Stage 3 download folder.");
             }
 
             String safeName = fileName.replaceAll(
                     "[^A-Za-z0-9._-]", "_");
-
-            if (!safeName.toLowerCase(Locale.ROOT)
-                    .endsWith(extension)) {
-                safeName += extension;
-            }
 
             outputFile = new File(
                     folder,
@@ -518,7 +458,7 @@ public class Stage3MediaFireActivity extends Activity {
 
             if (total < 14 || !hasMidiHeader(outputFile)) {
                 throw new Exception(
-                        "Downloaded data is not a valid MIDI/KAR file.");
+                        "The downloaded file is not a valid MIDI/KAR file.");
             }
 
             return outputFile;
@@ -534,6 +474,51 @@ public class Stage3MediaFireActivity extends Activity {
                 connection.disconnect();
             }
         }
+    }
+
+    private String getFileName(
+            String firstDisposition,
+            String secondDisposition,
+            String address) {
+
+        String disposition = firstDisposition != null
+                ? firstDisposition : secondDisposition;
+
+        if (disposition != null) {
+            Matcher matcher = Pattern.compile(
+                    "filename\\*?=(?:UTF-8''|\"?)([^\";]+)",
+                    Pattern.CASE_INSENSITIVE)
+                    .matcher(disposition);
+
+            if (matcher.find()) {
+                try {
+                    return URLDecoder.decode(
+                            matcher.group(1).trim(), "UTF-8");
+                } catch (Exception ignored) {
+                    return matcher.group(1).trim();
+                }
+            }
+        }
+
+        Uri uri = Uri.parse(address);
+        String path = uri.getLastPathSegment();
+
+        if (path != null && getMidiExtension(path).length() > 0) {
+            return Uri.decode(path);
+        }
+
+        throw new IllegalArgumentException(
+                "MediaFire did not provide a MIDI/KAR filename.");
+    }
+
+    private String getMidiExtension(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+
+        if (lower.endsWith(".midi")) return ".midi";
+        if (lower.endsWith(".mid")) return ".mid";
+        if (lower.endsWith(".kar")) return ".kar";
+
+        return "";
     }
 
     private boolean hasMidiHeader(File file) {
@@ -554,44 +539,6 @@ public class Stage3MediaFireActivity extends Activity {
         } catch (Exception e) {
             return false;
         }
-    }
-
-    private String getMidiExtension(String name) {
-        String lower = name.toLowerCase(Locale.ROOT);
-
-        if (lower.endsWith(".midi")) return ".midi";
-        if (lower.endsWith(".mid")) return ".mid";
-        if (lower.endsWith(".kar")) return ".kar";
-
-        return "";
-    }
-
-    private String getFileName(
-            HttpURLConnection connection,
-            String address) {
-
-        String disposition =
-                connection.getHeaderField("Content-Disposition");
-
-        if (disposition != null) {
-            Matcher matcher = Pattern.compile(
-                    "filename\\*?=(?:UTF-8''|\"?)([^\";]+)",
-                    Pattern.CASE_INSENSITIVE)
-                    .matcher(disposition);
-
-            if (matcher.find()) {
-                return Uri.decode(matcher.group(1).trim());
-            }
-        }
-
-        Uri uri = Uri.parse(address);
-        String path = uri.getLastPathSegment();
-
-        if (path != null && path.contains(".")) {
-            return Uri.decode(path);
-        }
-
-        return "mediafire_song.mid";
     }
 
     private String removeExtension(String name) {
