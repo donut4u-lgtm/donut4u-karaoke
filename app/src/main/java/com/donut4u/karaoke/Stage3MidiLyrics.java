@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -219,20 +220,78 @@ public final class Stage3MidiLyrics {
                 && tick < upcoming.tick - ppq / 2L;
     }
 
+    /*
+     * COUNTDOWN BEFORE VOCALS
+     *
+     * First vocal entrance:
+     * Shows 5, 4, 3, 2, 1 during the final five beats.
+     *
+     * Later vocal entrances:
+     * Shows the same countdown after an instrumental section
+     * or a sufficiently long gap between lyric events.
+     *
+     * Ordinary words and normal lyric lines do not trigger
+     * another countdown.
+     */
     public int getCountdownNumberAtTick(long tick) {
-        int first = firstLyricIndex();
-        if (first < 0) return 0;
+        long now = Math.max(0L, tick);
+        long beat = Math.max(1L, ppq);
+        long countdownWindow = beat * 5L;
 
-        long start = events.get(first).tick;
-        long remaining = start - Math.max(0, tick);
+        int previousLyric = -1;
 
-        if (remaining <= 0) return 0;
+        for (int i = 0; i < events.size(); i++) {
+            LyricEvent candidate = events.get(i);
 
-        long beat = Math.max(1, ppq);
-        if (remaining > beat * 5L) return 0;
+            if (candidate.section) continue;
 
-        return (int) Math.max(
-                1, Math.min(5, (remaining + beat - 1) / beat));
+            if (candidate.tick > now) {
+                long remaining = candidate.tick - now;
+
+                if (remaining <= 0L || remaining > countdownWindow) {
+                    return 0;
+                }
+
+                boolean vocalEntrance = previousLyric < 0;
+
+                if (previousLyric >= 0) {
+                    LyricEvent previous = events.get(previousLyric);
+                    long gap = candidate.tick - previous.tick;
+
+                    vocalEntrance = gap >= countdownWindow
+                            || hasInstrumentalSectionBetween(
+                                    previousLyric, i);
+                }
+
+                if (!vocalEntrance) return 0;
+
+                return (int) Math.max(
+                        1L,
+                        Math.min(
+                                5L,
+                                (remaining + beat - 1L) / beat
+                        )
+                );
+            }
+
+            previousLyric = i;
+        }
+
+        return 0;
+    }
+
+    private boolean hasInstrumentalSectionBetween(int start, int end) {
+        for (int i = Math.max(0, start + 1);
+             i < end && i < events.size(); i++) {
+
+            LyricEvent event = events.get(i);
+
+            if (event.section && isInstrumental(event.text)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private int firstLyricIndex() {
