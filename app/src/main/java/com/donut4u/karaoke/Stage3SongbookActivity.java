@@ -1224,8 +1224,16 @@ public class Stage3SongbookActivity extends Activity {
     protected void onResume() {
         super.onResume();
 
-        if (songList != null && searchInput != null) {
+        if (preferences != null
+                && songList != null
+                && searchInput != null) {
+
             Stage3SongQueue.initialize(this);
+
+            // Reload saved songs, including newly registered downloads.
+            loadSongs();
+
+            // Keep the current search text while refreshing the list.
             renderSongs(searchInput.getText().toString());
         }
     }
