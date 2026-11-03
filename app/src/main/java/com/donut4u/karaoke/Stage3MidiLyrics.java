@@ -319,9 +319,9 @@ public final class Stage3MidiLyrics {
     /*
      * KARAOKE LYRIC RENDERER
      *
-     * Five-line window.
-     * Word spaces are preserved.
-     * Active timed words are green.
+     * Displays a five-line window.
+     * Preserves explicit spacing and inferred word boundaries.
+     * The currently sung lyric is highlighted green.
      */
     private FullResult build(long tick, long durationTicks) {
         SpannableStringBuilder output = new SpannableStringBuilder();
@@ -404,7 +404,9 @@ public final class Stage3MidiLyrics {
             if (previousEvent >= 0) {
                 LyricEvent previous = events.get(previousEvent);
 
-                if (previous.spaceAfter || e.spaceBefore) {
+                if (previous.spaceAfter
+                        || e.spaceBefore
+                        || e.inferredSpaceBefore) {
                     output.append(' ');
                 }
             }
@@ -451,7 +453,8 @@ public final class Stage3MidiLyrics {
                         || starts[previousIndex] < 0
                         || ends[previousIndex] <= starts[previousIndex]
                         || previous.spaceAfter
-                        || current.spaceBefore) {
+                        || current.spaceBefore
+                        || current.inferredSpaceBefore) {
                     break;
                 }
 
@@ -470,7 +473,8 @@ public final class Stage3MidiLyrics {
                         || starts[nextIndex] < 0
                         || ends[lastWordEvent] <= starts[lastWordEvent]
                         || current.spaceAfter
-                        || next.spaceBefore) {
+                        || next.spaceBefore
+                        || next.inferredSpaceBefore) {
                     break;
                 }
 
@@ -802,8 +806,9 @@ public final class Stage3MidiLyrics {
     /*
      * AUTOMATIC KARAOKE LYRIC FORMATTING
      *
-     * Used only when the MIDI/KAR has no explicit line or stanza breaks.
-     * Original event ticks and event order remain unchanged.
+     * Keeps every lyric event's original tick and order.
+     * Adds inferred word boundaries and display line/stanza breaks.
+     * Explicit breaks already present in the file are preserved.
      */
     private static void applyAutomaticFormatting(
             List<LyricEvent> lyricEvents,
@@ -811,7 +816,7 @@ public final class Stage3MidiLyrics {
 
         if (lyricEvents == null || lyricEvents.isEmpty()) return;
 
-        // Preserve original formatting whenever explicit breaks exist.
+        // Do not override lyric files that already contain line breaks.
         for (LyricEvent event : lyricEvents) {
             if (!event.section
                     && (event.lineBreak || event.stanzaBreak)) {
@@ -819,9 +824,13 @@ public final class Stage3MidiLyrics {
             }
         }
 
-        int beat = Math.max(1, ppq);
-        int maximumCharacters = 34;
-        int maximumEventsPerLine = 7;
+        long beat = Math.max(1L, ppq);
+
+        // Target visual line length; actual view width may vary by device.
+        int maximumCharacters = 32;
+
+        // Avoid excessively long lines even when events are short fragments.
+        int maximumEventsPerLine = 12;
 
         int lineCharacters = 0;
         int lineEvents = 0;
@@ -838,32 +847,66 @@ public final class Stage3MidiLyrics {
             }
 
             if (previous != null) {
-
                 long gap = Math.max(0L, current.tick - previous.tick);
 
                 String previousText = previous.text.trim();
+
                 boolean sentenceEnd =
                         previousText.endsWith(".")
                         || previousText.endsWith("?")
-                        || previousText.endsWith("!");
+                        || previousText.endsWith("!")
+                        || previousText.endsWith("…");
 
                 boolean phraseEnd =
                         previousText.endsWith(",")
                         || previousText.endsWith(";")
                         || previousText.endsWith(":");
 
-                boolean newStanza = gap >= beat * 6L;
+                boolean explicitWordBoundary =
+                        previous.spaceAfter || current.spaceBefore;
 
-                boolean newLine =
-                        gap >= beat * 2L
+                /*
+                 * MIDI lyric tracks often omit spaces between lyric events.
+                 * A modest timing gap is used as a likely word/phrase boundary.
+                 * Punctuation and explicit spaces take priority.
+                 */
+                boolean timingWordBoundary =
+                        gap >= Math.max(1L, beat / 3L);
+
+                boolean inferredWordBoundary =
+                        explicitWordBoundary
                         || sentenceEnd
                         || phraseEnd
-                        || lineCharacters + current.text.length() + 1
-                                > maximumCharacters
-                        || lineEvents >= maximumEventsPerLine;
+                        || timingWordBoundary;
+
+                if (inferredWordBoundary
+                        && !explicitWordBoundary) {
+                    current.inferredSpaceBefore = true;
+                }
+
+                boolean newStanza =
+                        gap >= beat * 8L
+                        || (sentenceEnd && gap >= beat * 4L);
+
+                boolean lineWouldOverflow =
+                        lineCharacters
+                        + current.text.length()
+                        + (inferredWordBoundary ? 1 : 0)
+                        > maximumCharacters;
+
+                boolean lineTooManyEvents =
+                        lineEvents >= maximumEventsPerLine;
+
+                boolean newLine =
+                        sentenceEnd
+                        || phraseEnd
+                        || (inferredWordBoundary
+                                && (lineWouldOverflow
+                                || lineTooManyEvents));
 
                 if (newStanza) {
                     current.stanzaBreak = true;
+                    current.lineBreak = false;
                     lineCharacters = 0;
                     lineEvents = 0;
 
@@ -874,7 +917,14 @@ public final class Stage3MidiLyrics {
                 }
             }
 
-            lineCharacters += current.text.length() + 1;
+            int addedLength = current.text.length();
+
+            if (current.inferredSpaceBefore
+                    || current.spaceBefore) {
+                addedLength++;
+            }
+
+            lineCharacters += addedLength;
             lineEvents++;
 
             previous = current;
@@ -1156,6 +1206,9 @@ public final class Stage3MidiLyrics {
         final boolean spaceBefore;
         final boolean spaceAfter;
 
+        // Added by automatic formatting when a likely word boundary is found.
+        boolean inferredSpaceBefore;
+
         int line;
         int stanza;
 
@@ -1178,6 +1231,7 @@ public final class Stage3MidiLyrics {
             this.stanzaBreak = stanzaBreak;
             this.spaceBefore = spaceBefore;
             this.spaceAfter = spaceAfter;
+            this.inferredSpaceBefore = false;
         }
     }
 
