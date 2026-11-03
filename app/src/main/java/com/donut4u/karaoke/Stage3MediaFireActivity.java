@@ -123,16 +123,36 @@ public class Stage3MediaFireActivity extends Activity {
 
         webView = new WebView(this);
 
+        // MEDIAFIRE WEBVIEW SETTINGS
         WebSettings settings = webView.getSettings();
+
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
+
         settings.setLoadsImagesAutomatically(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
+
+        // Responsive MediaFire folder display
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+
+        // Allow zooming to browse the complete file list
+        settings.setSupportZoom(true);
+        settings.setBuiltInZoomControls(true);
+        settings.setDisplayZoomControls(false);
+
+        // Use normal browser caching
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+
         settings.setAllowFileAccess(false);
+
         settings.setMixedContentMode(
                 WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+
+        webView.setVerticalScrollBarEnabled(true);
+        webView.setHorizontalScrollBarEnabled(false);
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
