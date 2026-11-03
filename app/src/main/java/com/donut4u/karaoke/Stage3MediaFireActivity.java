@@ -1,8 +1,8 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -233,11 +233,7 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     /*
-     * LOAD ALL MEDIAFIRE CHUNKS.
-     *
-     * Important: a chunk with no MIDI/KAR songs does not
-     * automatically mean the folder has ended.
-     * Use MediaFire's more_chunks value when available.
+     * LOAD ALL MEDIAFIRE FOLDER CHUNKS.
      */
 
     private void loadFolder() {
@@ -314,7 +310,9 @@ public class Stage3MediaFireActivity extends Activity {
                         renderSongs();
                     });
 
-                    if (!result.moreChunks || entries.length() == 0) {
+                    // Do not stop just because a chunk contains
+                    // no MIDI/KAR files. MediaFire may have more.
+                    if (!result.moreChunks) {
                         break;
                     }
                 }
@@ -391,14 +389,16 @@ public class Stage3MediaFireActivity extends Activity {
             connection.setInstanceFollowRedirects(true);
 
             connection.setRequestProperty(
-                    "User-Agent",
-                    userAgent());
+                    "User-Agent", userAgent());
 
             connection.setRequestProperty(
                     "Referer", FOLDER_URL);
 
             connection.setRequestProperty(
                     "Accept", "application/json");
+
+            connection.setRequestProperty(
+                    "Accept-Encoding", "identity");
 
             int response = connection.getResponseCode();
 
@@ -462,7 +462,6 @@ public class Stage3MediaFireActivity extends Activity {
             if (more != null) {
                 hasMore = more;
             } else {
-                // Fallback if MediaFire omits more_chunks.
                 hasMore = files.length() >= CHUNK_SIZE;
             }
 
@@ -609,7 +608,7 @@ public class Stage3MediaFireActivity extends Activity {
 
         return new MediaSong(
                 fileName,
-                downloadUrl,
+                cleanUrl(downloadUrl),
                 quickKey);
     }
 
@@ -755,7 +754,7 @@ public class Stage3MediaFireActivity extends Activity {
                             "Song added to Stage 3 songbook.",
                             Toast.LENGTH_LONG).show();
 
-                    startActivity(new android.content.Intent(
+                    startActivity(new Intent(
                             this,
                             Stage3PlayerActivity.class));
                 });
@@ -786,17 +785,12 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     /*
-     * STEP 1:
-     * Open the MediaFire file page.
+     * DOWNLOAD PROCESS:
      *
-     * STEP 2:
-     * Resolve the actual download URL from:
-     * - a redirect to downloadNN.mediafire.com
-     * - the downloadButton href
-     * - the data-scrambled-url attribute
-     *
-     * STEP 3:
-     * Download and verify the MIDI/KAR bytes.
+     * 1. Resolve the MediaFire file page.
+     * 2. Find the real download address.
+     * 3. Follow MediaFire's download redirect.
+     * 4. Verify that the downloaded file is MIDI/KAR.
      */
 
     private File downloadFile(MediaSong song) throws Exception {
@@ -804,22 +798,22 @@ public class Stage3MediaFireActivity extends Activity {
         String directUrl =
                 resolveMediaFireDownloadUrl(song.downloadUrl);
 
+        URL url = new URL(directUrl);
+
+        if (!"https".equalsIgnoreCase(url.getProtocol())) {
+            throw new Exception(
+                    "Resolved download link is not HTTPS.");
+        }
+
+        if (!isDirectDownloadHost(url.getHost())) {
+            throw new Exception(
+                    "MediaFire did not provide a direct download server.");
+        }
+
         HttpURLConnection connection = null;
         File outputFile = null;
 
         try {
-
-            URL url = new URL(directUrl);
-
-            if (!"https".equalsIgnoreCase(url.getProtocol())) {
-                throw new Exception(
-                        "Resolved download link is not HTTPS.");
-            }
-
-            if (!isMediaFireHost(url.getHost())) {
-                throw new Exception(
-                        "Resolved download host is not MediaFire.");
-            }
 
             connection = (HttpURLConnection) url.openConnection();
 
@@ -833,6 +827,9 @@ public class Stage3MediaFireActivity extends Activity {
             connection.setRequestProperty(
                     "Referer", song.downloadUrl);
 
+            connection.setRequestProperty(
+                    "Accept-Encoding", "identity");
+
             connection.connect();
 
             int response = connection.getResponseCode();
@@ -842,6 +839,13 @@ public class Stage3MediaFireActivity extends Activity {
                         "File download returned HTTP " + response);
             }
 
+            URL finalUrl = connection.getURL();
+
+            if (!isMediaFireHost(finalUrl.getHost())) {
+                throw new Exception(
+                        "Download redirected to an unexpected host.");
+            }
+
             String contentType = connection.getContentType();
 
             if (contentType != null
@@ -849,8 +853,7 @@ public class Stage3MediaFireActivity extends Activity {
                     .contains("text/html")) {
 
                 throw new Exception(
-                        "MediaFire still returned a webpage. "
-                                + "The actual file link could not be resolved.");
+                        "MediaFire returned a webpage instead of MIDI/KAR.");
             }
 
             File folder = new File(
@@ -916,8 +919,23 @@ public class Stage3MediaFireActivity extends Activity {
         }
     }
 
+    /*
+     * RESOLVE MEDIAFIRE DOWNLOAD LINK.
+     */
+
     private String resolveMediaFireDownloadUrl(
             String filePageUrl) throws Exception {
+
+        return resolveMediaFireDownloadUrl(filePageUrl, 0);
+    }
+
+    private String resolveMediaFireDownloadUrl(
+            String filePageUrl, int depth) throws Exception {
+
+        if (depth > 3) {
+            throw new Exception(
+                    "MediaFire download link resolution exceeded its limit.");
+        }
 
         URL pageUrl = new URL(filePageUrl);
 
@@ -926,6 +944,11 @@ public class Stage3MediaFireActivity extends Activity {
 
             throw new Exception(
                     "Invalid MediaFire file page link.");
+        }
+
+        // A real download server can be used directly.
+        if (isDirectDownloadHost(pageUrl.getHost())) {
+            return pageUrl.toString();
         }
 
         HttpURLConnection connection = null;
@@ -950,6 +973,9 @@ public class Stage3MediaFireActivity extends Activity {
                     "Accept",
                     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
 
+            connection.setRequestProperty(
+                    "Accept-Encoding", "identity");
+
             int response = connection.getResponseCode();
 
             if (response < 200 || response >= 400) {
@@ -959,11 +985,11 @@ public class Stage3MediaFireActivity extends Activity {
             }
 
             String finalUrl = connection.getURL().toString();
+            URL finalPage = new URL(finalUrl);
 
-            // Some MediaFire links redirect straight to the file.
-            if (!finalUrl.equals(filePageUrl)
-                    && isDirectDownloadHost(new URL(finalUrl).getHost())) {
-
+            // Only downloadNN.mediafire.com is accepted as
+            // a direct MediaFire download host.
+            if (isDirectDownloadHost(finalPage.getHost())) {
                 return finalUrl;
             }
 
@@ -973,32 +999,49 @@ public class Stage3MediaFireActivity extends Activity {
                     && !contentType.toLowerCase(Locale.ROOT)
                     .contains("text/html")) {
 
-                if (isDirectDownloadHost(new URL(finalUrl).getHost())) {
-                    return finalUrl;
-                }
+                throw new Exception(
+                        "MediaFire response was not a download page. "
+                                + "Content type: " + contentType);
             }
 
             String html = readTextResponse(
-                    connection.getInputStream(), 5 * 1024 * 1024);
+                    connection.getInputStream(),
+                    5 * 1024 * 1024);
 
             String resolved = findDownloadButtonUrl(html);
 
             if (resolved == null || resolved.trim().isEmpty()) {
-                throw new Exception(
-                        "MediaFire file page opened, but its actual "
-                                + "download button link was not found.");
-            }
-
-            URL resolvedUrl = new URL(resolved);
-
-            if (!"https".equalsIgnoreCase(resolvedUrl.getProtocol())
-                    || !isMediaFireHost(resolvedUrl.getHost())) {
 
                 throw new Exception(
-                        "MediaFire supplied an invalid download address.");
+                        "MediaFire download link not found. "
+                                + "Page host: " + finalPage.getHost()
+                                + "; HTML size: " + html.length()
+                                + "; HTTP: " + response);
             }
 
-            return resolvedUrl.toString();
+            URL resolvedUrl = new URL(finalPage, resolved);
+
+            if (!"https".equalsIgnoreCase(
+                    resolvedUrl.getProtocol())) {
+
+                throw new Exception(
+                        "MediaFire supplied a non-HTTPS download address.");
+            }
+
+            if (!isMediaFireHost(resolvedUrl.getHost())) {
+                throw new Exception(
+                        "MediaFire supplied an unexpected download host.");
+            }
+
+            if (isDirectDownloadHost(resolvedUrl.getHost())) {
+                return resolvedUrl.toString();
+            }
+
+            // A dkey or intermediate MediaFire URL may require
+            // another request before reaching the real download.
+            return resolveMediaFireDownloadUrl(
+                    resolvedUrl.toString(),
+                    depth + 1);
 
         } finally {
 
@@ -1008,25 +1051,79 @@ public class Stage3MediaFireActivity extends Activity {
         }
     }
 
+    /*
+     * SEARCH THE WHOLE PAGE, NOT ONLY THE DOWNLOAD BUTTON.
+     *
+     * MediaFire may put its real download URL in JavaScript,
+     * an anchor, or an encoded data attribute.
+     */
+
     private String findDownloadButtonUrl(String html) {
 
         if (html == null || html.isEmpty()) {
             return null;
         }
 
+        String source = html
+                .replace("\\/", "/")
+                .replace("\\u0026", "&")
+                .replace("\\x26", "&")
+                .replace("&amp;", "&")
+                .replace("&#38;", "&")
+                .replace("&#x26;", "&");
+
+        // 1. Search the complete page for a direct download server.
+        Pattern directPattern = Pattern.compile(
+                "(?i)(?:https?:)?//download[0-9]+\\.mediafire\\.com/[^\\s\"'<>\\\\]+");
+
+        Matcher directMatcher = directPattern.matcher(source);
+
+        if (directMatcher.find()) {
+
+            String found = directMatcher.group();
+
+            if (found.startsWith("//")) {
+                found = "https:" + found;
+            }
+
+            return cleanUrl(found);
+        }
+
+        // 2. Search for MediaFire intermediate URLs containing dkey.
+        Pattern prePattern = Pattern.compile(
+                "(?i)(?:https?:)?//(?:www\\.)?mediafire\\.com/"
+                        + "(?:file|view|download)/[^\\s\"'<>\\\\]+"
+                        + "[?&][^\\s\"'<>\\\\]*dkey=[^\\s\"'<>\\\\]+");
+
+        Matcher preMatcher = prePattern.matcher(source);
+
+        if (preMatcher.find()) {
+
+            String found = preMatcher.group();
+
+            if (found.startsWith("//")) {
+                found = "https:" + found;
+            }
+
+            return cleanUrl(found);
+        }
+
+        // 3. Inspect the downloadButton anchor.
         Pattern anchorPattern = Pattern.compile(
                 "(?is)<a\\b[^>]*>");
 
-        Matcher anchorMatcher =
-                anchorPattern.matcher(html);
+        Matcher anchorMatcher = anchorPattern.matcher(source);
 
         while (anchorMatcher.find()) {
 
             String tag = anchorMatcher.group();
 
-            if (!Pattern.compile(
-                    "(?i)\\bid\\s*=\\s*['\"]downloadButton['\"]")
-                    .matcher(tag).find()) {
+            boolean isDownloadButton =
+                    Pattern.compile(
+                            "(?i)\\bid\\s*=\\s*['\"]downloadButton['\"]")
+                            .matcher(tag).find();
+
+            if (!isDownloadButton) {
                 continue;
             }
 
@@ -1039,61 +1136,96 @@ public class Stage3MediaFireActivity extends Activity {
             String scrambled =
                     getHtmlAttribute(tag, "data-scrambled-url");
 
-            if (scrambled != null && !scrambled.isEmpty()) {
+            String decoded = decodeScrambledUrl(scrambled);
 
-                try {
-
-                    byte[] decoded = Base64.decode(
-                            scrambled,
-                            Base64.DEFAULT);
-
-                    String decodedUrl =
-                            new String(decoded, "UTF-8").trim();
-
-                    if (decodedUrl.startsWith("http")) {
-                        return cleanUrl(decodedUrl);
-                    }
-
-                } catch (Exception ignored) {
-                }
+            if (decoded != null) {
+                return decoded;
             }
         }
 
-        // Fallback: look for the download button URL
-        // even if MediaFire changes the order of its attributes.
-        Pattern fallback = Pattern.compile(
-                "(?is)<a\\b(?=[^>]*\\bdownloadButton\\b)[^>]*href\\s*=\\s*['\"]([^'\"]+)['\"]");
+        // 4. Search all data-scrambled-url attributes.
+        Pattern scrambledPattern = Pattern.compile(
+                "(?is)data-scrambled-url\\s*=\\s*['\"]([^'\"]+)['\"]");
 
-        Matcher fallbackMatcher = fallback.matcher(html);
+        Matcher scrambledMatcher =
+                scrambledPattern.matcher(source);
+
+        while (scrambledMatcher.find()) {
+
+            String decoded = decodeScrambledUrl(
+                    scrambledMatcher.group(1));
+
+            if (decoded != null) {
+                return decoded;
+            }
+        }
+
+        // 5. Search any href associated with downloadButton.
+        Pattern fallback = Pattern.compile(
+                "(?is)<a\\b(?=[^>]*downloadButton)[^>]*"
+                        + "href\\s*=\\s*['\"]([^'\"]+)['\"]");
+
+        Matcher fallbackMatcher = fallback.matcher(source);
 
         if (fallbackMatcher.find()) {
             return cleanUrl(fallbackMatcher.group(1));
         }
 
-        // Last fallback for MediaFire's encoded URL attribute.
-        Pattern scrambledPattern = Pattern.compile(
-                "(?is)data-scrambled-url\\s*=\\s*['\"]([^'\"]+)['\"]");
+        return null;
+    }
 
-        Matcher scrambledMatcher =
-                scrambledPattern.matcher(html);
+    private String decodeScrambledUrl(String scrambled) {
 
-        while (scrambledMatcher.find()) {
+        if (scrambled == null || scrambled.trim().isEmpty()) {
+            return null;
+        }
 
-            try {
+        try {
 
-                byte[] decoded = Base64.decode(
-                        scrambledMatcher.group(1),
-                        Base64.DEFAULT);
+            byte[] decodedBytes = Base64.decode(
+                    scrambled,
+                    Base64.DEFAULT);
 
-                String decodedUrl =
-                        new String(decoded, "UTF-8").trim();
+            String decoded = new String(
+                    decodedBytes, "UTF-8").trim();
 
-                if (decodedUrl.startsWith("https://")) {
-                    return cleanUrl(decodedUrl);
+            decoded = cleanUrl(decoded);
+
+            if (decoded.startsWith("https://")
+                    || decoded.startsWith("//")) {
+
+                if (decoded.startsWith("//")) {
+                    decoded = "https:" + decoded;
                 }
 
-            } catch (Exception ignored) {
+                return decoded;
             }
+
+        } catch (Exception ignored) {
+        }
+
+        try {
+
+            byte[] decodedBytes = Base64.decode(
+                    scrambled,
+                    Base64.URL_SAFE | Base64.NO_WRAP);
+
+            String decoded = new String(
+                    decodedBytes, "UTF-8").trim();
+
+            decoded = cleanUrl(decoded);
+
+            if (decoded.startsWith("https://")
+                    || decoded.startsWith("//")) {
+
+                if (decoded.startsWith("//")) {
+                    decoded = "https:" + decoded;
+                }
+
+                return decoded;
+            }
+
+        } catch (Exception ignored) {
         }
 
         return null;
@@ -1124,9 +1256,19 @@ public class Stage3MediaFireActivity extends Activity {
 
         result = result.replace("&amp;", "&");
         result = result.replace("&#38;", "&");
+        result = result.replace("&#x26;", "&");
         result = result.replace("&quot;", "\"");
         result = result.replace("&#x2F;", "/");
         result = result.replace("\\/", "/");
+        result = result.replace("\\u0026", "&");
+        result = result.replace("\\x26", "&");
+
+        while (result.endsWith(")")
+                || result.endsWith(",")
+                || result.endsWith(";")) {
+
+            result = result.substring(0, result.length() - 1);
+        }
 
         return result;
     }
@@ -1170,6 +1312,12 @@ public class Stage3MediaFireActivity extends Activity {
                 || value.endsWith(".mediafire.com");
     }
 
+    /*
+     * IMPORTANT:
+     * Do not treat www.mediafire.com as a direct file server.
+     * Only downloadNN.mediafire.com is accepted here.
+     */
+
     private boolean isDirectDownloadHost(String host) {
 
         if (host == null) {
@@ -1178,8 +1326,8 @@ public class Stage3MediaFireActivity extends Activity {
 
         String value = host.toLowerCase(Locale.ROOT);
 
-        return value.matches("download[0-9]+\\.mediafire\\.com")
-                || value.endsWith(".mediafire.com");
+        return value.matches(
+                "download[0-9]+\\.mediafire\\.com");
     }
 
     private String userAgent() {
