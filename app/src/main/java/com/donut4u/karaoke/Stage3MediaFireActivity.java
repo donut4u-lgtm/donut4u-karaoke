@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -21,12 +22,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -52,6 +53,9 @@ public class Stage3MediaFireActivity extends Activity {
 
     private static final int CHUNK_SIZE = 100;
     private static final int MAX_CHUNKS = 100;
+
+    private static final long MAX_DOWNLOAD_SIZE =
+            100L * 1024L * 1024L;
 
     private final ArrayList<MediaSong> allSongs =
             new ArrayList<>();
@@ -79,6 +83,16 @@ public class Stage3MediaFireActivity extends Activity {
             this.title = title;
             this.downloadUrl = downloadUrl;
             this.quickKey = quickKey;
+        }
+    }
+
+    private static class ChunkResult {
+        JSONArray files;
+        boolean moreChunks;
+
+        ChunkResult(JSONArray files, boolean moreChunks) {
+            this.files = files;
+            this.moreChunks = moreChunks;
         }
     }
 
@@ -219,11 +233,11 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     /*
-     * NATIVE MEDIAFIRE CHUNK LOADER
+     * LOAD ALL MEDIAFIRE CHUNKS.
      *
-     * Requests chunk 1, chunk 2, chunk 3, and so on.
-     * Stops when a chunk contains no MIDI/KAR entries
-     * or the API reports an error.
+     * Important: a chunk with no MIDI/KAR songs does not
+     * automatically mean the folder has ended.
+     * Use MediaFire's more_chunks value when available.
      */
 
     private void loadFolder() {
@@ -256,13 +270,11 @@ public class Stage3MediaFireActivity extends Activity {
                      chunk <= MAX_CHUNKS;
                      chunk++) {
 
-                    final int currentChunk = chunk;
-
-                    JSONArray entries = requestChunk(chunk);
-
-                    int before = allSongs.size();
+                    ChunkResult result = requestChunk(chunk);
+                    JSONArray entries = result.files;
 
                     for (int i = 0; i < entries.length(); i++) {
+
                         JSONObject item = entries.optJSONObject(i);
 
                         if (item == null) {
@@ -272,6 +284,7 @@ public class Stage3MediaFireActivity extends Activity {
                         MediaSong song = parseSong(item);
 
                         if (song != null) {
+
                             String key = song.quickKey.isEmpty()
                                     ? song.downloadUrl
                                     : song.quickKey;
@@ -282,11 +295,13 @@ public class Stage3MediaFireActivity extends Activity {
                         }
                     }
 
-                    totalChunks = currentChunk;
+                    totalChunks = chunk;
 
+                    final int currentChunk = chunk;
                     final int found = allSongs.size();
 
                     runOnUiThread(() -> {
+
                         status.setText(
                                 "Reading MediaFire chunk "
                                         + currentChunk
@@ -299,15 +314,13 @@ public class Stage3MediaFireActivity extends Activity {
                         renderSongs();
                     });
 
-                    // No new MIDI/KAR entries means the
-                    // folder listing has reached its end.
-                    if (entries.length() == 0
-                            || allSongs.size() == before) {
+                    if (!result.moreChunks || entries.length() == 0) {
                         break;
                     }
                 }
 
             } catch (Exception e) {
+
                 error = e.getMessage() == null
                         ? "Unknown MediaFire API error"
                         : e.getMessage();
@@ -327,11 +340,14 @@ public class Stage3MediaFireActivity extends Activity {
                 loadButton.setEnabled(true);
 
                 if (finalError != null) {
+
                     status.setText(
                             "MediaFire loading stopped:\n"
                                     + finalError
                                     + "\nSongs found: " + found);
+
                 } else {
+
                     status.setText(
                             "Folder loading finished.\n"
                                     + "Chunks checked: " + chunksRead
@@ -347,7 +363,7 @@ public class Stage3MediaFireActivity extends Activity {
         }, "Donut4U-MediaFire-API").start();
     }
 
-    private JSONArray requestChunk(int chunk) throws Exception {
+    private ChunkResult requestChunk(int chunk) throws Exception {
 
         String query =
                 "r=utga"
@@ -376,8 +392,7 @@ public class Stage3MediaFireActivity extends Activity {
 
             connection.setRequestProperty(
                     "User-Agent",
-                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-                            + "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36");
+                    userAgent());
 
             connection.setRequestProperty(
                     "Referer", FOLDER_URL);
@@ -403,6 +418,7 @@ public class Stage3MediaFireActivity extends Activity {
                 int count;
 
                 while ((count = input.read(buffer)) != -1) {
+
                     text.append(new String(
                             buffer, 0, count, "UTF-8"));
 
@@ -420,15 +436,14 @@ public class Stage3MediaFireActivity extends Activity {
 
             if (responseObject != null) {
 
-                String result = responseObject.optString(
+                String apiResult = responseObject.optString(
                         "result", "");
 
-                if (!result.isEmpty()
-                        && !"Success".equalsIgnoreCase(result)
-                        && !"success".equalsIgnoreCase(result)) {
+                if (!apiResult.isEmpty()
+                        && !"Success".equalsIgnoreCase(apiResult)) {
 
                     throw new Exception(
-                            "MediaFire API: " + result);
+                            "MediaFire API: " + apiResult);
                 }
             }
 
@@ -440,17 +455,23 @@ public class Stage3MediaFireActivity extends Activity {
                                 + "on chunk " + chunk);
             }
 
-            return files;
+            Boolean more = findMoreChunks(root);
+
+            boolean hasMore;
+
+            if (more != null) {
+                hasMore = more;
+            } else {
+                // Fallback if MediaFire omits more_chunks.
+                hasMore = files.length() >= CHUNK_SIZE;
+            }
+
+            return new ChunkResult(files, hasMore);
 
         } finally {
             connection.disconnect();
         }
     }
-
-    /*
-     * MediaFire may wrap the file list in different
-     * JSON objects. Search the response for the files array.
-     */
 
     private JSONArray findFileArray(JSONObject object) {
 
@@ -464,33 +485,78 @@ public class Stage3MediaFireActivity extends Activity {
             return direct;
         }
 
-        JSONObject folder = object.optJSONObject("folder_content");
+        for (String key : new String[]{
+                "folder_content",
+                "response",
+                "content",
+                "data"
+        }) {
 
-        if (folder != null) {
-            JSONArray found = findFileArray(folder);
-            if (found != null) {
-                return found;
+            JSONObject nested = object.optJSONObject(key);
+
+            if (nested != null) {
+
+                JSONArray found = findFileArray(nested);
+
+                if (found != null) {
+                    return found;
+                }
             }
         }
 
-        JSONObject response = object.optJSONObject("response");
+        return null;
+    }
 
-        if (response != null) {
-            JSONArray found = findFileArray(response);
-            if (found != null) {
-                return found;
+    private Boolean findMoreChunks(JSONObject object) {
+
+        if (object == null) {
+            return null;
+        }
+
+        if (object.has("more_chunks")) {
+
+            Object value = object.opt("more_chunks");
+
+            if (value instanceof Boolean) {
+                return (Boolean) value;
+            }
+
+            if (value instanceof Number) {
+                return ((Number) value).intValue() != 0;
+            }
+
+            if (value != null) {
+
+                String text = String.valueOf(value)
+                        .trim()
+                        .toLowerCase(Locale.ROOT);
+
+                if (text.equals("yes")
+                        || text.equals("true")
+                        || text.equals("1")) {
+                    return true;
+                }
+
+                if (text.equals("no")
+                        || text.equals("false")
+                        || text.equals("0")) {
+                    return false;
+                }
             }
         }
 
         for (String key : new String[]{
                 "folder_content",
+                "response",
                 "content",
                 "data"
         }) {
+
             JSONObject nested = object.optJSONObject(key);
 
             if (nested != null) {
-                JSONArray found = findFileArray(nested);
+
+                Boolean found = findMoreChunks(nested);
 
                 if (found != null) {
                     return found;
@@ -599,7 +665,8 @@ public class Stage3MediaFireActivity extends Activity {
 
             card.addView(type);
 
-            Button download = makeButton("DOWNLOAD AND ADD TO SONGBOOK");
+            Button download =
+                    makeButton("DOWNLOAD AND ADD TO SONGBOOK");
 
             download.setOnClickListener(v ->
                     startDownload(song));
@@ -615,6 +682,7 @@ public class Stage3MediaFireActivity extends Activity {
         }
 
         if (shown == 0) {
+
             TextView empty = new TextView(this);
 
             empty.setText(allSongs.isEmpty()
@@ -641,7 +709,7 @@ public class Stage3MediaFireActivity extends Activity {
 
         downloading = true;
 
-        status.setText("Downloading:\n" + song.title);
+        status.setText("Resolving MediaFire download:\n" + song.title);
 
         progress.setVisibility(View.VISIBLE);
         progress.setIndeterminate(true);
@@ -717,29 +785,40 @@ public class Stage3MediaFireActivity extends Activity {
         }, "Donut4U-MediaFire-Download").start();
     }
 
+    /*
+     * STEP 1:
+     * Open the MediaFire file page.
+     *
+     * STEP 2:
+     * Resolve the actual download URL from:
+     * - a redirect to downloadNN.mediafire.com
+     * - the downloadButton href
+     * - the data-scrambled-url attribute
+     *
+     * STEP 3:
+     * Download and verify the MIDI/KAR bytes.
+     */
+
     private File downloadFile(MediaSong song) throws Exception {
+
+        String directUrl =
+                resolveMediaFireDownloadUrl(song.downloadUrl);
 
         HttpURLConnection connection = null;
         File outputFile = null;
 
         try {
 
-            URL url = new URL(song.downloadUrl);
+            URL url = new URL(directUrl);
 
             if (!"https".equalsIgnoreCase(url.getProtocol())) {
                 throw new Exception(
-                        "MediaFire supplied a non-HTTPS download link.");
+                        "Resolved download link is not HTTPS.");
             }
 
-            String host = url.getHost();
-
-            if (host == null
-                    || !(host.equalsIgnoreCase("mediafire.com")
-                    || host.toLowerCase(Locale.ROOT)
-                    .endsWith(".mediafire.com"))) {
-
+            if (!isMediaFireHost(url.getHost())) {
                 throw new Exception(
-                        "Download host is not MediaFire.");
+                        "Resolved download host is not MediaFire.");
             }
 
             connection = (HttpURLConnection) url.openConnection();
@@ -749,12 +828,10 @@ public class Stage3MediaFireActivity extends Activity {
             connection.setInstanceFollowRedirects(true);
 
             connection.setRequestProperty(
-                    "User-Agent",
-                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-                            + "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36");
+                    "User-Agent", userAgent());
 
             connection.setRequestProperty(
-                    "Referer", FOLDER_URL);
+                    "Referer", song.downloadUrl);
 
             connection.connect();
 
@@ -762,7 +839,7 @@ public class Stage3MediaFireActivity extends Activity {
 
             if (response < 200 || response >= 300) {
                 throw new Exception(
-                        "MediaFire download returned HTTP " + response);
+                        "File download returned HTTP " + response);
             }
 
             String contentType = connection.getContentType();
@@ -772,7 +849,8 @@ public class Stage3MediaFireActivity extends Activity {
                     .contains("text/html")) {
 
                 throw new Exception(
-                        "MediaFire returned a web page instead of a song.");
+                        "MediaFire still returned a webpage. "
+                                + "The actual file link could not be resolved.");
             }
 
             File folder = new File(
@@ -806,7 +884,7 @@ public class Stage3MediaFireActivity extends Activity {
 
                     total += count;
 
-                    if (total > 100L * 1024L * 1024L) {
+                    if (total > MAX_DOWNLOAD_SIZE) {
                         throw new Exception(
                                 "File exceeds the 100 MB download limit.");
                     }
@@ -817,7 +895,7 @@ public class Stage3MediaFireActivity extends Activity {
 
             if (total < 14 || !hasMidiHeader(outputFile)) {
                 throw new Exception(
-                        "Downloaded file is not a valid MIDI/KAR file.");
+                        "Downloaded data is not a valid MIDI/KAR file.");
             }
 
             return outputFile;
@@ -836,6 +914,279 @@ public class Stage3MediaFireActivity extends Activity {
                 connection.disconnect();
             }
         }
+    }
+
+    private String resolveMediaFireDownloadUrl(
+            String filePageUrl) throws Exception {
+
+        URL pageUrl = new URL(filePageUrl);
+
+        if (!"https".equalsIgnoreCase(pageUrl.getProtocol())
+                || !isMediaFireHost(pageUrl.getHost())) {
+
+            throw new Exception(
+                    "Invalid MediaFire file page link.");
+        }
+
+        HttpURLConnection connection = null;
+
+        try {
+
+            connection =
+                    (HttpURLConnection) pageUrl.openConnection();
+
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(25000);
+            connection.setReadTimeout(45000);
+            connection.setInstanceFollowRedirects(true);
+
+            connection.setRequestProperty(
+                    "User-Agent", userAgent());
+
+            connection.setRequestProperty(
+                    "Referer", FOLDER_URL);
+
+            connection.setRequestProperty(
+                    "Accept",
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+
+            int response = connection.getResponseCode();
+
+            if (response < 200 || response >= 400) {
+                throw new Exception(
+                        "Could not open MediaFire file page. HTTP "
+                                + response);
+            }
+
+            String finalUrl = connection.getURL().toString();
+
+            // Some MediaFire links redirect straight to the file.
+            if (!finalUrl.equals(filePageUrl)
+                    && isDirectDownloadHost(new URL(finalUrl).getHost())) {
+
+                return finalUrl;
+            }
+
+            String contentType = connection.getContentType();
+
+            if (contentType != null
+                    && !contentType.toLowerCase(Locale.ROOT)
+                    .contains("text/html")) {
+
+                if (isDirectDownloadHost(new URL(finalUrl).getHost())) {
+                    return finalUrl;
+                }
+            }
+
+            String html = readTextResponse(
+                    connection.getInputStream(), 5 * 1024 * 1024);
+
+            String resolved = findDownloadButtonUrl(html);
+
+            if (resolved == null || resolved.trim().isEmpty()) {
+                throw new Exception(
+                        "MediaFire file page opened, but its actual "
+                                + "download button link was not found.");
+            }
+
+            URL resolvedUrl = new URL(resolved);
+
+            if (!"https".equalsIgnoreCase(resolvedUrl.getProtocol())
+                    || !isMediaFireHost(resolvedUrl.getHost())) {
+
+                throw new Exception(
+                        "MediaFire supplied an invalid download address.");
+            }
+
+            return resolvedUrl.toString();
+
+        } finally {
+
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private String findDownloadButtonUrl(String html) {
+
+        if (html == null || html.isEmpty()) {
+            return null;
+        }
+
+        Pattern anchorPattern = Pattern.compile(
+                "(?is)<a\\b[^>]*>");
+
+        Matcher anchorMatcher =
+                anchorPattern.matcher(html);
+
+        while (anchorMatcher.find()) {
+
+            String tag = anchorMatcher.group();
+
+            if (!Pattern.compile(
+                    "(?i)\\bid\\s*=\\s*['\"]downloadButton['\"]")
+                    .matcher(tag).find()) {
+                continue;
+            }
+
+            String href = getHtmlAttribute(tag, "href");
+
+            if (href != null && !href.isEmpty()) {
+                return cleanUrl(href);
+            }
+
+            String scrambled =
+                    getHtmlAttribute(tag, "data-scrambled-url");
+
+            if (scrambled != null && !scrambled.isEmpty()) {
+
+                try {
+
+                    byte[] decoded = Base64.decode(
+                            scrambled,
+                            Base64.DEFAULT);
+
+                    String decodedUrl =
+                            new String(decoded, "UTF-8").trim();
+
+                    if (decodedUrl.startsWith("http")) {
+                        return cleanUrl(decodedUrl);
+                    }
+
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        // Fallback: look for the download button URL
+        // even if MediaFire changes the order of its attributes.
+        Pattern fallback = Pattern.compile(
+                "(?is)<a\\b(?=[^>]*\\bdownloadButton\\b)[^>]*href\\s*=\\s*['\"]([^'\"]+)['\"]");
+
+        Matcher fallbackMatcher = fallback.matcher(html);
+
+        if (fallbackMatcher.find()) {
+            return cleanUrl(fallbackMatcher.group(1));
+        }
+
+        // Last fallback for MediaFire's encoded URL attribute.
+        Pattern scrambledPattern = Pattern.compile(
+                "(?is)data-scrambled-url\\s*=\\s*['\"]([^'\"]+)['\"]");
+
+        Matcher scrambledMatcher =
+                scrambledPattern.matcher(html);
+
+        while (scrambledMatcher.find()) {
+
+            try {
+
+                byte[] decoded = Base64.decode(
+                        scrambledMatcher.group(1),
+                        Base64.DEFAULT);
+
+                String decodedUrl =
+                        new String(decoded, "UTF-8").trim();
+
+                if (decodedUrl.startsWith("https://")) {
+                    return cleanUrl(decodedUrl);
+                }
+
+            } catch (Exception ignored) {
+            }
+        }
+
+        return null;
+    }
+
+    private String getHtmlAttribute(String tag, String attribute) {
+
+        Pattern pattern = Pattern.compile(
+                "(?is)\\b" + Pattern.quote(attribute)
+                        + "\\s*=\\s*(['\"])(.*?)\\1");
+
+        Matcher matcher = pattern.matcher(tag);
+
+        if (matcher.find()) {
+            return matcher.group(2);
+        }
+
+        return null;
+    }
+
+    private String cleanUrl(String value) {
+
+        if (value == null) {
+            return null;
+        }
+
+        String result = value.trim();
+
+        result = result.replace("&amp;", "&");
+        result = result.replace("&#38;", "&");
+        result = result.replace("&quot;", "\"");
+        result = result.replace("&#x2F;", "/");
+        result = result.replace("\\/", "/");
+
+        return result;
+    }
+
+    private String readTextResponse(
+            InputStream input, int maxBytes) throws Exception {
+
+        try (InputStream in = new BufferedInputStream(input);
+             ByteArrayOutputStream output =
+                     new ByteArrayOutputStream()) {
+
+            byte[] buffer = new byte[8192];
+            int count;
+            int total = 0;
+
+            while ((count = in.read(buffer)) != -1) {
+
+                total += count;
+
+                if (total > maxBytes) {
+                    throw new Exception(
+                            "MediaFire download page is too large.");
+                }
+
+                output.write(buffer, 0, count);
+            }
+
+            return output.toString("UTF-8");
+        }
+    }
+
+    private boolean isMediaFireHost(String host) {
+
+        if (host == null) {
+            return false;
+        }
+
+        String value = host.toLowerCase(Locale.ROOT);
+
+        return value.equals("mediafire.com")
+                || value.endsWith(".mediafire.com");
+    }
+
+    private boolean isDirectDownloadHost(String host) {
+
+        if (host == null) {
+            return false;
+        }
+
+        String value = host.toLowerCase(Locale.ROOT);
+
+        return value.matches("download[0-9]+\\.mediafire\\.com")
+                || value.endsWith(".mediafire.com");
+    }
+
+    private String userAgent() {
+        return "Mozilla/5.0 (Linux; Android 13) "
+                + "AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) "
+                + "Chrome/120.0 Mobile Safari/537.36";
     }
 
     private boolean hasMidiHeader(File file) {
@@ -860,6 +1211,7 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     private String removeExtension(String name) {
+
         int dot = name.lastIndexOf('.');
 
         return dot > 0
@@ -920,10 +1272,13 @@ public class Stage3MediaFireActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+
         if (loading || downloading) {
+
             Toast.makeText(this,
                     "Please wait for the current operation.",
                     Toast.LENGTH_SHORT).show();
+
             return;
         }
 
