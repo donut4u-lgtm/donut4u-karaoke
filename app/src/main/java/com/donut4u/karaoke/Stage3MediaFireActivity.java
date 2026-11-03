@@ -1,4 +1,4 @@
-.
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
