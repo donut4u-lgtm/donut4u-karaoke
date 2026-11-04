@@ -49,6 +49,9 @@ class Stage3MidiEngine private constructor(
     @Volatile
     private var activeSessionId: Long = 0L
 
+    @Volatile
+    private var pausedByEngine: Boolean = false
+
     companion object {
         private const val MIDI_DIRECTORY = "stage3_midi"
         private const val SOUNDFONT_DIRECTORY = "stage3_soundfonts"
@@ -159,6 +162,7 @@ class Stage3MidiEngine private constructor(
 
                     midiPlayer = newPlayer
                     lastNativeTick = 0L
+                    pausedByEngine = false
                 }
 
                 newPlayer.play {
@@ -181,7 +185,7 @@ class Stage3MidiEngine private constructor(
                 }
 
             } catch (_: CancellationException) {
-                cleanupTemporaryFiles()
+                // The stopping session already handles its own cleanup.
 
             } catch (error: Exception) {
                 val message = error.message
@@ -441,10 +445,14 @@ class Stage3MidiEngine private constructor(
 
     @Synchronized
     fun pause() {
+        val player = midiPlayer ?: return
+        if (closed || pausedByEngine) return
+
         val position = getCurrentTick()
 
         try {
-            midiPlayer?.pause()
+            player.pause()
+            pausedByEngine = true
         } finally {
             lastNativeTick = position
         }
@@ -456,14 +464,27 @@ class Stage3MidiEngine private constructor(
         if (closed) return
 
         player.play()
+        pausedByEngine = false
     }
 
     @Synchronized
     fun seekTo(tick: Long) {
         val target = tick.coerceAtLeast(0L)
         val player = midiPlayer ?: return
+        if (closed) return
 
-        player.seekTo(target)
+        if (pausedByEngine) {
+            // Refresh FluidSynth's internal paused position.
+            // Its seekTo() alone does not update pausedAtTick.
+            player.play()
+            player.seekTo(target)
+            player.pause()
+
+            pausedByEngine = true
+        } else {
+            player.seekTo(target)
+        }
+
         lastNativeTick = target
     }
 
@@ -499,6 +520,8 @@ class Stage3MidiEngine private constructor(
 
     @Synchronized
     fun isPlaying(): Boolean {
+        if (pausedByEngine) return false
+
         return try {
             midiPlayer?.isPlaying ?: false
         } catch (_: Exception) {
@@ -522,6 +545,7 @@ class Stage3MidiEngine private constructor(
         closeMidiPlayer()
 
         lastNativeTick = 0L
+        pausedByEngine = false
 
         cleanupTemporaryFiles()
     }
@@ -765,6 +789,7 @@ class Stage3MidiEngine private constructor(
         activeTask = null
         activeCallback = null
         lastNativeTick = 0L
+        pausedByEngine = false
 
         cleanupTemporaryFiles()
 
@@ -776,10 +801,7 @@ class Stage3MidiEngine private constructor(
         sessionId: Long,
         message: String
     ) {
-        if (!isSessionActive(sessionId)) {
-            cleanupTemporaryFiles()
-            return
-        }
+        if (!isSessionActive(sessionId)) return
 
         val callback = activeCallback
 
@@ -787,6 +809,7 @@ class Stage3MidiEngine private constructor(
         activeTask = null
         activeCallback = null
         lastNativeTick = 0L
+        pausedByEngine = false
 
         cleanupTemporaryFiles()
 
@@ -807,6 +830,7 @@ class Stage3MidiEngine private constructor(
 
         closeMidiPlayer()
         lastNativeTick = 0L
+        pausedByEngine = false
 
         cleanupTemporaryFiles()
 
