@@ -100,27 +100,12 @@ public class Stage3SongbookActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(12));
         root.addView(subtitle);
 
-        Button songHubButton = makeButton("CONNECT SONGHUB LIBRARY");
-        songHubButton.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(
-                        Stage3SongbookActivity.this,
-                        Stage3SongHubRemoteActivity.class));
-            } catch (Exception e) {
-                android.util.Log.e("Stage3Songbook",
-                        "Could not open SongHub connection.", e);
-
-                Toast.makeText(Stage3SongbookActivity.this,
-                        "Could not open SongHub connection.",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-        root.addView(songHubButton, buttonParams());
-
+        // IMPORT SONGS FROM DEVICE
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
 
+        // POSTFILE UPLOAD
         Button postFileButton =
                 makeButton("UPLOAD MIDI/KAR TO POSTFILE");
 
@@ -164,41 +149,7 @@ public class Stage3SongbookActivity extends Activity {
 
         root.addView(mediaFireButton, buttonParams());
 
-        Button spreadsheetButton =
-                makeButton("IMPORT SONGLIST (XLS / XLSX)");
-        spreadsheetButton.setOnClickListener(v -> chooseSongbookFile());
-        root.addView(spreadsheetButton, buttonParams());
-
-        Button makeKaraokeButton =
-                makeButton("MAKE KARAOKE FILE (AI)");
-        makeKaraokeButton.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(
-                        Stage3SongbookActivity.this,
-                        Stage3KaraokeMakerActivity.class));
-            } catch (Exception e) {
-                Toast.makeText(this,
-                        "Could not open Karaoke Maker.",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-        root.addView(makeKaraokeButton, buttonParams());
-
-        Button queueButton = makeButton("OPEN SONG QUEUE");
-        queueButton.setOnClickListener(v -> {
-            try {
-                Stage3SongQueue.initialize(this);
-                startActivity(new Intent(
-                        Stage3SongbookActivity.this,
-                        Stage3QueueActivity.class));
-            } catch (Exception e) {
-                Toast.makeText(this,
-                        "Could not open the song queue.",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-        root.addView(queueButton, buttonParams());
-
+        // SONG SEARCH
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
         searchInput.setHint("Search song number, title or singer");
