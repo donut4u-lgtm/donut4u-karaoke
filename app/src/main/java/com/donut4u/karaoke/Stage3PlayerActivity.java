@@ -2,6 +2,7 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -14,6 +15,7 @@ import android.text.style.ForegroundColorSpan;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -78,9 +80,10 @@ public class Stage3PlayerActivity extends Activity {
 
     private TextView playbackTimeLabel;
     private TextView backButton;
-    private TextView playButton;
-    private TextView pauseButton;
-    private TextView stopButton;
+
+    private Button playButton;
+    private Button pauseButton;
+    private Button stopButton;
 
     private SeekBar seekBar;
 
@@ -269,9 +272,9 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel.setIncludeFontPadding(true);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
         lyricsLabel.setBreakStrategy(
-                android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY);
+                Layout.BREAK_STRATEGY_HIGH_QUALITY);
         lyricsLabel.setHyphenationFrequency(
-                android.text.Layout.HYPHENATION_FREQUENCY_NONE);
+                Layout.HYPHENATION_FREQUENCY_NONE);
 
         lyricsScroll.addView(
                 lyricsLabel,
@@ -324,12 +327,12 @@ public class Stage3PlayerActivity extends Activity {
         playbackTimeLabel = new TextView(this);
         playbackTimeLabel.setText("00:00 / 00:00");
         playbackTimeLabel.setTextColor(WHITE);
-        playbackTimeLabel.setTextSize(12);
+        playbackTimeLabel.setTextSize(14);
         playbackTimeLabel.setGravity(Gravity.CENTER);
         playbackTimeLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         playbackTimeLabel.setPadding(
-                dp(4), dp(1), dp(4), dp(1));
+                dp(4), dp(3), dp(4), dp(3));
 
         controls.addView(
                 playbackTimeLabel,
@@ -341,11 +344,23 @@ public class Stage3PlayerActivity extends Activity {
         seekBar.setMax(SEEK_MAX);
         seekBar.setProgress(0);
         seekBar.setEnabled(false);
+        seekBar.setVisibility(View.VISIBLE);
+        seekBar.setMinimumHeight(dp(48));
+        seekBar.setPadding(dp(8), 0, dp(8), 0);
+
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            seekBar.setProgressTintList(
+                    ColorStateList.valueOf(ACTIVE_GREEN));
+            seekBar.setProgressBackgroundTintList(
+                    ColorStateList.valueOf(WHITE));
+            seekBar.setThumbTintList(
+                    ColorStateList.valueOf(ACTIVE_GREEN));
+        }
 
         LinearLayout.LayoutParams seekParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(36));
+                        dp(52));
 
         controls.addView(seekBar, seekParams);
 
@@ -360,15 +375,15 @@ public class Stage3PlayerActivity extends Activity {
 
         buttonRow.addView(
                 playButton,
-                new LinearLayout.LayoutParams(0, dp(44), 1f));
+                new LinearLayout.LayoutParams(0, dp(50), 1f));
 
         buttonRow.addView(
                 pauseButton,
-                new LinearLayout.LayoutParams(0, dp(44), 1f));
+                new LinearLayout.LayoutParams(0, dp(50), 1f));
 
         buttonRow.addView(
                 stopButton,
-                new LinearLayout.LayoutParams(0, dp(44), 1f));
+                new LinearLayout.LayoutParams(0, dp(50), 1f));
 
         controls.addView(buttonRow);
 
@@ -389,7 +404,7 @@ public class Stage3PlayerActivity extends Activity {
                     userSeeking = true;
 
                     if (midiMode && midiReady
-                            && midiDurationTicks > 0) {
+                            && getEffectiveMidiDurationTicks() > 0L) {
 
                         long previewTick =
                                 progressToMidiTick(progress);
@@ -442,9 +457,9 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
-    private TextView createControlButton(String text) {
+    private Button createControlButton(String text) {
 
-        TextView button = new TextView(this);
+        Button button = new Button(this);
 
         button.setText(text);
         button.setTextColor(WHITE);
@@ -452,11 +467,23 @@ public class Stage3PlayerActivity extends Activity {
         button.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         button.setGravity(Gravity.CENTER);
-        button.setBackgroundColor(Color.rgb(15, 75, 43));
+        button.setAllCaps(false);
         button.setPadding(
                 dp(8), dp(5), dp(8), dp(5));
-        button.setEnabled(false);
-        button.setAlpha(0.45f);
+        button.setMinHeight(dp(48));
+        button.setMinimumHeight(dp(48));
+        button.setClickable(true);
+        button.setFocusable(true);
+
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            button.setBackgroundTintList(
+                    ColorStateList.valueOf(Color.rgb(0, 115, 55)));
+        } else {
+            button.setBackgroundColor(Color.rgb(0, 115, 55));
+        }
+
+        button.setEnabled(true);
+        button.setAlpha(1f);
 
         return button;
     }
@@ -470,6 +497,10 @@ public class Stage3PlayerActivity extends Activity {
         if (midiMode) {
 
             if (!midiReady || midiEngine == null) {
+                Toast.makeText(
+                        this,
+                        "MIDI song is still loading.",
+                        Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -500,6 +531,10 @@ public class Stage3PlayerActivity extends Activity {
         if (midiMode) {
 
             if (!midiReady || midiEngine == null) {
+                Toast.makeText(
+                        this,
+                        "MIDI song is still loading.",
+                        Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -529,6 +564,10 @@ public class Stage3PlayerActivity extends Activity {
         if (midiMode) {
 
             if (!midiReady || midiEngine == null) {
+                Toast.makeText(
+                        this,
+                        "MIDI song is still loading.",
+                        Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -728,7 +767,11 @@ public class Stage3PlayerActivity extends Activity {
         singerLabel.setVisibility(View.GONE);
 
         resetLyricTracking();
-        setControlsEnabled(false);
+
+        // Playback buttons stay visibly enabled.
+        // The seek bar waits until a duration is available.
+        setControlsEnabled(true);
+
         updatePlaybackTime(0L, 0L);
 
         startMatchingBackgroundVideo(song);
@@ -823,6 +866,14 @@ public class Stage3PlayerActivity extends Activity {
                                     Toast.LENGTH_LONG).show();
                         }
 
+                        // Fallback to the duration parsed from MIDI.
+                        if (currentMidiTiming != null
+                                && midiDurationTicks <= 0L) {
+
+                            midiDurationTicks =
+                                    currentMidiTiming.getDurationTicks();
+                        }
+
                         String singer =
                                 currentMidiLyrics.getSinger();
 
@@ -836,8 +887,8 @@ public class Stage3PlayerActivity extends Activity {
                             singerLabel.setVisibility(View.GONE);
                         }
 
-                        setControlsEnabled(
-                                midiDurationTicks > 0L);
+                        // Enable playback buttons even when duration is 0.
+                        setControlsEnabled(true);
 
                         updateMidiLyricsAtTick(
                                 midiEngine.getCurrentTick());
@@ -887,11 +938,8 @@ public class Stage3PlayerActivity extends Activity {
 
     private void setControlsEnabled(boolean enabled) {
 
-        if (seekBar != null) {
-            seekBar.setEnabled(enabled);
-            seekBar.setAlpha(enabled ? 1f : 0.45f);
-        }
-
+        // Buttons are independent of duration.
+        // When enabled is true, all three buttons are tappable.
         if (playButton != null) {
             playButton.setEnabled(enabled);
             playButton.setAlpha(enabled ? 1f : 0.45f);
@@ -905,6 +953,20 @@ public class Stage3PlayerActivity extends Activity {
         if (stopButton != null) {
             stopButton.setEnabled(enabled);
             stopButton.setAlpha(enabled ? 1f : 0.45f);
+        }
+
+        // Seeking requires a known duration.
+        if (seekBar != null) {
+
+            boolean canSeek = enabled;
+
+            if (midiMode) {
+                canSeek = enabled
+                        && getEffectiveMidiDurationTicks() > 0L;
+            }
+
+            seekBar.setEnabled(canSeek);
+            seekBar.setAlpha(canSeek ? 1f : 0.55f);
         }
     }
 
@@ -938,9 +1000,24 @@ public class Stage3PlayerActivity extends Activity {
         finish();
     }
 
+    private long getEffectiveMidiDurationTicks() {
+
+        if (midiDurationTicks > 0L) {
+            return midiDurationTicks;
+        }
+
+        if (currentMidiTiming != null) {
+            return currentMidiTiming.getDurationTicks();
+        }
+
+        return 0L;
+    }
+
     private long progressToMidiTick(int progress) {
 
-        if (midiDurationTicks <= 0L) {
+        long duration = getEffectiveMidiDurationTicks();
+
+        if (duration <= 0L) {
             return 0L;
         }
 
@@ -951,11 +1028,11 @@ public class Stage3PlayerActivity extends Activity {
                 safeProgress / (double) SEEK_MAX;
 
         long target = (long) (
-                midiDurationTicks * fraction);
+                duration * fraction);
 
         return Math.max(
                 0L,
-                Math.min(target, midiDurationTicks));
+                Math.min(target, duration));
     }
 
     private void seekToProgress(int progress) {
@@ -965,9 +1042,11 @@ public class Stage3PlayerActivity extends Activity {
 
         if (midiMode) {
 
+            long duration = getEffectiveMidiDurationTicks();
+
             if (!midiReady
                     || midiEngine == null
-                    || midiDurationTicks <= 0L) {
+                    || duration <= 0L) {
                 return;
             }
 
@@ -1025,21 +1104,30 @@ public class Stage3PlayerActivity extends Activity {
 
     private void updateMidiControls(long tick) {
 
-        if (!midiReady || midiDurationTicks <= 0L) {
+        if (!midiReady) {
             updatePlaybackTime(0L, 0L);
             return;
         }
 
-        long safeTick = Math.max(
-                0L, Math.min(tick, midiDurationTicks));
+        long durationTicks = getEffectiveMidiDurationTicks();
 
-        if (!userSeeking && seekBar != null) {
+        long safeTick = Math.max(0L, tick);
+
+        if (durationTicks > 0L) {
+            safeTick = Math.min(safeTick, durationTicks);
+        }
+
+        if (durationTicks > 0L
+                && !userSeeking
+                && seekBar != null) {
 
             int progress = (int) Math.max(
                     0,
                     Math.min(
                             SEEK_MAX,
-                            safeTick * SEEK_MAX / midiDurationTicks));
+                            (long) (safeTick
+                                    * (double) SEEK_MAX
+                                    / durationTicks)));
 
             updatingSeekBar = true;
             seekBar.setProgress(progress);
@@ -1373,7 +1461,7 @@ public class Stage3PlayerActivity extends Activity {
 
         CharSequence candidate =
                 currentMidiLyrics.styledFullTextAtTick(
-                        tick, midiDurationTicks);
+                        tick, getEffectiveMidiDurationTicks());
 
         int activeStart = -1;
         int activeEnd = -1;
