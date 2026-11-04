@@ -409,53 +409,112 @@ public final class Stage3MidiLyrics {
                 && tick < upcoming.tick - ppq / 2L;
     }
 
+    /*
+     * Only two countdown targets are allowed:
+     *
+     * 1. The first lyric in the song.
+     * 2. The first lyric after the first identified interlude/chorus.
+     *
+     * If the file has no section label, one long instrumental gap may
+     * identify the second entrance. No later entrances are counted.
+     */
     public int getCountdownNumberAtTick(long tick) {
         long now = Math.max(0L, tick);
         long beat = Math.max(1L, ppq);
         long countdownWindow = beat * 5L;
 
-        int previousLyric = -1;
+        int firstLyric = firstLyricIndex();
+        if (firstLyric < 0) return 0;
 
-        for (int i = 0; i < events.size(); i++) {
-            LyricEvent candidate = events.get(i);
+        int secondLyric = secondCountdownLyricIndex(firstLyric);
 
-            if (candidate.section || candidate.text.trim().isEmpty()) {
+        if (isInsideCountdownWindow(firstLyric, now, countdownWindow)) {
+            return countdownValue(
+                    events.get(firstLyric).tick - now, beat);
+        }
+
+        if (secondLyric >= 0
+                && isInsideCountdownWindow(
+                        secondLyric, now, countdownWindow)) {
+
+            return countdownValue(
+                    events.get(secondLyric).tick - now, beat);
+        }
+
+        return 0;
+    }
+
+    private boolean isInsideCountdownWindow(
+            int lyricIndex,
+            long now,
+            long countdownWindow) {
+
+        if (lyricIndex < 0 || lyricIndex >= events.size()) {
+            return false;
+        }
+
+        long remaining = events.get(lyricIndex).tick - now;
+
+        return remaining > 0 && remaining <= countdownWindow;
+    }
+
+    private int countdownValue(long remaining, long beat) {
+        return (int) Math.max(
+                1L,
+                Math.min(5L, (remaining + beat - 1L) / beat));
+    }
+
+    private int secondCountdownLyricIndex(int firstLyric) {
+        int markedSectionIndex = -1;
+
+        /*
+         * First look for an explicit INTERLUDE or CHORUS section
+         * after the opening lyric.
+         */
+        for (int i = firstLyric + 1; i < events.size(); i++) {
+            LyricEvent event = events.get(i);
+
+            if (!event.section) continue;
+
+            String section = event.text.toUpperCase(Locale.ROOT);
+
+            if (section.contains("INTERLUDE")
+                    || section.contains("CHORUS")) {
+                markedSectionIndex = i;
+                break;
+            }
+        }
+
+        if (markedSectionIndex >= 0) {
+            return nextLyricIndex(markedSectionIndex + 1);
+        }
+
+        /*
+         * Some MIDI/KAR files do not label their sections.
+         * In that case, allow one long gap or instrumental section
+         * to identify one later vocal entrance.
+         */
+        int previousLyric = firstLyric;
+
+        for (int i = firstLyric + 1; i < events.size(); i++) {
+            LyricEvent event = events.get(i);
+
+            if (event.section || event.text.trim().isEmpty()) {
                 continue;
             }
 
-            if (candidate.tick > now) {
-                long remaining = candidate.tick - now;
+            LyricEvent previous = events.get(previousLyric);
+            long gap = event.tick - previous.tick;
 
-                if (remaining <= 0L || remaining > countdownWindow) {
-                    return 0;
-                }
-
-                boolean vocalEntrance = previousLyric < 0;
-
-                if (previousLyric >= 0) {
-                    LyricEvent previous = events.get(previousLyric);
-                    long gap = candidate.tick - previous.tick;
-
-                    vocalEntrance = gap >= countdownWindow
-                            || hasInstrumentalSectionBetween(
-                                    previousLyric, i);
-                }
-
-                if (!vocalEntrance) return 0;
-
-                return (int) Math.max(
-                        1L,
-                        Math.min(
-                                5L,
-                                (remaining + beat - 1L) / beat
-                        )
-                );
+            if (gap >= ppq * 5L
+                    || hasInstrumentalSectionBetween(previousLyric, i)) {
+                return i;
             }
 
             previousLyric = i;
         }
 
-        return 0;
+        return -1;
     }
 
     private boolean hasInstrumentalSectionBetween(int start, int end) {
@@ -926,11 +985,6 @@ public final class Stage3MidiLyrics {
                             continue;
                         }
 
-                        /*
-                         * Filter metadata from BOTH MIDI text and lyric events.
-                         * Whitespace and separator-only events are preserved
-                         * because they carry word and line boundary information.
-                         */
                         if (!separatorOnlyLyricEvent
                                 && !whitespaceOnlyLyricEvent
                                 && !isLikelyLyricText(trimmed)) {
@@ -1027,12 +1081,6 @@ public final class Stage3MidiLyrics {
         }
     }
 
-    /*
-     * Automatic formatting:
-     * Never split words just because two MIDI events have a timing gap.
-     * MIDI files often store syllables as separate events.
-     * Only explicit spacing and punctuation create word boundaries.
-     */
     private static void applyAutomaticFormatting(
             List<LyricEvent> lyricEvents,
             int ppq) {
@@ -1079,10 +1127,6 @@ public final class Stage3MidiLyrics {
                 boolean explicitWordBoundary =
                         previous.spaceAfter || current.spaceBefore;
 
-                /*
-                 * Do not infer spaces from timing gaps.
-                 * A long syllable gap is not necessarily a word boundary.
-                 */
                 boolean wordBoundary = explicitWordBoundary;
 
                 boolean lineWouldOverflow =
