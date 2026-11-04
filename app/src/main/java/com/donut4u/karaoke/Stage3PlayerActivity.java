@@ -1,9 +1,12 @@
+
 package com.donut4u.karaoke;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Matrix;
@@ -71,6 +74,7 @@ public class Stage3PlayerActivity extends Activity {
 
     private static final int REQUEST_BACKGROUND_IMAGE = 7301;
     private static final int REQUEST_BACKGROUND_VIDEO = 7302;
+    private static final int REQUEST_MIC_PERMISSION = 7401;
 
     private static final String PREF_BG_TYPE =
             "stage3_personal_background_type";
@@ -234,6 +238,11 @@ public class Stage3PlayerActivity extends Activity {
     private Button pauseButton;
     private Button stopButton;
     private Button backgroundButton;
+
+    // Microphone monitor controls
+    private Stage3MicrophoneMonitor microphoneMonitor;
+    private Button microphoneButton;
+    private TextView microphoneStatusLabel;
 
     private SeekBar seekBar;
 
@@ -559,6 +568,28 @@ public class Stage3PlayerActivity extends Activity {
 
         controls.addView(seekBar, seekParams);
 
+        seekBar.setOnSeekBarChangeListener(
+                new SeekBar.OnSeekBarChangeListener() {
+
+            @Override
+            public void onProgressChanged(
+                    SeekBar bar,
+                    int progress,
+                    boolean fromUser) {
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar bar) {
+                userSeeking = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar bar) {
+                userSeeking = false;
+                seekToProgress(bar.getProgress());
+            }
+        });
+
         LinearLayout buttonRow = new LinearLayout(this);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.CENTER);
@@ -585,6 +616,53 @@ public class Stage3PlayerActivity extends Activity {
         playButton.setOnClickListener(v -> playCurrentSong());
         pauseButton.setOnClickListener(v -> pauseCurrentSong());
         stopButton.setOnClickListener(v -> stopCurrentSong());
+
+        // -----------------------------------------------------
+        // MICROPHONE MONITOR ROW
+        // -----------------------------------------------------
+
+        LinearLayout microphoneRow = new LinearLayout(this);
+        microphoneRow.setOrientation(LinearLayout.HORIZONTAL);
+        microphoneRow.setGravity(Gravity.CENTER_VERTICAL);
+        microphoneRow.setPadding(
+                dp(4), dp(2), dp(4), dp(2));
+
+        microphoneStatusLabel = new TextView(this);
+        microphoneStatusLabel.setText(
+                "MIC OFF — singer monitor");
+        microphoneStatusLabel.setTextColor(WHITE);
+        microphoneStatusLabel.setTextSize(12);
+        microphoneStatusLabel.setTypeface(
+                Typeface.DEFAULT, Typeface.BOLD);
+        microphoneStatusLabel.setGravity(Gravity.CENTER_VERTICAL);
+        microphoneStatusLabel.setMaxLines(2);
+
+        microphoneRow.addView(
+                microphoneStatusLabel,
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(42),
+                        1f));
+
+        microphoneButton = createControlButton("MIC: OFF");
+        microphoneButton.setTextSize(12);
+        microphoneButton.setMinHeight(dp(40));
+        microphoneButton.setMinimumHeight(dp(40));
+
+        microphoneRow.addView(
+                microphoneButton,
+                new LinearLayout.LayoutParams(
+                        dp(112),
+                        dp(42)));
+
+        microphoneButton.setOnClickListener(
+                v -> toggleMicrophoneMonitoring());
+
+        controls.addView(microphoneRow);
+
+        // -----------------------------------------------------
+        // BACKGROUND AND SONGBOOK CONTROLS
+        // -----------------------------------------------------
 
         backgroundButton = createControlButton("BACKGROUND");
         backgroundButton.setTextSize(14);
@@ -652,6 +730,207 @@ public class Stage3PlayerActivity extends Activity {
         button.setAlpha(1f);
 
         return button;
+    }
+
+    // ---------------------------------------------------------
+    // MICROPHONE MONITOR
+    // ---------------------------------------------------------
+
+    private void toggleMicrophoneMonitoring() {
+
+        if (microphoneMonitor != null
+                && microphoneMonitor.isRunning()) {
+
+            stopMicrophoneMonitoring();
+            return;
+        }
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+
+            requestPermissions(
+                    new String[]{
+                            Manifest.permission.RECORD_AUDIO
+                    },
+                    REQUEST_MIC_PERMISSION);
+
+            return;
+        }
+
+        startMicrophoneMonitoring();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults) {
+
+        super.onRequestPermissionsResult(
+                requestCode,
+                permissions,
+                grantResults);
+
+        if (requestCode != REQUEST_MIC_PERMISSION) {
+            return;
+        }
+
+        if (grantResults.length > 0
+                && grantResults[0]
+                == PackageManager.PERMISSION_GRANTED) {
+
+            startMicrophoneMonitoring();
+
+        } else {
+
+            if (microphoneButton != null) {
+                microphoneButton.setText("MIC: OFF");
+            }
+
+            if (microphoneStatusLabel != null) {
+                microphoneStatusLabel.setText(
+                        "MIC PERMISSION DENIED");
+            }
+
+            Toast.makeText(
+                    this,
+                    "Microphone permission is required "
+                            + "to use the singer monitor.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void startMicrophoneMonitoring() {
+
+        if (released || returningToSongbook) {
+            return;
+        }
+
+        if (microphoneMonitor != null
+                && microphoneMonitor.isRunning()) {
+            return;
+        }
+
+        microphoneMonitor =
+                new Stage3MicrophoneMonitor(
+                        new Stage3MicrophoneMonitor.Listener() {
+
+            @Override
+            public void onUpdate(
+                    int levelPercent,
+                    int midiNote,
+                    double confidence) {
+
+                if (released
+                        || returningToSongbook
+                        || microphoneStatusLabel == null) {
+                    return;
+                }
+
+                String pitch = "Pitch: —";
+
+                if (midiNote >= 0 && confidence >= 0.72) {
+                    pitch = "Pitch: " + midiNoteName(midiNote);
+                }
+
+                microphoneStatusLabel.setText(
+                        "MIC " + levelPercent + "%  |  " + pitch);
+            }
+
+            @Override
+            public void onError(String message) {
+
+                if (released || returningToSongbook) {
+                    return;
+                }
+
+                Stage3MicrophoneMonitor old =
+                        microphoneMonitor;
+
+                microphoneMonitor = null;
+
+                if (old != null) {
+                    old.stop();
+                }
+
+                if (microphoneButton != null) {
+                    microphoneButton.setText("MIC: OFF");
+                }
+
+                if (microphoneStatusLabel != null) {
+                    microphoneStatusLabel.setText(
+                            "MIC UNAVAILABLE");
+                }
+
+                Toast.makeText(
+                        Stage3PlayerActivity.this,
+                        message,
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+
+        boolean started = microphoneMonitor.start();
+
+        if (started) {
+
+            if (microphoneButton != null) {
+                microphoneButton.setText("MIC: ON");
+            }
+
+            if (microphoneStatusLabel != null) {
+                microphoneStatusLabel.setText(
+                        "MIC ON — sing to test");
+            }
+
+        } else {
+
+            microphoneMonitor = null;
+
+            if (microphoneButton != null) {
+                microphoneButton.setText("MIC: OFF");
+            }
+
+            if (microphoneStatusLabel != null) {
+                microphoneStatusLabel.setText(
+                        "MIC UNAVAILABLE");
+            }
+        }
+    }
+
+    private void stopMicrophoneMonitoring() {
+
+        Stage3MicrophoneMonitor old =
+                microphoneMonitor;
+
+        microphoneMonitor = null;
+
+        if (old != null) {
+            old.stop();
+        }
+
+        if (microphoneButton != null) {
+            microphoneButton.setText("MIC: OFF");
+        }
+
+        if (microphoneStatusLabel != null) {
+            microphoneStatusLabel.setText(
+                    "MIC OFF — singer monitor");
+        }
+    }
+
+    private String midiNoteName(int midiNote) {
+
+        String[] names = {
+                "C", "C#", "D", "D#", "E", "F",
+                "F#", "G", "G#", "A", "A#", "B"
+        };
+
+        int safeNote = Math.max(0, Math.min(127, midiNote));
+
+        int noteIndex = safeNote % 12;
+        int octave = safeNote / 12 - 1;
+
+        return names[noteIndex] + octave;
     }
 
     // ---------------------------------------------------------
@@ -1651,6 +1930,8 @@ public class Stage3PlayerActivity extends Activity {
 
         handler.removeCallbacks(progressUpdater);
 
+        stopMicrophoneMonitoring();
+
         if (backButton != null) {
             backButton.setEnabled(false);
             backButton.setAlpha(0.5f);
@@ -2428,6 +2709,9 @@ public class Stage3PlayerActivity extends Activity {
 
         super.onStop();
 
+        // Stop microphone capture whenever Stage 3 leaves foreground.
+        stopMicrophoneMonitoring();
+
         if (returningToSongbook || released) {
             return;
         }
@@ -2490,6 +2774,8 @@ public class Stage3PlayerActivity extends Activity {
                 "LIFECYCLE_ON_DESTROY_finishing_" + isFinishing());
 
         released = true;
+
+        stopMicrophoneMonitoring();
 
         handler.removeCallbacks(progressUpdater);
 
