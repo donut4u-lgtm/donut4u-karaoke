@@ -136,18 +136,27 @@ jobs:
           set -euo pipefail
           echo "26" > version.txt
 
-      - name: Upload APK to GitHub Release
+      - name: Publish APK to public GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APK: ${{ steps.find_apk.outputs.apk_path }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release view v1.0.0 >/dev/null
-          gh release upload v1.0.0 \
-            "$APK#Donut4U-Karaoke.apk" \
-            version.txt \
-            --clobber
+          RELEASE_TAG="v1.0.26"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              "$APK#Donut4U-Karaoke.apk" \
+              version.txt \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              "$APK#Donut4U-Karaoke.apk" \
+              version.txt \
+              --title "Donut4U Karaoke v1.0.26" \
+              --notes "Public signed APK release for Donut4U Karaoke version 1.0.26."
+          fi
 
       - name: Upload verified APK backup artifact
         uses: actions/upload-artifact@v4
