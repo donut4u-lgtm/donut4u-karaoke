@@ -93,10 +93,6 @@ public final class Stage3MidiLyrics {
         return false;
     }
 
-    /*
-     * Returns the lyrics in an editable form.
-     * Each original lyric line is represented by one text line.
-     */
     public String getEditableText() {
         StringBuilder result = new StringBuilder();
         int previousStanza = Integer.MIN_VALUE;
@@ -129,12 +125,6 @@ public final class Stage3MidiLyrics {
         return result.toString();
     }
 
-    /*
-     * Applies edited lyrics while preserving the original MIDI event ticks.
-     *
-     * The editor must keep the same number of lyric lines.
-     * Empty lines are rejected to avoid damaging the song structure.
-     */
     public boolean applyEditedText(String editedText) {
         if (editedText == null || events.isEmpty()) {
             return false;
@@ -193,10 +183,6 @@ public final class Stage3MidiLyrics {
             wordsByLine.add(words);
         }
 
-        /*
-         * Prepare every assignment before changing any event.
-         * This prevents a partially applied edit if validation fails.
-         */
         List<List<String>> assignments = new ArrayList<>();
 
         for (int lineIndex = 0;
@@ -239,11 +225,6 @@ public final class Stage3MidiLyrics {
                 lineAssignments.add("");
             }
 
-            /*
-             * Distribute edited words across the original timed groups.
-             * The first event in a group receives the edited word.
-             * Other events in that group become empty lyric slots.
-             */
             for (int wordIndex = 0;
                  wordIndex < words.length;
                  wordIndex++) {
@@ -276,9 +257,6 @@ public final class Stage3MidiLyrics {
             assignments.add(lineAssignments);
         }
 
-        /*
-         * All validation has succeeded. Apply the edits now.
-         */
         for (int lineIndex = 0;
              lineIndex < eventsByLine.size();
              lineIndex++) {
@@ -556,10 +534,6 @@ public final class Stage3MidiLyrics {
         return result;
     }
 
-    /*
-     * KARAOKE LYRIC RENDERER
-     * Displays a five-line window and highlights the current lyric green.
-     */
     private FullResult build(long tick, long durationTicks) {
         SpannableStringBuilder output = new SpannableStringBuilder();
 
@@ -952,8 +926,12 @@ public final class Stage3MidiLyrics {
                             continue;
                         }
 
-                        if (type == 0x01
-                                && !separatorOnlyLyricEvent
+                        /*
+                         * Filter metadata from BOTH MIDI text and lyric events.
+                         * Whitespace and separator-only events are preserved
+                         * because they carry word and line boundary information.
+                         */
+                        if (!separatorOnlyLyricEvent
                                 && !whitespaceOnlyLyricEvent
                                 && !isLikelyLyricText(trimmed)) {
                             continue;
@@ -1049,13 +1027,18 @@ public final class Stage3MidiLyrics {
         }
     }
 
+    /*
+     * Automatic formatting:
+     * Never split words just because two MIDI events have a timing gap.
+     * MIDI files often store syllables as separate events.
+     * Only explicit spacing and punctuation create word boundaries.
+     */
     private static void applyAutomaticFormatting(
             List<LyricEvent> lyricEvents,
             int ppq) {
 
         if (lyricEvents == null || lyricEvents.isEmpty()) return;
 
-        long beat = Math.max(1L, ppq);
         int maximumCharacters = 32;
         int maximumEventsPerLine = 12;
 
@@ -1080,7 +1063,6 @@ public final class Stage3MidiLyrics {
             }
 
             if (previous != null) {
-                long gap = Math.max(0L, current.tick - previous.tick);
                 String previousText = previous.text.trim();
 
                 boolean sentenceEnd =
@@ -1097,27 +1079,16 @@ public final class Stage3MidiLyrics {
                 boolean explicitWordBoundary =
                         previous.spaceAfter || current.spaceBefore;
 
-                boolean timingWordBoundary =
-                        gap >= Math.max(1L, beat / 3L);
-
-                boolean inferredWordBoundary =
-                        explicitWordBoundary
-                        || sentenceEnd
-                        || phraseEnd
-                        || timingWordBoundary;
-
-                if (inferredWordBoundary && !explicitWordBoundary) {
-                    current.inferredSpaceBefore = true;
-                }
-
-                boolean newStanza =
-                        gap >= beat * 8L
-                        || (sentenceEnd && gap >= beat * 4L);
+                /*
+                 * Do not infer spaces from timing gaps.
+                 * A long syllable gap is not necessarily a word boundary.
+                 */
+                boolean wordBoundary = explicitWordBoundary;
 
                 boolean lineWouldOverflow =
                         lineCharacters
                         + current.text.length()
-                        + (inferredWordBoundary ? 1 : 0)
+                        + (wordBoundary ? 1 : 0)
                         > maximumCharacters;
 
                 boolean lineTooManyEvents =
@@ -1126,13 +1097,12 @@ public final class Stage3MidiLyrics {
                 boolean newLine =
                         sentenceEnd
                         || phraseEnd
-                        || (inferredWordBoundary
+                        || (wordBoundary
                                 && (lineWouldOverflow || lineTooManyEvents));
 
                 if (!current.lineBreak && !current.stanzaBreak) {
-                    if (newStanza) {
-                        current.stanzaBreak = true;
-                        current.lineBreak = false;
+                    if (sentenceEnd && previousText.endsWith(".")) {
+                        current.lineBreak = true;
                         lineCharacters = 0;
                         lineEvents = 0;
 
@@ -1429,10 +1399,7 @@ public final class Stage3MidiLyrics {
 
     private static final class LyricEvent {
         final long tick;
-
-        // Mutable so the lyric editor can change text without changing timing.
         String text;
-
         final int sequence;
         final boolean section;
 
