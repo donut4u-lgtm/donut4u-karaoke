@@ -100,12 +100,10 @@ public class Stage3SongbookActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(12));
         root.addView(subtitle);
 
-        // IMPORT SONGS FROM DEVICE
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
 
-        // POSTFILE UPLOAD
         Button postFileButton =
                 makeButton("UPLOAD MIDI/KAR TO POSTFILE");
 
@@ -127,7 +125,6 @@ public class Stage3SongbookActivity extends Activity {
 
         root.addView(postFileButton, buttonParams());
 
-        // MEDIAFIRE MIDI/KAR SEARCH AND DOWNLOAD
         Button mediaFireButton =
                 makeButton("SEARCH / DOWNLOAD MIDI/KAR (MEDIAFIRE)");
 
@@ -149,7 +146,6 @@ public class Stage3SongbookActivity extends Activity {
 
         root.addView(mediaFireButton, buttonParams());
 
-        // SONG SEARCH
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
         searchInput.setHint("Search song number, title or singer");
@@ -158,6 +154,7 @@ public class Stage3SongbookActivity extends Activity {
         searchInput.setTextSize(16);
         searchInput.setPadding(dp(12), 0, dp(12), 0);
         searchInput.setBackgroundColor(Color.rgb(35, 48, 40));
+
         root.addView(searchInput,
                 new LinearLayout.LayoutParams(-1, dp(48)));
 
@@ -209,6 +206,15 @@ public class Stage3SongbookActivity extends Activity {
         button.setBackgroundTintList(
                 android.content.res.ColorStateList.valueOf(
                         Color.rgb(20, 125, 65)));
+        return button;
+    }
+
+    private Button makeDeleteButton() {
+        Button button = makeButton("DELETE FROM LIST");
+        button.setTextSize(12);
+        button.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(
+                        Color.rgb(170, 45, 45)));
         return button;
     }
 
@@ -920,6 +926,61 @@ public class Stage3SongbookActivity extends Activity {
         }
     }
 
+    // Deletes only the songbook entry.
+    // It never deletes the underlying media file or SoundFont.
+    private void confirmDeleteFromList(Song song) {
+        if (song == null) {
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("DELETE FROM LIST?")
+                .setMessage(
+                        "Remove \"" + song.title
+                                + "\" from the Stage 3 song list?\n\n"
+                                + "Only the songbook entry will be removed.\n\n"
+                                + "The original MIDI/KAR, audio, video, "
+                                + "lyrics or SoundFont file will NOT "
+                                + "be deleted.")
+                .setNegativeButton("CANCEL", null)
+                .setPositiveButton("DELETE FROM LIST",
+                        (dialog, which) -> {
+
+                            if (!songs.remove(song)) {
+                                return;
+                            }
+
+                            // If this was the selected SoundFont,
+                            // clear its selection without deleting its file.
+                            if ("SOUNDFONT".equalsIgnoreCase(song.type)
+                                    || song.title.toLowerCase(Locale.ROOT)
+                                    .endsWith(".sf2")) {
+
+                                String selectedUri = preferences.getString(
+                                        SELECTED_SOUNDFONT_KEY, "");
+
+                                if (song.uri.equals(selectedUri)) {
+                                    preferences.edit()
+                                            .remove(SELECTED_SOUNDFONT_KEY)
+                                            .apply();
+                                }
+                            }
+
+                            saveSongs();
+
+                            renderSongs(searchInput == null
+                                    ? ""
+                                    : searchInput.getText().toString());
+
+                            Toast.makeText(
+                                    Stage3SongbookActivity.this,
+                                    "Entry removed from Stage 3 list. "
+                                            + "Original file preserved.",
+                                    Toast.LENGTH_LONG).show();
+                        })
+                .show();
+    }
+
     private View createSongCard(Song song) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -964,62 +1025,6 @@ public class Stage3SongbookActivity extends Activity {
 
         boolean playable = !catalog && !soundFont && !lyricsFile;
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-
-        Button addButton = makeButton("ADD TO QUEUE");
-        addButton.setTextSize(12);
-        addButton.setEnabled(playable);
-
-        addButton.setOnClickListener(v -> {
-            if (!playable) {
-                showCatalogNotice();
-                return;
-            }
-
-            Stage3SongQueue.initialize(this);
-
-            if (Stage3SongQueue.containsUri(song.uri)) {
-                Toast.makeText(this,
-                        "This song is already in the queue.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            boolean added = Stage3SongQueue.add(
-                    new Stage3SongQueue.QueuedSong(
-                            song.number, song.title, song.uri, song.type));
-
-            Toast.makeText(this,
-                    added ? "Added " + song.number + " to queue."
-                            : "Could not add this song.",
-                    Toast.LENGTH_SHORT).show();
-        });
-
-        Button openButton = makeButton(
-                catalog ? "SONG INFO"
-                        : soundFont ? "SOUNDFONT"
-                        : lyricsFile ? "LYRICS FILE"
-                        : "PLAY IN DONUT4U");
-
-        openButton.setTextSize(12);
-        openButton.setEnabled(playable);
-        openButton.setOnClickListener(v -> {
-            if (!playable) {
-                showCatalogNotice();
-                return;
-            }
-            playInDonutStage(song);
-        });
-
-        LinearLayout.LayoutParams half =
-                new LinearLayout.LayoutParams(0, dp(44), 1f);
-        half.setMargins(0, 0, dp(6), 0);
-        buttons.addView(addButton, half);
-
-        buttons.addView(openButton,
-                new LinearLayout.LayoutParams(0, dp(44), 1f));
-
         if (soundFont) {
             String selectedUri = preferences.getString(
                     SELECTED_SOUNDFONT_KEY, "");
@@ -1060,61 +1065,49 @@ public class Stage3SongbookActivity extends Activity {
             card.addView(selectButton,
                     new LinearLayout.LayoutParams(-1, dp(44)));
 
-            Button removeButton = makeButton("REMOVE");
-            removeButton.setTextSize(12);
-            removeButton.setBackgroundTintList(
-                    android.content.res.ColorStateList.valueOf(
-                            Color.rgb(170, 45, 45)));
+            Button deleteButton = makeDeleteButton();
+            deleteButton.setOnClickListener(v ->
+                    confirmDeleteFromList(song));
 
-            removeButton.setOnClickListener(v ->
-                    new AlertDialog.Builder(
-                            Stage3SongbookActivity.this)
-                            .setTitle("Remove SoundFont?")
-                            .setMessage(
-                                    "Remove this SoundFont entry from "
-                                            + "the Stage 3 songbook?\n\n"
-                                            + "This will not delete the "
-                                            + "original file in Downloads "
-                                            + "or Google Drive, and will "
-                                            + "not delete a cached copy "
-                                            + "used by the player.")
-                            .setNegativeButton("CANCEL", null)
-                            .setPositiveButton("REMOVE",
-                                    (dialog, which) -> {
-                                        songs.remove(song);
-
-                                        String currentlySelected =
-                                                preferences.getString(
-                                                        SELECTED_SOUNDFONT_KEY,
-                                                        "");
-
-                                        if (song.uri.equals(
-                                                currentlySelected)) {
-                                            preferences.edit()
-                                                    .remove(
-                                                        SELECTED_SOUNDFONT_KEY)
-                                                    .apply();
-                                        }
-
-                                        saveSongs();
-
-                                        renderSongs(searchInput == null
-                                                ? ""
-                                                : searchInput.getText()
-                                                .toString());
-
-                                        Toast.makeText(
-                                                Stage3SongbookActivity.this,
-                                                "SoundFont entry removed.",
-                                                Toast.LENGTH_SHORT).show();
-                                    })
-                            .show());
-
-            LinearLayout.LayoutParams removeParams =
+            LinearLayout.LayoutParams deleteParams =
                     new LinearLayout.LayoutParams(-1, dp(44));
-            removeParams.topMargin = dp(6);
-            card.addView(removeButton, removeParams);
+            deleteParams.topMargin = dp(6);
+            card.addView(deleteButton, deleteParams);
+
         } else {
+            LinearLayout buttons = new LinearLayout(this);
+            buttons.setOrientation(LinearLayout.HORIZONTAL);
+
+            Button deleteButton = makeDeleteButton();
+            deleteButton.setOnClickListener(v ->
+                    confirmDeleteFromList(song));
+
+            Button openButton = makeButton(
+                    catalog ? "SONG INFO"
+                            : lyricsFile ? "LYRICS FILE"
+                            : "PLAY IN DONUT4U");
+
+            openButton.setTextSize(12);
+            openButton.setEnabled(playable);
+
+            openButton.setOnClickListener(v -> {
+                if (!playable) {
+                    showCatalogNotice();
+                    return;
+                }
+
+                playInDonutStage(song);
+            });
+
+            LinearLayout.LayoutParams half =
+                    new LinearLayout.LayoutParams(0, dp(44), 1f);
+            half.setMargins(0, 0, dp(6), 0);
+
+            buttons.addView(deleteButton, half);
+
+            buttons.addView(openButton,
+                    new LinearLayout.LayoutParams(0, dp(44), 1f));
+
             card.addView(buttons);
         }
 
@@ -1152,6 +1145,8 @@ public class Stage3SongbookActivity extends Activity {
         }
 
         try {
+            // Internal player handoff is preserved.
+            // This is not a user-facing queue operation.
             Stage3SongQueue.initialize(this);
             Stage3SongQueue.setNowPlaying(
                     new Stage3SongQueue.QueuedSong(
