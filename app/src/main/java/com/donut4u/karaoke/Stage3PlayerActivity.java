@@ -1,9 +1,12 @@
 package com.donut4u.karaoke;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
@@ -17,6 +20,7 @@ import android.view.TextureView;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -26,6 +30,7 @@ import android.widget.Toast;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.VideoSize;
 import androidx.media3.exoplayer.ExoPlayer;
 
 import org.json.JSONArray;
@@ -63,6 +68,29 @@ public class Stage3PlayerActivity extends Activity {
 
     private static final int SEEK_MAX = 1000;
 
+    private static final int REQUEST_BACKGROUND_IMAGE = 7301;
+    private static final int REQUEST_BACKGROUND_VIDEO = 7302;
+
+    private static final String PREF_BG_TYPE =
+            "stage3_personal_background_type";
+
+    private static final String PREF_BG_URI =
+            "stage3_personal_background_uri";
+
+    private static final String PREF_BG_DARKNESS =
+            "stage3_personal_background_darkness";
+
+    private static final String PREF_BG_FIT =
+            "stage3_personal_background_fit";
+
+    private static final String BG_DEFAULT = "DEFAULT";
+    private static final String BG_IMAGE = "IMAGE";
+    private static final String BG_VIDEO = "VIDEO";
+
+    private static final String FIT_FILL = "FILL";
+    private static final String FIT = "FIT";
+    private static final String FIT_STRETCH = "STRETCH";
+
     private ExoPlayer player;
     private ExoPlayer backgroundPlayer;
 
@@ -70,6 +98,7 @@ public class Stage3PlayerActivity extends Activity {
 
     private FrameLayout stage;
     private TextureView backgroundTexture;
+    private ImageView backgroundImage;
 
     private LinearLayout overlay;
     private TextView songTitleLabel;
@@ -84,6 +113,7 @@ public class Stage3PlayerActivity extends Activity {
     private Button playButton;
     private Button pauseButton;
     private Button stopButton;
+    private Button backgroundButton;
 
     private SeekBar seekBar;
 
@@ -106,6 +136,8 @@ public class Stage3PlayerActivity extends Activity {
     private int lastScrolledLyricLine = Integer.MIN_VALUE;
 
     private String lastRenderedLyricText;
+
+    private VideoSize currentBackgroundVideoSize;
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -154,6 +186,12 @@ public class Stage3PlayerActivity extends Activity {
         handler.post(progressUpdater);
     }
 
+    private SharedPreferences backgroundPreferences() {
+        return getSharedPreferences(
+                SONGBOOK_PREFS,
+                MODE_PRIVATE);
+    }
+
     private int dp(float value) {
         return (int) (
                 value * getResources()
@@ -165,8 +203,22 @@ public class Stage3PlayerActivity extends Activity {
         stage = new FrameLayout(this);
         stage.setBackgroundColor(DARK_GREEN);
 
+        backgroundImage = new ImageView(this);
+        backgroundImage.setVisibility(View.GONE);
+        backgroundImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        backgroundImage.setBackgroundColor(DARK_GREEN);
+
+        FrameLayout.LayoutParams imageParams =
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT);
+
+        stage.addView(backgroundImage, imageParams);
+
         backgroundTexture = new TextureView(this);
         backgroundTexture.setVisibility(View.GONE);
+        backgroundTexture.setOpaque(false);
+        backgroundTexture.setBackgroundColor(Color.TRANSPARENT);
 
         FrameLayout.LayoutParams videoParams =
                 new FrameLayout.LayoutParams(
@@ -175,13 +227,17 @@ public class Stage3PlayerActivity extends Activity {
 
         stage.addView(backgroundTexture, videoParams);
 
+        backgroundTexture.addOnLayoutChangeListener(
+                (v, left, top, right, bottom,
+                 oldLeft, oldTop, oldRight, oldBottom) -> {
+                    applyVideoFitMode();
+                });
+
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
         overlay.setPadding(
                 dp(14), dp(8), dp(14), dp(8));
-
-        overlay.setBackgroundColor(Color.argb(145, 0, 12, 7));
 
         FrameLayout.LayoutParams overlayParams =
                 new FrameLayout.LayoutParams(
@@ -189,6 +245,8 @@ public class Stage3PlayerActivity extends Activity {
                         FrameLayout.LayoutParams.MATCH_PARENT);
 
         stage.addView(overlay, overlayParams);
+
+        applyBackgroundDarkness();
 
         songTitleLabel = new TextView(this);
         songTitleLabel.setText("");
@@ -239,8 +297,6 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         0,
                         1f);
-
-        lyricsContainer.setBackgroundColor(Color.TRANSPARENT);
 
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(true);
@@ -391,44 +447,15 @@ public class Stage3PlayerActivity extends Activity {
         pauseButton.setOnClickListener(v -> pauseCurrentSong());
         stopButton.setOnClickListener(v -> stopCurrentSong());
 
-        seekBar.setOnSeekBarChangeListener(
-                new SeekBar.OnSeekBarChangeListener() {
+        backgroundButton = createControlButton("BACKGROUND");
+        backgroundButton.setTextSize(14);
+        backgroundButton.setOnClickListener(v -> showBackgroundMenu());
 
-            @Override
-            public void onProgressChanged(
-                    SeekBar bar,
-                    int progress,
-                    boolean fromUser) {
-
-                if (fromUser) {
-                    userSeeking = true;
-
-                    if (midiMode && midiReady
-                            && getEffectiveMidiDurationTicks() > 0L) {
-
-                        long previewTick =
-                                progressToMidiTick(progress);
-
-                        updateMidiLyricsAtTick(previewTick);
-                    }
-                }
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar bar) {
-                userSeeking = true;
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar bar) {
-
-                int selectedProgress = bar.getProgress();
-
-                seekToProgress(selectedProgress);
-
-                userSeeking = false;
-            }
-        });
+        controls.addView(
+                backgroundButton,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(46)));
 
         backButton = new TextView(this);
         backButton.setText("←  BACK TO SONGBOOK");
@@ -487,6 +514,508 @@ public class Stage3PlayerActivity extends Activity {
 
         return button;
     }
+
+    // ---------------------------------------------------------
+    // PERSONAL BACKGROUND MENU
+    // ---------------------------------------------------------
+
+    private void showBackgroundMenu() {
+
+        String[] choices = {
+                "Choose picture from phone",
+                "Choose MP4 video from phone",
+                "Adjust background darkness",
+                "Change display mode: Fill / Fit / Stretch",
+                "Use original dark-green background"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("PERSONAL KARAOKE BACKGROUND")
+                .setItems(choices, (dialog, which) -> {
+
+                    if (which == 0) {
+                        openBackgroundPicker(false);
+
+                    } else if (which == 1) {
+                        openBackgroundPicker(true);
+
+                    } else if (which == 2) {
+                        showDarknessDialog();
+
+                    } else if (which == 3) {
+                        showFitModeDialog();
+
+                    } else if (which == 4) {
+                        useDefaultBackground();
+                    }
+                })
+                .setNegativeButton("CLOSE", null)
+                .show();
+    }
+
+    private void openBackgroundPicker(boolean video) {
+
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        intent.setType(video ? "video/mp4" : "image/*");
+
+        intent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+        try {
+            startActivityForResult(
+                    intent,
+                    video
+                            ? REQUEST_BACKGROUND_VIDEO
+                            : REQUEST_BACKGROUND_IMAGE);
+
+        } catch (Exception e) {
+
+            Toast.makeText(
+                    this,
+                    "Cannot open the phone file picker.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(
+            int requestCode,
+            int resultCode,
+            Intent data) {
+
+        super.onActivityResult(
+                requestCode, resultCode, data);
+
+        if (resultCode != RESULT_OK
+                || data == null
+                || data.getData() == null) {
+            return;
+        }
+
+        if (requestCode != REQUEST_BACKGROUND_IMAGE
+                && requestCode != REQUEST_BACKGROUND_VIDEO) {
+            return;
+        }
+
+        Uri uri = data.getData();
+
+        try {
+            int flags = data.getFlags()
+                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+            getContentResolver().takePersistableUriPermission(
+                    uri,
+                    flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        } catch (Exception ignored) {
+            // Some document providers do not offer persistable access.
+        }
+
+        boolean video =
+                requestCode == REQUEST_BACKGROUND_VIDEO;
+
+        SharedPreferences.Editor editor =
+                backgroundPreferences().edit();
+
+        editor.putString(
+                PREF_BG_TYPE,
+                video ? BG_VIDEO : BG_IMAGE);
+
+        editor.putString(PREF_BG_URI, uri.toString());
+
+        editor.apply();
+
+        applySavedPersonalBackground();
+
+        Toast.makeText(
+                this,
+                video
+                        ? "Your personal MP4 background is selected."
+                        : "Your personal picture background is selected.",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void useDefaultBackground() {
+
+        backgroundPreferences()
+                .edit()
+                .putString(PREF_BG_TYPE, BG_DEFAULT)
+                .remove(PREF_BG_URI)
+                .apply();
+
+        applySavedPersonalBackground();
+
+        Toast.makeText(
+                this,
+                "Original dark-green background restored.",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void applyBackgroundDarkness() {
+
+        if (overlay == null) {
+            return;
+        }
+
+        int darkness = backgroundPreferences().getInt(
+                PREF_BG_DARKNESS, 57);
+
+        darkness = Math.max(0, Math.min(90, darkness));
+
+        int alpha = Math.round(
+                darkness * 255f / 100f);
+
+        overlay.setBackgroundColor(
+                Color.argb(alpha, 0, 12, 7));
+    }
+
+    private void showDarknessDialog() {
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(
+                dp(22), dp(12), dp(22), dp(8));
+
+        TextView valueLabel = new TextView(this);
+        valueLabel.setTextColor(WHITE);
+        valueLabel.setTextSize(16);
+        valueLabel.setGravity(Gravity.CENTER);
+
+        SeekBar darknessBar = new SeekBar(this);
+        darknessBar.setMax(90);
+
+        int saved = backgroundPreferences().getInt(
+                PREF_BG_DARKNESS, 57);
+
+        darknessBar.setProgress(saved);
+
+        valueLabel.setText("Darkness: " + saved + "%");
+
+        darknessBar.setOnSeekBarChangeListener(
+                new SeekBar.OnSeekBarChangeListener() {
+
+            @Override
+            public void onProgressChanged(
+                    SeekBar bar,
+                    int progress,
+                    boolean fromUser) {
+
+                valueLabel.setText(
+                        "Darkness: " + progress + "%");
+
+                backgroundPreferences()
+                        .edit()
+                        .putInt(PREF_BG_DARKNESS, progress)
+                        .apply();
+
+                applyBackgroundDarkness();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar bar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar bar) {
+            }
+        });
+
+        layout.addView(valueLabel);
+        layout.addView(darknessBar);
+
+        new AlertDialog.Builder(this)
+                .setTitle("BACKGROUND DARKNESS")
+                .setView(layout)
+                .setPositiveButton("DONE", null)
+                .setNegativeButton("RESET", (dialog, which) -> {
+                    backgroundPreferences()
+                            .edit()
+                            .putInt(PREF_BG_DARKNESS, 57)
+                            .apply();
+                    applyBackgroundDarkness();
+                })
+                .show();
+    }
+
+    private void showFitModeDialog() {
+
+        String[] modes = {
+                "Fill — cover screen, crop edges",
+                "Fit — show whole picture/video",
+                "Stretch — fill screen, may distort"
+        };
+
+        String current = backgroundPreferences().getString(
+                PREF_BG_FIT, FIT_FILL);
+
+        int selected = FIT_FILL.equals(current)
+                ? 0
+                : FIT.equals(current) ? 1 : 2;
+
+        new AlertDialog.Builder(this)
+                .setTitle("BACKGROUND DISPLAY MODE")
+                .setSingleChoiceItems(
+                        modes,
+                        selected,
+                        (dialog, which) -> {
+
+                            String mode = which == 0
+                                    ? FIT_FILL
+                                    : which == 1
+                                    ? FIT
+                                    : FIT_STRETCH;
+
+                            backgroundPreferences()
+                                    .edit()
+                                    .putString(PREF_BG_FIT, mode)
+                                    .apply();
+
+                            applyImageFitMode();
+                            applyVideoFitMode();
+
+                            dialog.dismiss();
+                        })
+                .setNegativeButton("CANCEL", null)
+                .show();
+    }
+
+    private void applyImageFitMode() {
+
+        if (backgroundImage == null) {
+            return;
+        }
+
+        String mode = backgroundPreferences().getString(
+                PREF_BG_FIT, FIT_FILL);
+
+        if (FIT.equals(mode)) {
+            backgroundImage.setScaleType(
+                    ImageView.ScaleType.FIT_CENTER);
+
+        } else if (FIT_STRETCH.equals(mode)) {
+            backgroundImage.setScaleType(
+                    ImageView.ScaleType.FIT_XY);
+
+        } else {
+            backgroundImage.setScaleType(
+                    ImageView.ScaleType.CENTER_CROP);
+        }
+    }
+
+    private void applyVideoFitMode() {
+
+        if (backgroundTexture == null) {
+            return;
+        }
+
+        VideoSize size = currentBackgroundVideoSize;
+
+        if (size == null
+                || size.width <= 0
+                || size.height <= 0) {
+            return;
+        }
+
+        int viewWidth = backgroundTexture.getWidth();
+        int viewHeight = backgroundTexture.getHeight();
+
+        if (viewWidth <= 0 || viewHeight <= 0) {
+            return;
+        }
+
+        String mode = backgroundPreferences().getString(
+                PREF_BG_FIT, FIT_FILL);
+
+        Matrix matrix = new Matrix();
+
+        if (FIT_STRETCH.equals(mode)) {
+            backgroundTexture.setTransform(matrix);
+            return;
+        }
+
+        float videoAspect =
+                (size.width * size.pixelWidthHeightRatio)
+                        / (float) size.height;
+
+        float viewAspect =
+                viewWidth / (float) viewHeight;
+
+        float scaleX = 1f;
+        float scaleY = 1f;
+
+        if (FIT.equals(mode)) {
+
+            if (videoAspect > viewAspect) {
+                scaleY = viewAspect / videoAspect;
+            } else {
+                scaleX = videoAspect / viewAspect;
+            }
+
+        } else {
+
+            if (videoAspect > viewAspect) {
+                scaleX = videoAspect / viewAspect;
+            } else {
+                scaleY = viewAspect / videoAspect;
+            }
+        }
+
+        matrix.setScale(
+                scaleX,
+                scaleY,
+                viewWidth / 2f,
+                viewHeight / 2f);
+
+        backgroundTexture.setTransform(matrix);
+    }
+
+    private void applySavedPersonalBackground() {
+
+        if (stage == null || backgroundTexture == null
+                || backgroundImage == null) {
+            return;
+        }
+
+        releaseBackgroundPlayer();
+
+        backgroundImage.setImageDrawable(null);
+        backgroundImage.setVisibility(View.GONE);
+
+        backgroundTexture.setVisibility(View.GONE);
+        currentBackgroundVideoSize = null;
+
+        stage.setBackgroundColor(DARK_GREEN);
+
+        applyBackgroundDarkness();
+
+        SharedPreferences preferences =
+                backgroundPreferences();
+
+        String type = preferences.getString(
+                PREF_BG_TYPE, BG_DEFAULT);
+
+        String savedUri = preferences.getString(
+                PREF_BG_URI, "");
+
+        if (BG_IMAGE.equals(type)) {
+
+            if (savedUri == null || savedUri.trim().isEmpty()) {
+                return;
+            }
+
+            try {
+                Uri uri = Uri.parse(savedUri);
+
+                backgroundImage.setImageURI(uri);
+                applyImageFitMode();
+
+                backgroundImage.setVisibility(View.VISIBLE);
+
+            } catch (Exception e) {
+
+                backgroundImage.setVisibility(View.GONE);
+
+                Toast.makeText(
+                        this,
+                        "Cannot open the saved background picture.",
+                        Toast.LENGTH_LONG).show();
+            }
+
+        } else if (BG_VIDEO.equals(type)) {
+
+            if (savedUri == null || savedUri.trim().isEmpty()) {
+                return;
+            }
+
+            startPersonalBackgroundVideo(savedUri);
+
+        } else {
+
+            backgroundImage.setVisibility(View.GONE);
+            backgroundTexture.setVisibility(View.GONE);
+            stage.setBackgroundColor(DARK_GREEN);
+        }
+    }
+
+    private void startPersonalBackgroundVideo(String uriString) {
+
+        try {
+            Uri uri = Uri.parse(uriString);
+
+            backgroundPlayer =
+                    new ExoPlayer.Builder(this).build();
+
+            backgroundPlayer.setVideoTextureView(
+                    backgroundTexture);
+
+            backgroundPlayer.setVolume(0f);
+
+            backgroundPlayer.setRepeatMode(
+                    Player.REPEAT_MODE_ONE);
+
+            backgroundPlayer.addListener(
+                    new Player.Listener() {
+
+                @Override
+                public void onVideoSizeChanged(VideoSize videoSize) {
+
+                    currentBackgroundVideoSize = videoSize;
+
+                    applyVideoFitMode();
+                }
+
+                @Override
+                public void onPlayerError(
+                        PlaybackException error) {
+
+                    backgroundAvailable = false;
+
+                    releaseBackgroundPlayer();
+
+                    Toast.makeText(
+                            Stage3PlayerActivity.this,
+                            "The selected background video cannot be played.",
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+
+            backgroundTexture.setVisibility(View.VISIBLE);
+            backgroundAvailable = true;
+
+            backgroundPlayer.setMediaItem(
+                    MediaItem.fromUri(uri));
+
+            backgroundPlayer.prepare();
+
+            if (!midiMode || (midiReady
+                    && midiEngine != null
+                    && midiEngine.isPlaying())) {
+                backgroundPlayer.play();
+            } else {
+                backgroundPlayer.pause();
+            }
+
+        } catch (Exception e) {
+
+            backgroundAvailable = false;
+
+            releaseBackgroundPlayer();
+
+            Toast.makeText(
+                    this,
+                    "Cannot load the selected MP4 background.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // ---------------------------------------------------------
+    // PLAYBACK
+    // ---------------------------------------------------------
 
     private void playCurrentSong() {
 
@@ -768,13 +1297,13 @@ public class Stage3PlayerActivity extends Activity {
 
         resetLyricTracking();
 
-        // Playback buttons stay visibly enabled.
-        // The seek bar waits until a duration is available.
         setControlsEnabled(true);
 
         updatePlaybackTime(0L, 0L);
 
-        startMatchingBackgroundVideo(song);
+        // Use the user's saved background.
+        // Do not automatically select another songbook MP4.
+        applySavedPersonalBackground();
 
         String soundFontUri = findSoundFontUri();
 
@@ -866,7 +1395,6 @@ public class Stage3PlayerActivity extends Activity {
                                     Toast.LENGTH_LONG).show();
                         }
 
-                        // Fallback to the duration parsed from MIDI.
                         if (currentMidiTiming != null
                                 && midiDurationTicks <= 0L) {
 
@@ -887,8 +1415,11 @@ public class Stage3PlayerActivity extends Activity {
                             singerLabel.setVisibility(View.GONE);
                         }
 
-                        // Enable playback buttons even when duration is 0.
                         setControlsEnabled(true);
+
+                        if (backgroundPlayer != null) {
+                            backgroundPlayer.play();
+                        }
 
                         updateMidiLyricsAtTick(
                                 midiEngine.getCurrentTick());
@@ -906,6 +1437,10 @@ public class Stage3PlayerActivity extends Activity {
                         }
 
                         midiReady = false;
+
+                        if (backgroundPlayer != null) {
+                            backgroundPlayer.pause();
+                        }
 
                         setControlsEnabled(false);
 
@@ -938,8 +1473,6 @@ public class Stage3PlayerActivity extends Activity {
 
     private void setControlsEnabled(boolean enabled) {
 
-        // Buttons are independent of duration.
-        // When enabled is true, all three buttons are tappable.
         if (playButton != null) {
             playButton.setEnabled(enabled);
             playButton.setAlpha(enabled ? 1f : 0.45f);
@@ -955,7 +1488,6 @@ public class Stage3PlayerActivity extends Activity {
             stopButton.setAlpha(enabled ? 1f : 0.45f);
         }
 
-        // Seeking requires a known duration.
         if (seekBar != null) {
 
             boolean canSeek = enabled;
@@ -1177,249 +1709,6 @@ public class Stage3PlayerActivity extends Activity {
         updatePlaybackTime(
                 Math.max(0L, position),
                 duration > 0L ? duration : 0L);
-    }
-
-    private void startMatchingBackgroundVideo(
-            Stage3SongQueue.QueuedSong midiSong) {
-
-        String videoUri =
-                findMatchingBackgroundVideo(midiSong);
-
-        if (videoUri == null) {
-
-            backgroundAvailable = false;
-
-            backgroundTexture.setVisibility(View.GONE);
-            stage.setBackgroundColor(DARK_GREEN);
-
-            return;
-        }
-
-        try {
-            backgroundPlayer =
-                    new ExoPlayer.Builder(this).build();
-
-            backgroundPlayer.setVideoTextureView(
-                    backgroundTexture);
-
-            backgroundPlayer.setVolume(0f);
-
-            backgroundPlayer.setRepeatMode(
-                    Player.REPEAT_MODE_ONE);
-
-            backgroundPlayer.addListener(
-                    new Player.Listener() {
-
-                @Override
-                public void onPlayerError(
-                        PlaybackException error) {
-
-                    backgroundAvailable = false;
-
-                    releaseBackgroundPlayer();
-
-                    if (stage != null) {
-                        stage.setBackgroundColor(DARK_GREEN);
-                    }
-                }
-            });
-
-            backgroundTexture.setVisibility(View.VISIBLE);
-            backgroundAvailable = true;
-
-            backgroundPlayer.setMediaItem(
-                    MediaItem.fromUri(Uri.parse(videoUri)));
-
-            backgroundPlayer.prepare();
-            backgroundPlayer.play();
-
-        } catch (Exception e) {
-
-            backgroundAvailable = false;
-
-            releaseBackgroundPlayer();
-
-            stage.setBackgroundColor(DARK_GREEN);
-        }
-    }
-
-    private String findMatchingBackgroundVideo(
-            Stage3SongQueue.QueuedSong midiSong) {
-
-        SharedPreferences preferences =
-                getSharedPreferences(
-                        SONGBOOK_PREFS,
-                        MODE_PRIVATE);
-
-        String selectedBackground = preferences.getString(
-                "selected_background_video_uri", "");
-
-        if (selectedBackground != null
-                && !selectedBackground.trim().isEmpty()
-                && isMp4Uri(selectedBackground.trim())) {
-
-            return selectedBackground.trim();
-        }
-
-        String wanted = midiSong == null
-                ? ""
-                : normalizeSongTitle(midiSong.title);
-
-        String json = preferences.getString(
-                SONGS_KEY, "[]");
-
-        try {
-            JSONArray songs = new JSONArray(json);
-
-            String exactMatch = null;
-            String bestMatch = null;
-            String firstAvailable = null;
-            int bestScore = 0;
-
-            for (int i = 0; i < songs.length(); i++) {
-
-                JSONObject item =
-                        songs.optJSONObject(i);
-
-                if (item == null) {
-                    continue;
-                }
-
-                String uri = item.optString("uri", "");
-                String type = item.optString("type", "");
-                String title = item.optString("title", "");
-
-                if (uri.isEmpty() || !isMp4Uri(uri)) {
-                    continue;
-                }
-
-                String upperType =
-                        type.toUpperCase(Locale.ROOT);
-
-                if (!upperType.contains("VIDEO")
-                        && !uri.toLowerCase(Locale.ROOT)
-                                .contains(".mp4")) {
-                    continue;
-                }
-
-                if (firstAvailable == null) {
-                    firstAvailable = uri;
-                }
-
-                String candidate =
-                        normalizeSongTitle(title);
-
-                if (candidate.isEmpty()) {
-                    candidate = normalizeSongTitle(
-                            Uri.parse(uri).getLastPathSegment());
-                }
-
-                if (candidate.isEmpty() || wanted.isEmpty()) {
-                    continue;
-                }
-
-                if (wanted.equals(candidate)) {
-                    exactMatch = uri;
-                    break;
-                }
-
-                int score = similarityScore(
-                        wanted, candidate);
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestMatch = uri;
-                }
-            }
-
-            if (exactMatch != null) {
-                return exactMatch;
-            }
-
-            if (bestScore >= 90 && bestMatch != null) {
-                return bestMatch;
-            }
-
-            return firstAvailable;
-
-        } catch (Exception ignored) {
-        }
-
-        return null;
-    }
-
-    private boolean isMp4Uri(String value) {
-
-        if (value == null || value.trim().isEmpty()) {
-            return false;
-        }
-
-        String lower = value.toLowerCase(Locale.ROOT);
-
-        return lower.endsWith(".mp4")
-                || lower.contains(".mp4?")
-                || lower.contains(".mp4&");
-    }
-
-    private String normalizeSongTitle(String value) {
-
-        if (value == null) {
-            return "";
-        }
-
-        String s = value.trim();
-
-        s = s.replaceAll(
-                "(?i)\\.(mid|midi|kar|mp4)$", "");
-
-        s = Normalizer.normalize(
-                s, Normalizer.Form.NFD);
-
-        s = s.replaceAll("\\p{M}", "");
-        s = s.toLowerCase(Locale.ROOT);
-
-        s = s.replaceAll(
-                "[^a-z0-9]+", " ");
-
-        return s.replaceAll("\\s+", " ").trim();
-    }
-
-    private int similarityScore(
-            String first,
-            String second) {
-
-        if (first.equals(second)) {
-            return 100;
-        }
-
-        if (first.isEmpty() || second.isEmpty()) {
-            return 0;
-        }
-
-        if (first.contains(second)
-                || second.contains(first)) {
-            return 92;
-        }
-
-        String[] a = first.split(" ");
-        String[] b = second.split(" ");
-
-        int common = 0;
-
-        for (String word : a) {
-            for (String other : b) {
-                if (word.equals(other)) {
-                    common++;
-                    break;
-                }
-            }
-        }
-
-        int total = Math.max(a.length, b.length);
-
-        return total == 0
-                ? 0
-                : common * 100 / total;
     }
 
     private void updateMidiLyricsAtTick(long tick) {
@@ -1810,6 +2099,7 @@ public class Stage3PlayerActivity extends Activity {
 
         countdownLabel.setVisibility(View.GONE);
         backgroundTexture.setVisibility(View.GONE);
+        backgroundImage.setVisibility(View.GONE);
         stage.setBackgroundColor(DARK_GREEN);
 
         lyricsLabel.setText(
@@ -1914,9 +2204,11 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         backgroundAvailable = false;
+        currentBackgroundVideoSize = null;
 
         if (backgroundTexture != null) {
             backgroundTexture.setVisibility(View.GONE);
+            backgroundTexture.setTransform(new Matrix());
         }
     }
 
@@ -1964,6 +2256,15 @@ public class Stage3PlayerActivity extends Activity {
 
         if (lyricsLabel != null) {
             lyricsLabel.setText("");
+        }
+
+        if (backgroundImage != null) {
+            backgroundImage.setImageDrawable(null);
+            backgroundImage.setVisibility(View.GONE);
+        }
+
+        if (backgroundTexture != null) {
+            backgroundTexture.setVisibility(View.GONE);
         }
 
         setControlsEnabled(false);
