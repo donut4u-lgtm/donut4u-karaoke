@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -359,7 +358,6 @@ public class Stage3PlayerActivity extends Activity {
         backgroundTexture = new TextureView(this);
         backgroundTexture.setVisibility(View.GONE);
         backgroundTexture.setOpaque(false);
-        backgroundTexture.setBackgroundColor(Color.TRANSPARENT);
 
         FrameLayout.LayoutParams videoParams =
                 new FrameLayout.LayoutParams(
