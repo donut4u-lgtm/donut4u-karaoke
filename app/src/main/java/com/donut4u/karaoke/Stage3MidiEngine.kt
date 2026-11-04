@@ -1,9 +1,11 @@
+
 package com.donut4u.karaoke
 
 import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 
 import dev.kotlinds.fluidsynthkmp.MidiFilePlayer
 
@@ -59,10 +61,54 @@ class Stage3MidiEngine private constructor(
         private const val DRIVE_FILE_ID =
             "17UmucO4VmekeBKWPimDB93JCWsVWsQb_"
 
+        private const val TAG = "Stage3MidiEngine"
+        private const val DIAGNOSTIC_FILE =
+            "stage3_midi_diagnostic.txt"
+
         @JvmStatic
         fun create(context: Context): Stage3MidiEngine {
             return Stage3MidiEngine(context.applicationContext)
         }
+    }
+
+    /**
+     * Saves the full native-linking error for later diagnosis.
+     * The short message is also returned to the Stage 3 screen.
+     */
+    private fun recordLinkageFailure(error: LinkageError): String {
+        val message = buildString {
+            append("MIDI native-library error: ")
+            append(error.javaClass.simpleName)
+
+            val detail = error.message
+            if (!detail.isNullOrBlank()) {
+                append(": ")
+                append(detail)
+            }
+        }
+
+        val stackTrace = error.stackTraceToString()
+
+        Log.e(TAG, message, error)
+
+        try {
+            File(context.filesDir, DIAGNOSTIC_FILE).writeText(
+                buildString {
+                    appendLine("Donut4U Stage 3 MIDI diagnostic")
+                    appendLine("Error: $message")
+                    appendLine()
+                    appendLine(stackTrace)
+                }
+            )
+        } catch (writeError: Exception) {
+            Log.e(
+                TAG,
+                "Could not save MIDI diagnostic file.",
+                writeError
+            )
+        }
+
+        return message
     }
 
     @Synchronized
@@ -184,7 +230,22 @@ class Stage3MidiEngine private constructor(
                 }
 
             } catch (_: CancellationException) {
+                // Expected when a song is stopped or replaced.
+
+            } catch (error: LinkageError) {
+                val message = recordLinkageFailure(error)
+
+                mainHandler.post {
+                    failSession(sessionId, message)
+                }
+
             } catch (error: Exception) {
+                Log.e(
+                    TAG,
+                    "Could not start MIDI playback.",
+                    error
+                )
+
                 val message = error.message
                     ?: "Could not start MIDI playback."
 
