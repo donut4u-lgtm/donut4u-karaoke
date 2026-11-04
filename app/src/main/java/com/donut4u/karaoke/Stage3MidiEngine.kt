@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke
 
 import android.content.Context
@@ -185,8 +184,6 @@ class Stage3MidiEngine private constructor(
                 }
 
             } catch (_: CancellationException) {
-                // The stopping session already handles its own cleanup.
-
             } catch (error: Exception) {
                 val message = error.message
                     ?: "Could not start MIDI playback."
@@ -449,10 +446,10 @@ class Stage3MidiEngine private constructor(
         if (closed || pausedByEngine) return
 
         val position = getCurrentTick()
+        pausedByEngine = true
 
         try {
             player.pause()
-            pausedByEngine = true
         } finally {
             lastNativeTick = position
         }
@@ -461,7 +458,7 @@ class Stage3MidiEngine private constructor(
     @Synchronized
     fun resume() {
         val player = midiPlayer ?: return
-        if (closed) return
+        if (closed || !pausedByEngine) return
 
         player.play()
         pausedByEngine = false
@@ -474,12 +471,9 @@ class Stage3MidiEngine private constructor(
         if (closed) return
 
         if (pausedByEngine) {
-            // Refresh FluidSynth's internal paused position.
-            // Its seekTo() alone does not update pausedAtTick.
             player.play()
             player.seekTo(target)
             player.pause()
-
             pausedByEngine = true
         } else {
             player.seekTo(target)
@@ -782,6 +776,25 @@ class Stage3MidiEngine private constructor(
     @Synchronized
     private fun finishSession(sessionId: Long) {
         if (!isSessionActive(sessionId)) return
+        if (pausedByEngine) return
+
+        val player = midiPlayer ?: return
+
+        val duration = try {
+            player.durationTicks.coerceAtLeast(0L)
+        } catch (_: Exception) {
+            0L
+        }
+
+        val position = try {
+            player.currentTick.coerceAtLeast(0L)
+        } catch (_: Exception) {
+            lastNativeTick.coerceAtLeast(0L)
+        }
+
+        if (duration <= 0L || position < duration - 2L) {
+            return
+        }
 
         val callback = activeCallback
 
