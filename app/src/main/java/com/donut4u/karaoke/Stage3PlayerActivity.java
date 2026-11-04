@@ -173,8 +173,6 @@ public class Stage3PlayerActivity extends Activity {
         overlay.setPadding(
                 dp(14), dp(8), dp(14), dp(8));
 
-        // Dark translucent layer keeps lyrics readable
-        // while the background video continues playing.
         overlay.setBackgroundColor(Color.argb(145, 0, 12, 7));
 
         FrameLayout.LayoutParams overlayParams =
@@ -218,7 +216,6 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // Increased space between singer and lyrics.
         View lyricsTopGap = new View(this);
 
         overlay.addView(
@@ -227,7 +224,6 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         dp(22)));
 
-        // Lyrics viewport with countdown layered above it.
         FrameLayout lyricsContainer = new FrameLayout(this);
 
         LinearLayout.LayoutParams containerParams =
@@ -381,8 +377,6 @@ public class Stage3PlayerActivity extends Activity {
 
                 int selectedProgress = bar.getProgress();
 
-                // Keep updates locked until the seek has
-                // been applied and the engine position read.
                 seekToProgress(selectedProgress);
 
                 userSeeking = false;
@@ -744,7 +738,6 @@ public class Stage3PlayerActivity extends Activity {
             backButton.setAlpha(0.5f);
         }
 
-        // Stop all playback before leaving this screen.
         releasePlayback();
 
         if (midiEngine != null) {
@@ -757,7 +750,6 @@ public class Stage3PlayerActivity extends Activity {
 
         released = true;
 
-        // The Songbook is the activity underneath this player.
         finish();
     }
 
@@ -802,8 +794,6 @@ public class Stage3PlayerActivity extends Activity {
 
                 midiEngine.seekTo(targetTick);
 
-                // Refresh the display from the requested
-                // position immediately after seeking.
                 lastScrolledLyricLine = Integer.MIN_VALUE;
 
                 updateMidiLyricsAtTick(targetTick);
@@ -983,7 +973,6 @@ public class Stage3PlayerActivity extends Activity {
                         SONGBOOK_PREFS,
                         MODE_PRIVATE);
 
-        // Optional manually selected background video.
         String selectedBackground = preferences.getString(
                 "selected_background_video_uri", "");
 
@@ -1073,9 +1062,6 @@ public class Stage3PlayerActivity extends Activity {
                 return bestMatch;
             }
 
-            // Use the first available imported MP4 as a
-            // general animated background when no matching
-            // title exists.
             return firstAvailable;
 
         } catch (Exception ignored) {
@@ -1158,13 +1144,6 @@ public class Stage3PlayerActivity extends Activity {
                 : common * 100 / total;
     }
 
-    /*
-     * KARAOKE LYRIC DISPLAY
-     *
-     * Current words are green.
-     * Upcoming words remain white.
-     * Countdown appears before vocal entrances.
-     */
     private void updateMidiLyricsAtTick(long tick) {
 
         if (lyricsLabel == null || currentMidiLyrics == null) {
@@ -1771,6 +1750,13 @@ public class Stage3PlayerActivity extends Activity {
 
         handler.removeCallbacks(progressUpdater);
         handler.post(progressUpdater);
+    }
+
+    // Android system Back button: return to Songbook
+    // through the same cleanup method as the on-screen button.
+    @Override
+    public void onBackPressed() {
+        returnToSongbook();
     }
 
     @Override
