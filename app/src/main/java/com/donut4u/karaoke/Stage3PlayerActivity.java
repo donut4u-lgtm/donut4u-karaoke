@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -15,6 +16,7 @@ import android.os.Looper;
 import android.text.Layout;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
@@ -90,6 +92,125 @@ public class Stage3PlayerActivity extends Activity {
     private static final String FIT_FILL = "FILL";
     private static final String FIT = "FIT";
     private static final String FIT_STRETCH = "STRETCH";
+
+    // ---------------------------------------------------------
+    // STAGE 3 LAUNCH DIAGNOSTICS
+    // ---------------------------------------------------------
+
+    private static final String DIAG_PREFS =
+            "stage3_player_launch_diagnostics";
+
+    private static final String DIAG_KEY =
+            "last_checkpoint";
+
+    private static final String DIAG_ERROR_KEY =
+            "last_error";
+
+    private void markPlayerLaunchCheckpoint(String checkpoint) {
+        try {
+            getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
+                    .edit()
+                    .putString(DIAG_KEY, checkpoint)
+                    .putLong("last_checkpoint_time",
+                            System.currentTimeMillis())
+                    .apply();
+        } catch (Exception ignored) {
+        }
+
+        Log.e("Stage3Launch", "CHECKPOINT: " + checkpoint);
+    }
+
+    private String getPlayerLaunchCheckpoint() {
+        try {
+            return getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
+                    .getString(DIAG_KEY, "unknown");
+        } catch (Exception ignored) {
+            return "unavailable";
+        }
+    }
+
+    private void showStartupDiagnostic(
+            String message,
+            Throwable error) {
+
+        String details = message;
+
+        if (error != null) {
+            Log.e("Stage3Launch", message, error);
+
+            String errorText =
+                    error.getClass().getSimpleName()
+                            + ": "
+                            + String.valueOf(error.getMessage());
+
+            details += "\n\n" + errorText;
+
+            try {
+                getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
+                        .edit()
+                        .putString(DIAG_ERROR_KEY,
+                                Log.getStackTraceString(error))
+                        .apply();
+            } catch (Exception ignored) {
+            }
+        }
+
+        try {
+            LinearLayout diagnostic =
+                    new LinearLayout(this);
+
+            diagnostic.setOrientation(
+                    LinearLayout.VERTICAL);
+
+            diagnostic.setGravity(Gravity.CENTER_VERTICAL);
+
+            diagnostic.setPadding(
+                    dp(20), dp(20), dp(20), dp(20));
+
+            diagnostic.setBackgroundColor(DARK_GREEN);
+
+            TextView heading = new TextView(this);
+            heading.setText("STAGE 3 STARTUP DIAGNOSTIC");
+            heading.setTextColor(ACTIVE_GREEN);
+            heading.setTextSize(22);
+            heading.setTypeface(
+                    Typeface.DEFAULT, Typeface.BOLD);
+
+            TextView text = new TextView(this);
+            text.setTextColor(WHITE);
+            text.setTextSize(17);
+            text.setText(
+                    details
+                            + "\n\nLast checkpoint: "
+                            + getPlayerLaunchCheckpoint()
+                            + "\n\nPlease note this checkpoint "
+                            + "before returning to the Songbook.");
+
+            Button back = new Button(this);
+            back.setText("BACK TO SONGBOOK");
+            back.setOnClickListener(v -> {
+                returningToSongbook = true;
+                finish();
+            });
+
+            diagnostic.addView(heading);
+            diagnostic.addView(text);
+            diagnostic.addView(back);
+
+            setContentView(diagnostic);
+
+        } catch (Throwable displayError) {
+            Log.e("Stage3Launch",
+                    "Could not display diagnostic screen",
+                    displayError);
+
+            Toast.makeText(
+                    this,
+                    details + "\nCheckpoint: "
+                            + getPlayerLaunchCheckpoint(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
 
     private ExoPlayer player;
     private ExoPlayer backgroundPlayer;
@@ -175,15 +296,35 @@ public class Stage3PlayerActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        Stage3SongQueue.initialize(this);
+        markPlayerLaunchCheckpoint("01_ACTIVITY_CREATED");
 
-        midiEngine = Stage3MidiEngine.create(this);
+        try {
+            Stage3SongQueue.initialize(this);
+            markPlayerLaunchCheckpoint("02_QUEUE_INITIALIZED");
 
-        buildScreen();
+            midiEngine = Stage3MidiEngine.create(this);
+            markPlayerLaunchCheckpoint("03_MIDI_ENGINE_CREATED");
 
-        startSelectedSong();
+            buildScreen();
+            markPlayerLaunchCheckpoint("04_SCREEN_BUILT");
 
-        handler.post(progressUpdater);
+            startSelectedSong();
+            markPlayerLaunchCheckpoint("05_SELECTED_SONG_STARTED");
+
+            handler.post(progressUpdater);
+            markPlayerLaunchCheckpoint("06_PROGRESS_UPDATER_STARTED");
+
+            Toast.makeText(
+                    this,
+                    "STAGE 3 PLAYER OPENED",
+                    Toast.LENGTH_SHORT).show();
+
+        } catch (Throwable error) {
+            markPlayerLaunchCheckpoint("ERROR_ON_CREATE");
+            showStartupDiagnostic(
+                    "Stage 3 player startup failed.",
+                    error);
+        }
     }
 
     private SharedPreferences backgroundPreferences() {
@@ -1301,8 +1442,6 @@ public class Stage3PlayerActivity extends Activity {
 
         updatePlaybackTime(0L, 0L);
 
-        // Use the user's saved background.
-        // Do not automatically select another songbook MP4.
         applySavedPersonalBackground();
 
         String soundFontUri = findSoundFontUri();
@@ -1509,6 +1648,8 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         returningToSongbook = true;
+
+        markPlayerLaunchCheckpoint("RETURN_TO_SONGBOOK");
 
         handler.removeCallbacks(progressUpdater);
 
@@ -2284,6 +2425,9 @@ public class Stage3PlayerActivity extends Activity {
 
     @Override
     protected void onStop() {
+        markPlayerLaunchCheckpoint(
+                "LIFECYCLE_ON_STOP_finishing_" + isFinishing());
+
         super.onStop();
 
         if (returningToSongbook || released) {
@@ -2313,6 +2457,8 @@ public class Stage3PlayerActivity extends Activity {
     protected void onResume() {
         super.onResume();
 
+        markPlayerLaunchCheckpoint("LIFECYCLE_ON_RESUME");
+
         if (returningToSongbook || released) {
             return;
         }
@@ -2335,11 +2481,15 @@ public class Stage3PlayerActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        markPlayerLaunchCheckpoint("ON_BACK_PRESSED");
         returnToSongbook();
     }
 
     @Override
     protected void onDestroy() {
+
+        markPlayerLaunchCheckpoint(
+                "LIFECYCLE_ON_DESTROY_finishing_" + isFinishing());
 
         released = true;
 
