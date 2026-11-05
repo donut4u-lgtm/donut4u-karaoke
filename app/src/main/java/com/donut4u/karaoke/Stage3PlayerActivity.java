@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -243,6 +242,18 @@ public class Stage3PlayerActivity extends Activity {
     private Stage3MicrophoneMonitor microphoneMonitor;
     private Button microphoneButton;
     private TextView microphoneStatusLabel;
+
+    // Karaoke scoring
+    private Stage3MidiNoteReader currentMidiNoteReader;
+
+    private final Stage3KaraokeScorer karaokeScorer =
+            new Stage3KaraokeScorer();
+
+    private TextView scoreLabel;
+
+    private volatile int latestMicLevel;
+    private volatile int latestMicNote = -1;
+    private volatile double latestMicConfidence;
 
     private SeekBar seekBar;
 
@@ -661,6 +672,27 @@ public class Stage3PlayerActivity extends Activity {
         controls.addView(microphoneRow);
 
         // -----------------------------------------------------
+        // KARAOKE SCORE DISPLAY
+        // -----------------------------------------------------
+
+        scoreLabel = new TextView(this);
+        scoreLabel.setText("SCORE: 0% | WAITING FOR MIDI SONG");
+        scoreLabel.setTextColor(ACTIVE_GREEN);
+        scoreLabel.setTextSize(13);
+        scoreLabel.setTypeface(
+                Typeface.DEFAULT, Typeface.BOLD);
+        scoreLabel.setGravity(Gravity.CENTER);
+        scoreLabel.setMaxLines(2);
+        scoreLabel.setPadding(
+                dp(4), dp(3), dp(4), dp(3));
+
+        controls.addView(
+                scoreLabel,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(38)));
+
+        // -----------------------------------------------------
         // BACKGROUND AND SONGBOOK CONTROLS
         // -----------------------------------------------------
 
@@ -733,7 +765,7 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     // ---------------------------------------------------------
-    // MICROPHONE MONITOR
+    // MICROPHONE MONITOR AND KARAOKE SCORING
     // ---------------------------------------------------------
 
     private void toggleMicrophoneMonitoring() {
@@ -827,6 +859,10 @@ public class Stage3PlayerActivity extends Activity {
                     return;
                 }
 
+                latestMicLevel = levelPercent;
+                latestMicNote = midiNote;
+                latestMicConfidence = confidence;
+
                 String pitch = "Pitch: —";
 
                 if (midiNote >= 0 && confidence >= 0.72) {
@@ -835,6 +871,30 @@ public class Stage3PlayerActivity extends Activity {
 
                 microphoneStatusLabel.setText(
                         "MIC " + levelPercent + "%  |  " + pitch);
+
+                // Only score while a MIDI song is actually playing.
+                // This prevents scoring while paused or stopped.
+                if (midiMode
+                        && midiReady
+                        && midiEngine != null
+                        && currentMidiNoteReader != null
+                        && midiEngine.isPlaying()) {
+
+                    long currentTick =
+                            midiEngine.getCurrentTick();
+
+                    int expectedNote =
+                            currentMidiNoteReader
+                                    .getMelodyNoteAtTick(currentTick);
+
+                    karaokeScorer.update(
+                            expectedNote,
+                            midiNote,
+                            confidence,
+                            levelPercent);
+
+                    updateKaraokeScoreDisplay();
+                }
             }
 
             @Override
@@ -895,6 +955,33 @@ public class Stage3PlayerActivity extends Activity {
                         "MIC UNAVAILABLE");
             }
         }
+    }
+
+    private void updateKaraokeScoreDisplay() {
+
+        if (scoreLabel == null) {
+            return;
+        }
+
+        if (currentMidiNoteReader == null) {
+            scoreLabel.setText(
+                    "SCORING UNAVAILABLE — MIDI MELODY NOT READ");
+            return;
+        }
+
+        if (!karaokeScorer.hasScored()) {
+            scoreLabel.setText(
+                    "SCORE: 0%  |  SING TO START SCORING");
+            return;
+        }
+
+        scoreLabel.setText(
+                "SCORE: "
+                        + karaokeScorer.getScorePercent()
+                        + "%  |  "
+                        + karaokeScorer.getRating()
+                        + "  |  STREAK: "
+                        + karaokeScorer.getBestStreak());
     }
 
     private void stopMicrophoneMonitoring() {
@@ -1661,6 +1748,18 @@ public class Stage3PlayerActivity extends Activity {
 
         releasePlayback();
 
+        currentMidiNoteReader = null;
+        karaokeScorer.reset();
+
+        latestMicLevel = 0;
+        latestMicNote = -1;
+        latestMicConfidence = 0.0;
+
+        if (scoreLabel != null) {
+            scoreLabel.setText(
+                    "SCORE: 0% | WAITING FOR SONG");
+        }
+
         currentSong = song;
 
         String title = song.title == null
@@ -1705,6 +1804,7 @@ public class Stage3PlayerActivity extends Activity {
         midiReady = false;
         midiDurationTicks = 0L;
         currentMidiTiming = null;
+        currentMidiNoteReader = null;
 
         currentMidiLyrics = Stage3MidiLyrics.empty();
 
@@ -1718,6 +1818,11 @@ public class Stage3PlayerActivity extends Activity {
         setControlsEnabled(true);
 
         updatePlaybackTime(0L, 0L);
+
+        if (scoreLabel != null) {
+            scoreLabel.setText(
+                    "SCORE: 0% | LOAD MIDI MELODY");
+        }
 
         applySavedPersonalBackground();
 
@@ -1753,6 +1858,11 @@ public class Stage3PlayerActivity extends Activity {
 
                         lyricsLabel.setText(
                                 "Unable to load this MIDI/KAR song.");
+
+                        if (scoreLabel != null) {
+                            scoreLabel.setText(
+                                    "SCORING UNAVAILABLE");
+                        }
 
                         Toast.makeText(
                                 this,
@@ -1795,6 +1905,41 @@ public class Stage3PlayerActivity extends Activity {
 
                         currentMidiLyrics =
                                 Stage3MidiLyrics.read(midiFile);
+
+                        // Read the melody notes for scoring.
+                        try {
+                            currentMidiNoteReader =
+                                    Stage3MidiNoteReader.read(midiFile);
+
+                            Log.i(
+                                    "Stage3Scoring",
+                                    "Melody loaded. Track="
+                                            + currentMidiNoteReader
+                                                    .getSelectedTrackIndex()
+                                            + ", notes="
+                                            + currentMidiNoteReader
+                                                    .getNoteCount());
+
+                            if (scoreLabel != null) {
+                                scoreLabel.setText(
+                                        "SCORE: 0% | SING TO START");
+                            }
+
+                        } catch (Exception noteError) {
+
+                            currentMidiNoteReader = null;
+
+                            Log.e(
+                                    "Stage3Scoring",
+                                    "Could not read MIDI melody for scoring.",
+                                    noteError);
+
+                            if (scoreLabel != null) {
+                                scoreLabel.setText(
+                                        "SCORING UNAVAILABLE — "
+                                                + "MELODY COULD NOT BE READ");
+                            }
+                        }
 
                         try {
                             currentMidiTiming =
@@ -1862,6 +2007,11 @@ public class Stage3PlayerActivity extends Activity {
 
                         lyricsLabel.setText(
                                 "Unable to play this MIDI/KAR song.");
+
+                        if (scoreLabel != null) {
+                            scoreLabel.setText(
+                                    "SCORING UNAVAILABLE");
+                        }
 
                         countdownLabel.setVisibility(View.GONE);
 
@@ -2514,8 +2664,14 @@ public class Stage3PlayerActivity extends Activity {
         midiMode = false;
         midiReady = false;
         currentMidiTiming = null;
+        currentMidiNoteReader = null;
 
         currentMidiLyrics = Stage3MidiLyrics.empty();
+
+        if (scoreLabel != null) {
+            scoreLabel.setText(
+                    "SCORING IS AVAILABLE FOR MIDI/KAR SONGS");
+        }
 
         countdownLabel.setVisibility(View.GONE);
         backgroundTexture.setVisibility(View.GONE);
@@ -2584,6 +2740,32 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
+        // Save the result before releasing the MIDI player.
+        String finalScoreText;
+
+        if (karaokeScorer.hasScored()) {
+
+            finalScoreText =
+                    "FINAL SCORE: "
+                            + karaokeScorer.getScorePercent()
+                            + "%\n"
+                            + karaokeScorer.getRating()
+                            + "  |  BEST STREAK: "
+                            + karaokeScorer.getBestStreak();
+
+        } else if (currentMidiNoteReader != null) {
+
+            finalScoreText =
+                    "NO SCORE RECORDED\n"
+                            + "Turn MIC ON and sing during playback "
+                            + "to receive a score.";
+
+        } else {
+
+            finalScoreText =
+                    "SCORING NOT AVAILABLE FOR THIS SONG";
+        }
+
         midiReady = false;
         midiMode = false;
 
@@ -2599,6 +2781,10 @@ public class Stage3PlayerActivity extends Activity {
                 "SONG FINISHED\n\n"
                 + "Return to the Songbook "
                 + "to choose another song.");
+
+        if (scoreLabel != null) {
+            scoreLabel.setText(finalScoreText);
+        }
 
         countdownLabel.setVisibility(View.GONE);
 
@@ -2666,6 +2852,7 @@ public class Stage3PlayerActivity extends Activity {
 
         currentMidiLyrics = Stage3MidiLyrics.empty();
         currentMidiTiming = null;
+        currentMidiNoteReader = null;
 
         resetLyricTracking();
 
