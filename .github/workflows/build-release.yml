@@ -17,6 +17,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Assemble bundled GeneralUser SoundFont
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p app/src/main/assets
+
+          cat \
+            soundfont-parts/GeneralUser-GS.sf2.part01 \
+            soundfont-parts/GeneralUser-GS.sf2.part02 \
+            > app/src/main/assets/GeneralUser-GS.sf2
+
+          test "$(stat -c '%s' app/src/main/assets/GeneralUser-GS.sf2)" -eq 32319396
+
+          test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 count=4 2>/dev/null)" = "RIFF"
+          test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
+
+          echo "GeneralUser SoundFont assembled and verified."
+          sha256sum app/src/main/assets/GeneralUser-GS.sf2
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
