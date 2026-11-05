@@ -4,10 +4,6 @@ package com.donut4u.karaoke;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.media.audiofx.AcousticEchoCanceler;
-import android.media.audiofx.AutomaticGainControl;
-import android.media.audiofx.NoiseSuppressor;
-import android.media.audiofx.AudioEffect;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -16,6 +12,7 @@ public final class Stage3MicrophoneMonitor {
     public interface Listener {
         void onUpdate(int levelPercent, int midiNote,
                       double confidence);
+
         void onError(String message);
     }
 
@@ -23,26 +20,21 @@ public final class Stage3MicrophoneMonitor {
     private static final int FRAME_SIZE = 2048;
 
     private final Listener listener;
+
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
 
     private volatile boolean running;
 
     private AudioRecord recorder;
-    private AcousticEchoCanceler echoCanceler;
-    private NoiseSuppressor noiseSuppressor;
-    private AutomaticGainControl gainControl;
-
     private Thread worker;
-
-    private volatile boolean echoCancellationEnabled;
-    private volatile boolean noiseSuppressionEnabled;
 
     public Stage3MicrophoneMonitor(Listener listener) {
         this.listener = listener;
     }
 
     public synchronized boolean start() {
+
         if (running) return true;
 
         int minimum = AudioRecord.getMinBufferSize(
@@ -52,13 +44,26 @@ public final class Stage3MicrophoneMonitor {
 
         if (minimum == AudioRecord.ERROR
                 || minimum == AudioRecord.ERROR_BAD_VALUE) {
-            notifyError("This device cannot open a microphone stream.");
+
+            notifyError(
+                    "This device cannot open a microphone stream.");
+
             return false;
         }
 
         try {
+
+            /*
+             * Use the normal microphone source.
+             * Do not request voice-call processing.
+             * Do not enable AGC, AEC or Noise Suppression.
+             *
+             * This avoids deliberately applying those
+             * processing effects to the microphone capture.
+             */
+
             recorder = new AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
@@ -66,19 +71,25 @@ public final class Stage3MicrophoneMonitor {
 
             if (recorder.getState()
                     != AudioRecord.STATE_INITIALIZED) {
+
                 releaseRecorder();
-                notifyError("Microphone initialization failed.");
+
+                notifyError(
+                        "Microphone initialization failed.");
+
                 return false;
             }
-
-            enableAudioProcessing(recorder.getAudioSessionId());
 
             recorder.startRecording();
 
             if (recorder.getRecordingState()
                     != AudioRecord.RECORDSTATE_RECORDING) {
+
                 releaseRecorder();
-                notifyError("Microphone did not start.");
+
+                notifyError(
+                        "Microphone did not start.");
+
                 return false;
             }
 
@@ -89,69 +100,27 @@ public final class Stage3MicrophoneMonitor {
                     "Stage3-Microphone");
 
             worker.start();
+
             return true;
 
         } catch (SecurityException error) {
+
             releaseRecorder();
-            notifyError("Microphone permission was not granted.");
+
+            notifyError(
+                    "Microphone permission was not granted.");
+
             return false;
 
         } catch (Exception error) {
+
             releaseRecorder();
-            notifyError("Microphone error: "
-                    + error.getMessage());
+
+            notifyError(
+                    "Microphone error: "
+                            + error.getMessage());
+
             return false;
-        }
-    }
-
-    private void enableAudioProcessing(int sessionId) {
-
-        echoCancellationEnabled = false;
-        noiseSuppressionEnabled = false;
-
-        try {
-            if (AcousticEchoCanceler.isAvailable()) {
-                echoCanceler =
-                        AcousticEchoCanceler.create(sessionId);
-
-                if (echoCanceler != null) {
-                    echoCanceler.setEnabled(true);
-
-                    echoCancellationEnabled =
-                            echoCanceler.getEnabled();
-                }
-            }
-        } catch (Exception ignored) {
-            echoCancellationEnabled = false;
-        }
-
-        try {
-            if (NoiseSuppressor.isAvailable()) {
-                noiseSuppressor =
-                        NoiseSuppressor.create(sessionId);
-
-                if (noiseSuppressor != null) {
-                    noiseSuppressor.setEnabled(true);
-
-                    noiseSuppressionEnabled =
-                            noiseSuppressor.getEnabled();
-                }
-            }
-        } catch (Exception ignored) {
-            noiseSuppressionEnabled = false;
-        }
-
-        try {
-            if (AutomaticGainControl.isAvailable()) {
-                gainControl =
-                        AutomaticGainControl.create(sessionId);
-
-                if (gainControl != null) {
-                    gainControl.setEnabled(true);
-                }
-            }
-        } catch (Exception ignored) {
-            // Continue without automatic gain control.
         }
     }
 
@@ -168,24 +137,33 @@ public final class Stage3MicrophoneMonitor {
             int count;
 
             try {
+
                 count = active.read(
-                        samples, 0, samples.length);
+                        samples,
+                        0,
+                        samples.length);
 
             } catch (Exception error) {
+
                 if (running) {
-                    notifyError("Microphone read failed: "
-                            + error.getMessage());
+                    notifyError(
+                            "Microphone read failed: "
+                                    + error.getMessage());
                 }
+
                 break;
             }
 
             if (count <= 0) {
+
                 if (count == AudioRecord.ERROR_INVALID_OPERATION
                         || count == AudioRecord.ERROR_BAD_VALUE) {
 
                     if (running) {
-                        notifyError("Microphone input unavailable.");
+                        notifyError(
+                                "Microphone input unavailable.");
                     }
+
                     break;
                 }
 
@@ -195,14 +173,17 @@ public final class Stage3MicrophoneMonitor {
             double sum = 0.0;
 
             for (int i = 0; i < count; i++) {
+
                 double value = samples[i];
+
                 sum += value * value;
             }
 
             double rms = Math.sqrt(sum / count);
 
             int level = (int) Math.min(
-                    100.0, rms / 240.0);
+                    100.0,
+                    rms / 240.0);
 
             int note = -1;
             double confidence = 0.0;
@@ -216,8 +197,9 @@ public final class Stage3MicrophoneMonitor {
 
                     note = (int) Math.round(
                             69.0 + 12.0 *
-                            (Math.log(detected[0] / 440.0)
-                            / Math.log(2.0)));
+                                    (Math.log(
+                                            detected[0] / 440.0)
+                                            / Math.log(2.0)));
 
                     confidence = detected[1];
                 }
@@ -228,7 +210,9 @@ public final class Stage3MicrophoneMonitor {
             final double resultConfidence = confidence;
 
             mainHandler.post(() -> {
+
                 if (running && listener != null) {
+
                     listener.onUpdate(
                             resultLevel,
                             resultNote,
@@ -238,6 +222,7 @@ public final class Stage3MicrophoneMonitor {
         }
 
         running = false;
+
         releaseRecorder();
     }
 
@@ -249,6 +234,7 @@ public final class Stage3MicrophoneMonitor {
         int usable = Math.min(count, FRAME_SIZE);
 
         if (usable <= maxLag + 32) {
+
             return new double[]{0.0, 0.0};
         }
 
@@ -282,14 +268,17 @@ public final class Stage3MicrophoneMonitor {
                     correlation / denominator;
 
             if (normalized > best) {
+
                 best = normalized;
                 bestLag = lag;
             }
         }
 
         if (bestLag <= 0 || best < 0.72) {
+
             return new double[]{
-                    0.0, Math.max(0.0, best)
+                    0.0,
+                    Math.max(0.0, best)
             };
         }
 
@@ -302,6 +291,7 @@ public final class Stage3MicrophoneMonitor {
     private void notifyError(String message) {
 
         mainHandler.post(() -> {
+
             if (listener != null) {
                 listener.onError(message);
             }
@@ -315,11 +305,15 @@ public final class Stage3MicrophoneMonitor {
         AudioRecord active = recorder;
 
         if (active != null) {
+
             try {
+
                 if (active.getRecordingState()
                         == AudioRecord.RECORDSTATE_RECORDING) {
+
                     active.stop();
                 }
+
             } catch (Exception ignored) {
             }
         }
@@ -331,8 +325,11 @@ public final class Stage3MicrophoneMonitor {
                 && thread != Thread.currentThread()) {
 
             try {
+
                 thread.join(500);
+
             } catch (InterruptedException error) {
+
                 Thread.currentThread().interrupt();
             }
         }
@@ -346,57 +343,41 @@ public final class Stage3MicrophoneMonitor {
         recorder = null;
 
         if (active != null) {
+
             try {
+
                 if (active.getRecordingState()
                         == AudioRecord.RECORDSTATE_RECORDING) {
+
                     active.stop();
                 }
+
             } catch (Exception ignored) {
             }
 
             try {
+
                 active.release();
+
             } catch (Exception ignored) {
             }
         }
-
-        if (echoCanceler != null) {
-            try {
-                echoCanceler.release();
-            } catch (Exception ignored) {
-            }
-            echoCanceler = null;
-        }
-
-        if (noiseSuppressor != null) {
-            try {
-                noiseSuppressor.release();
-            } catch (Exception ignored) {
-            }
-            noiseSuppressor = null;
-        }
-
-        if (gainControl != null) {
-            try {
-                gainControl.release();
-            } catch (Exception ignored) {
-            }
-            gainControl = null;
-        }
-
-        echoCancellationEnabled = false;
-        noiseSuppressionEnabled = false;
     }
 
     public boolean isRunning() {
         return running;
     }
 
+    /*
+     * These methods remain available for compatibility.
+     * This version deliberately does not enable these effects.
+     */
+
     public boolean isEchoCancellationEnabled() {
-        return echoCancellationEnabled;
+        return false;
     }
 
     public boolean isNoiseSuppressionEnabled() {
-        return noiseSuppressionEnabled;
+        return false;
     }
 }
