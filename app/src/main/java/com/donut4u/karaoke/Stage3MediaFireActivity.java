@@ -54,6 +54,9 @@ public class Stage3MediaFireActivity extends Activity {
     private static final int CHUNK_SIZE = 100;
     private static final int MAX_CHUNKS = 100;
 
+    // Only this many song cards are created at one time.
+    private static final int PAGE_SIZE = 50;
+
     private static final long MAX_DOWNLOAD_SIZE =
             100L * 1024L * 1024L;
 
@@ -69,9 +72,12 @@ public class Stage3MediaFireActivity extends Activity {
     private TextView countLabel;
     private ProgressBar progress;
     private Button loadButton;
+    private Button loadMoreButton;
 
     private volatile boolean loading = false;
     private volatile boolean downloading = false;
+
+    private int visibleLimit = PAGE_SIZE;
 
     private static class MediaSong {
         String title;
@@ -187,6 +193,16 @@ public class Stage3MediaFireActivity extends Activity {
         root.addView(scroll,
                 new LinearLayout.LayoutParams(-1, 0, 1f));
 
+        loadMoreButton = makeButton("LOAD MORE SONGS");
+        loadMoreButton.setVisibility(View.GONE);
+        loadMoreButton.setOnClickListener(v -> {
+            visibleLimit += PAGE_SIZE;
+            renderSongs();
+        });
+
+        root.addView(loadMoreButton,
+                new LinearLayout.LayoutParams(-1, dp(44)));
+
         Button back = makeButton("BACK TO STAGE 3 SONGBOOK");
         back.setOnClickListener(v -> finish());
 
@@ -208,6 +224,7 @@ public class Stage3MediaFireActivity extends Activity {
                     public void onTextChanged(
                             CharSequence s, int start,
                             int before, int count) {
+                        visibleLimit = PAGE_SIZE;
                         renderSongs();
                     }
 
@@ -233,7 +250,9 @@ public class Stage3MediaFireActivity extends Activity {
     }
 
     /*
-     * LOAD ALL MEDIAFIRE FOLDER CHUNKS.
+     * LOAD MEDIAFIRE FOLDER CHUNKS.
+     * Song data is collected in the background.
+     * The UI list is rendered only after loading finishes.
      */
 
     private void loadFolder() {
@@ -243,17 +262,20 @@ public class Stage3MediaFireActivity extends Activity {
         }
 
         loading = true;
+        visibleLimit = PAGE_SIZE;
 
         allSongs.clear();
         seenSongs.clear();
 
-        renderSongs();
+        songList.removeAllViews();
+        loadMoreButton.setVisibility(View.GONE);
 
         loadButton.setEnabled(false);
         progress.setVisibility(View.VISIBLE);
         progress.setIndeterminate(true);
 
         status.setText("Connecting to MediaFire folder API...");
+        countLabel.setText("Loading MIDI/KAR song list...");
 
         new Thread(() -> {
 
@@ -298,6 +320,10 @@ public class Stage3MediaFireActivity extends Activity {
 
                     runOnUiThread(() -> {
 
+                        if (isFinishing()) {
+                            return;
+                        }
+
                         status.setText(
                                 "Reading MediaFire chunk "
                                         + currentChunk
@@ -305,13 +331,11 @@ public class Stage3MediaFireActivity extends Activity {
                                         + found);
 
                         countLabel.setText(
-                                "MIDI/KAR SONGS FOUND: " + found);
-
-                        renderSongs();
+                                "LOADING SONGS: " + found
+                                        + "\nThe song list will appear "
+                                        + "when loading finishes.");
                     });
 
-                    // Do not stop just because a chunk contains
-                    // no MIDI/KAR files. MediaFire may have more.
                     if (!result.moreChunks) {
                         break;
                     }
@@ -351,9 +375,6 @@ public class Stage3MediaFireActivity extends Activity {
                                     + "Chunks checked: " + chunksRead
                                     + "\nMIDI/KAR songs: " + found);
                 }
-
-                countLabel.setText(
-                        "TOTAL MIDI/KAR SONGS: " + found);
 
                 renderSongs();
             });
@@ -612,6 +633,12 @@ public class Stage3MediaFireActivity extends Activity {
                 quickKey);
     }
 
+    /*
+     * PAGINATED RENDERING:
+     * At most PAGE_SIZE song cards are added per render.
+     * Search still checks every loaded song.
+     */
+
     private void renderSongs() {
 
         if (songList == null) {
@@ -625,7 +652,8 @@ public class Stage3MediaFireActivity extends Activity {
                 : searchInput.getText().toString()
                 .trim().toLowerCase(Locale.ROOT);
 
-        int shown = 0;
+        int totalMatches = 0;
+        int rendered = 0;
 
         for (MediaSong song : allSongs) {
 
@@ -635,7 +663,13 @@ public class Stage3MediaFireActivity extends Activity {
                 continue;
             }
 
-            shown++;
+            totalMatches++;
+
+            if (rendered >= visibleLimit) {
+                continue;
+            }
+
+            rendered++;
 
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
@@ -676,16 +710,31 @@ public class Stage3MediaFireActivity extends Activity {
 
         if (countLabel != null) {
             countLabel.setText(
-                    "FOUND: " + allSongs.size()
-                            + "  |  SHOWING: " + shown);
+                    "FOUND: " + totalMatches
+                            + "  |  SHOWING: " + rendered);
         }
 
-        if (shown == 0) {
+        if (loadMoreButton != null) {
+
+            if (totalMatches > rendered) {
+                loadMoreButton.setVisibility(View.VISIBLE);
+                loadMoreButton.setText(
+                        "LOAD MORE SONGS ("
+                                + (totalMatches - rendered)
+                                + " REMAINING)");
+            } else {
+                loadMoreButton.setVisibility(View.GONE);
+            }
+        }
+
+        if (rendered == 0) {
 
             TextView empty = new TextView(this);
 
             empty.setText(allSongs.isEmpty()
-                    ? "No MIDI/KAR songs loaded yet. Tap LOAD / RELOAD."
+                    ? (loading
+                        ? "Loading MediaFire song list..."
+                        : "No MIDI/KAR songs loaded yet. Tap LOAD / RELOAD.")
                     : "No matching song found.");
 
             empty.setTextColor(Color.LTGRAY);
@@ -783,15 +832,6 @@ public class Stage3MediaFireActivity extends Activity {
 
         }, "Donut4U-MediaFire-Download").start();
     }
-
-    /*
-     * DOWNLOAD PROCESS:
-     *
-     * 1. Resolve the MediaFire file page.
-     * 2. Find the real download address.
-     * 3. Follow MediaFire's download redirect.
-     * 4. Verify that the downloaded file is MIDI/KAR.
-     */
 
     private File downloadFile(MediaSong song) throws Exception {
 
@@ -919,10 +959,6 @@ public class Stage3MediaFireActivity extends Activity {
         }
     }
 
-    /*
-     * RESOLVE MEDIAFIRE DOWNLOAD LINK.
-     */
-
     private String resolveMediaFireDownloadUrl(
             String filePageUrl) throws Exception {
 
@@ -946,7 +982,6 @@ public class Stage3MediaFireActivity extends Activity {
                     "Invalid MediaFire file page link.");
         }
 
-        // A real download server can be used directly.
         if (isDirectDownloadHost(pageUrl.getHost())) {
             return pageUrl.toString();
         }
@@ -987,8 +1022,6 @@ public class Stage3MediaFireActivity extends Activity {
             String finalUrl = connection.getURL().toString();
             URL finalPage = new URL(finalUrl);
 
-            // Only downloadNN.mediafire.com is accepted as
-            // a direct MediaFire download host.
             if (isDirectDownloadHost(finalPage.getHost())) {
                 return finalUrl;
             }
@@ -1037,8 +1070,6 @@ public class Stage3MediaFireActivity extends Activity {
                 return resolvedUrl.toString();
             }
 
-            // A dkey or intermediate MediaFire URL may require
-            // another request before reaching the real download.
             return resolveMediaFireDownloadUrl(
                     resolvedUrl.toString(),
                     depth + 1);
@@ -1050,13 +1081,6 @@ public class Stage3MediaFireActivity extends Activity {
             }
         }
     }
-
-    /*
-     * SEARCH THE WHOLE PAGE, NOT ONLY THE DOWNLOAD BUTTON.
-     *
-     * MediaFire may put its real download URL in JavaScript,
-     * an anchor, or an encoded data attribute.
-     */
 
     private String findDownloadButtonUrl(String html) {
 
@@ -1072,7 +1096,6 @@ public class Stage3MediaFireActivity extends Activity {
                 .replace("&#38;", "&")
                 .replace("&#x26;", "&");
 
-        // 1. Search the complete page for a direct download server.
         Pattern directPattern = Pattern.compile(
                 "(?i)(?:https?:)?//download[0-9]+\\.mediafire\\.com/[^\\s\"'<>\\\\]+");
 
@@ -1089,7 +1112,6 @@ public class Stage3MediaFireActivity extends Activity {
             return cleanUrl(found);
         }
 
-        // 2. Search for MediaFire intermediate URLs containing dkey.
         Pattern prePattern = Pattern.compile(
                 "(?i)(?:https?:)?//(?:www\\.)?mediafire\\.com/"
                         + "(?:file|view|download)/[^\\s\"'<>\\\\]+"
@@ -1108,7 +1130,6 @@ public class Stage3MediaFireActivity extends Activity {
             return cleanUrl(found);
         }
 
-        // 3. Inspect the downloadButton anchor.
         Pattern anchorPattern = Pattern.compile(
                 "(?is)<a\\b[^>]*>");
 
@@ -1143,7 +1164,6 @@ public class Stage3MediaFireActivity extends Activity {
             }
         }
 
-        // 4. Search all data-scrambled-url attributes.
         Pattern scrambledPattern = Pattern.compile(
                 "(?is)data-scrambled-url\\s*=\\s*['\"]([^'\"]+)['\"]");
 
@@ -1160,7 +1180,6 @@ public class Stage3MediaFireActivity extends Activity {
             }
         }
 
-        // 5. Search any href associated with downloadButton.
         Pattern fallback = Pattern.compile(
                 "(?is)<a\\b(?=[^>]*downloadButton)[^>]*"
                         + "href\\s*=\\s*['\"]([^'\"]+)['\"]");
@@ -1311,12 +1330,6 @@ public class Stage3MediaFireActivity extends Activity {
         return value.equals("mediafire.com")
                 || value.endsWith(".mediafire.com");
     }
-
-    /*
-     * IMPORTANT:
-     * Do not treat www.mediafire.com as a direct file server.
-     * Only downloadNN.mediafire.com is accepted here.
-     */
 
     private boolean isDirectDownloadHost(String host) {
 
