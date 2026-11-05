@@ -14,7 +14,6 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -59,15 +58,14 @@ class Stage3MidiEngine private constructor(
         private const val SOUNDFONT_DIRECTORY = "stage3_soundfonts"
         private const val DEFAULT_SOUNDFONT = "builtin://default"
 
-        private const val DRIVE_FILE_ID =
-            "17UmucO4VmekeBKWPimDB93JCWsVWsQb_"
+        private const val DEFAULT_SOUNDFONT_ASSET =
+            "GeneralUser-GS.sf2"
 
         private const val TAG = "Stage3MidiEngine"
 
         private const val DIAGNOSTIC_FILE =
             "stage3_midi_diagnostic.txt"
 
-        // 🔴 ADDED: Persistent crash checkpoint storage.
         private const val DIAGNOSTIC_PREFS =
             "stage3_midi_crash_diagnostics"
 
@@ -79,8 +77,6 @@ class Stage3MidiEngine private constructor(
 
             val appContext = context.applicationContext
 
-            // 🔴 ADDED: Check whether the previous playback
-            // attempt stopped unexpectedly.
             val preferences = appContext.getSharedPreferences(
                 DIAGNOSTIC_PREFS,
                 Context.MODE_PRIVATE
@@ -109,15 +105,13 @@ class Stage3MidiEngine private constructor(
         }
     }
 
-    // 🔴 ADDED: Save the last playback checkpoint.
-    // commit() is intentional so the value is saved before
-    // entering native FluidSynth code.
     private fun markDiagnostic(checkpoint: String) {
 
         val line = System.currentTimeMillis().toString() +
             " | " + checkpoint
 
         try {
+
             context.getSharedPreferences(
                 DIAGNOSTIC_PREFS,
                 Context.MODE_PRIVATE
@@ -126,6 +120,7 @@ class Stage3MidiEngine private constructor(
                 .commit()
 
         } catch (error: Throwable) {
+
             Log.e(
                 TAG,
                 "Could not save diagnostic preference.",
@@ -134,12 +129,14 @@ class Stage3MidiEngine private constructor(
         }
 
         try {
+
             File(
                 context.filesDir,
                 DIAGNOSTIC_FILE
             ).appendText(line + "\n")
 
         } catch (error: Throwable) {
+
             Log.e(
                 TAG,
                 "Could not append diagnostic checkpoint.",
@@ -153,11 +150,10 @@ class Stage3MidiEngine private constructor(
         )
     }
 
-    // 🔴 ADDED: Clear the pending crash marker after
-    // normal completion or normal release.
     private fun clearDiagnostic() {
 
         try {
+
             context.getSharedPreferences(
                 DIAGNOSTIC_PREFS,
                 Context.MODE_PRIVATE
@@ -166,6 +162,7 @@ class Stage3MidiEngine private constructor(
                 .commit()
 
         } catch (error: Throwable) {
+
             Log.e(
                 TAG,
                 "Could not clear diagnostic preference.",
@@ -174,9 +171,6 @@ class Stage3MidiEngine private constructor(
         }
     }
 
-    /**
-     * Saves the full native-linking error for later diagnosis.
-     */
     private fun recordLinkageFailure(
         error: LinkageError
     ): String {
@@ -204,6 +198,7 @@ class Stage3MidiEngine private constructor(
         )
 
         try {
+
             File(
                 context.filesDir,
                 DIAGNOSTIC_FILE
@@ -225,7 +220,6 @@ class Stage3MidiEngine private constructor(
             )
         }
 
-        // 🔴 ADDED
         markDiagnostic(
             "LINKAGE_ERROR " + message
         )
@@ -256,7 +250,6 @@ class Stage3MidiEngine private constructor(
 
             try {
 
-                // 🔴 ADDED
                 markDiagnostic("PLAY_REQUEST_RECEIVED")
 
                 if (midiUri.isBlank()) {
@@ -279,7 +272,6 @@ class Stage3MidiEngine private constructor(
 
                 checkSession(sessionId)
 
-                // 🔴 ADDED
                 markDiagnostic(
                     "MIDI_FILE_COPIED bytes=" +
                         midiFile.length()
@@ -307,7 +299,6 @@ class Stage3MidiEngine private constructor(
 
                 checkSession(sessionId)
 
-                // 🔴 ADDED
                 markDiagnostic(
                     "SOUNDFONT_FILE_READY bytes=" +
                         soundFontFile.length()
@@ -330,26 +321,23 @@ class Stage3MidiEngine private constructor(
 
                 if (!isValidSoundFont(soundFontFile)) {
                     throw IllegalStateException(
-                        "The SoundFont is invalid. Import a valid .sf2 file."
+                        "The bundled or imported SoundFont is invalid."
                     )
                 }
 
                 checkSession(sessionId)
 
-                // 🔴 ADDED
                 markDiagnostic("FILES_VALIDATED")
 
                 markDiagnostic(
                     "BEFORE_FLUIDSYNTH_CONSTRUCTOR"
                 )
 
-                // Native FluidSynth initialization.
                 val newPlayer = MidiFilePlayer(
                     soundFontFile.absolutePath,
                     midiFile.absolutePath
                 )
 
-                // 🔴 ADDED
                 markDiagnostic(
                     "AFTER_FLUIDSYNTH_CONSTRUCTOR"
                 )
@@ -380,7 +368,6 @@ class Stage3MidiEngine private constructor(
                     pausedByEngine = false
                 }
 
-                // 🔴 ADDED
                 markDiagnostic("BEFORE_FLUIDSYNTH_PLAY")
 
                 newPlayer.play {
@@ -390,7 +377,6 @@ class Stage3MidiEngine private constructor(
                     }
                 }
 
-                // 🔴 ADDED
                 markDiagnostic("AFTER_FLUIDSYNTH_PLAY")
 
                 mainHandler.post {
@@ -402,7 +388,6 @@ class Stage3MidiEngine private constructor(
                             midiPlayer === newPlayer
                         ) {
 
-                            // 🔴 ADDED
                             markDiagnostic(
                                 "PLAYBACK_READY durationTicks=" +
                                     newPlayer.durationTicks
@@ -429,7 +414,6 @@ class Stage3MidiEngine private constructor(
 
             } catch (error: Exception) {
 
-                // 🔴 ADDED
                 markDiagnostic(
                     "JAVA_EXCEPTION " +
                         error.javaClass.simpleName +
@@ -451,8 +435,6 @@ class Stage3MidiEngine private constructor(
 
             } catch (error: Throwable) {
 
-                // 🔴 ADDED: Catch fatal Java/Kotlin errors
-                // that are catchable by the runtime.
                 val message = buildString {
 
                     append("MIDI playback fatal error: ")
@@ -476,12 +458,14 @@ class Stage3MidiEngine private constructor(
                 )
 
                 try {
+
                     File(
                         context.filesDir,
                         DIAGNOSTIC_FILE
                     ).appendText(
                         error.stackTraceToString() + "\n"
                     )
+
                 } catch (_: Throwable) {
                 }
 
@@ -550,6 +534,12 @@ class Stage3MidiEngine private constructor(
         }
     }
 
+    /**
+     * Copies the SoundFont bundled inside the APK assets
+     * into temporary app storage for FluidSynth.
+     *
+     * No Google Drive or internet download is required.
+     */
     private fun copyDefaultSoundFont(
         sessionId: Long
     ): File {
@@ -585,27 +575,54 @@ class Stage3MidiEngine private constructor(
 
             checkSession(sessionId)
 
-            downloadSoundFontFromDrive(
-                temporary,
-                sessionId
+            markDiagnostic(
+                "BEFORE_BUNDLED_SOUNDFONT_ASSET"
             )
+
+            context.assets.open(
+                DEFAULT_SOUNDFONT_ASSET
+            ).use { input ->
+
+                FileOutputStream(temporary).use { output ->
+
+                    val buffer = ByteArray(8192)
+
+                    while (true) {
+
+                        checkSession(sessionId)
+
+                        val read = input.read(buffer)
+
+                        if (read == -1) break
+
+                        output.write(buffer, 0, read)
+                    }
+
+                    output.flush()
+                }
+            }
 
             checkSession(sessionId)
 
             if (!isValidSoundFont(temporary)) {
                 throw IllegalStateException(
-                    "Google Drive did not return a valid SoundFont. " +
-                        "Check the file and its sharing permissions."
+                    "The bundled GeneralUser SoundFont is missing, " +
+                        "incomplete, or invalid."
                 )
             }
 
             if (!temporary.renameTo(destination)) {
                 throw IllegalStateException(
-                    "Could not save the temporary SoundFont."
+                    "Could not save the bundled SoundFont."
                 )
             }
 
             checkSession(sessionId)
+
+            markDiagnostic(
+                "BUNDLED_SOUNDFONT_COPIED bytes=" +
+                    destination.length()
+            )
 
             return destination
 
@@ -614,171 +631,18 @@ class Stage3MidiEngine private constructor(
             temporary.delete()
             destination.delete()
 
-            throw error
-        }
-    }
-
-    private fun downloadSoundFontFromDrive(
-        destination: File,
-        sessionId: Long
-    ) {
-
-        val baseUrl = "https://drive.google.com/uc"
-
-        val encodedId = URLEncoder.encode(
-            DRIVE_FILE_ID,
-            "UTF-8"
-        )
-
-        val cookies = mutableListOf<String>()
-
-        var requestUrl =
-            "$baseUrl?export=download&id=$encodedId"
-
-        var attempt = 0
-
-        while (attempt < 3) {
-
-            checkSession(sessionId)
-
-            attempt++
-
-            val connection = (
-                URL(requestUrl).openConnection()
-                    as HttpURLConnection
-                ).apply {
-
-                requestMethod = "GET"
-
-                connectTimeout = 30000
-
-                readTimeout = 120000
-
-                instanceFollowRedirects = true
-
-                setRequestProperty(
-                    "User-Agent",
-                    "Mozilla/5.0 (Android) Donut4U-Karaoke"
-                )
-
-                if (cookies.isNotEmpty()) {
-
-                    setRequestProperty(
-                        "Cookie",
-                        cookies.joinToString("; ")
-                    )
-                }
+            if (error is CancellationException) {
+                throw error
             }
 
-            try {
-
-                connection.connect()
-
-                checkSession(sessionId)
-
-                connection.getHeaderFields()["Set-Cookie"]
-                    ?.forEach { cookie ->
-
-                        val firstPart =
-                            cookie.substringBefore(";").trim()
-
-                        if (
-                            firstPart.isNotEmpty() &&
-                            !cookies.contains(firstPart)
-                        ) {
-                            cookies.add(firstPart)
-                        }
-                    }
-
-                val status = connection.responseCode
-
-                if (status !in 200..299) {
-                    throw IllegalStateException(
-                        "SoundFont download failed (HTTP $status). " +
-                            "Check Google Drive sharing permissions."
-                    )
-                }
-
-                val contentType =
-                    connection.contentType?.lowercase() ?: ""
-
-                if (contentType.contains("text/html")) {
-
-                    val page = connection.inputStream
-                        .bufferedReader(Charsets.UTF_8)
-                        .use { it.readText() }
-
-                    checkSession(sessionId)
-
-                    val match = Regex(
-                        """confirm=([0-9A-Za-z_-]+)"""
-                    ).find(page)
-
-                    val token =
-                        match?.groupValues?.getOrNull(1)
-
-                    if (
-                        token == null ||
-                        attempt >= 3
-                    ) {
-                        throw IllegalStateException(
-                            "Google Drive returned a webpage instead " +
-                                "of the SoundFont file. Check that the link " +
-                                "is public and allows downloads."
-                        )
-                    }
-
-                    requestUrl =
-                        "$baseUrl?export=download&confirm=" +
-                            URLEncoder.encode(
-                                token,
-                                "UTF-8"
-                            ) +
-                            "&id=$encodedId"
-
-                    continue
-                }
-
-                connection.inputStream.use { input ->
-
-                    FileOutputStream(destination).use { output ->
-
-                        val buffer = ByteArray(8192)
-
-                        while (true) {
-
-                            checkSession(sessionId)
-
-                            val read = input.read(buffer)
-
-                            if (read == -1) break
-
-                            output.write(buffer, 0, read)
-                        }
-
-                        output.flush()
-                    }
-                }
-
-                checkSession(sessionId)
-
-                if (destination.length() == 0L) {
-                    throw IllegalStateException(
-                        "The downloaded SoundFont is empty."
-                    )
-                }
-
-                return
-
-            } finally {
-
-                connection.disconnect()
-            }
+            throw IllegalStateException(
+                "Could not load bundled SoundFont " +
+                    DEFAULT_SOUNDFONT_ASSET +
+                    ": " +
+                    (error.message ?: "Unknown error"),
+                error
+            )
         }
-
-        throw IllegalStateException(
-            "Could not download the SoundFont from Google Drive."
-        )
     }
 
     private fun isValidSoundFont(
@@ -1328,7 +1192,6 @@ class Stage3MidiEngine private constructor(
 
         cleanupTemporaryFiles()
 
-        // 🔴 ADDED
         clearDiagnostic()
 
         callback?.onFinished()
@@ -1382,7 +1245,6 @@ class Stage3MidiEngine private constructor(
 
         cleanupTemporaryFiles()
 
-        // 🔴 ADDED
         clearDiagnostic()
 
         worker.shutdownNow()
