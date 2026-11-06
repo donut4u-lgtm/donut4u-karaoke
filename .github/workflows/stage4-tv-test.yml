@@ -1,0 +1,58 @@
+name: Stage 4 TV Isolated Build Check
+
+on:
+  push:
+    branches:
+      - stage4-tv-isolated
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Stage 4 Debug
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Stage 4 branch
+        uses: actions/checkout@v4
+
+      - name: Assemble and verify bundled SoundFont
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p app/src/main/assets
+
+          cat \
+            soundfont-parts/GeneralUser-GS.sf2.part01 \
+            soundfont-parts/GeneralUser-GS.sf2.part02 \
+            > app/src/main/assets/GeneralUser-GS.sf2
+
+          test "$(stat -c '%s' app/src/main/assets/GeneralUser-GS.sf2)" -eq 32319396
+          test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 count=4 2>/dev/null)" = "RIFF"
+          test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
+
+          echo "SoundFont assembled and verified."
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build debug APK
+        env:
+          YOUTUBE_API_KEY: ""
+          DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/unused.jks
+          DONUT4U_KEYSTORE_PASSWORD: unused
+          DONUT4U_KEY_ALIAS: unused
+          DONUT4U_KEY_PASSWORD: unused
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+        run: gradle assembleDebug --no-daemon --stacktrace --console=plain
