@@ -1,4 +1,6 @@
 
-# Android does not provide the Java javax.script API.
-# Rhino's optional JSR-223 integration references it.
--dontwarn javax.script.**
+# Rhino's optional JSR-223 scripting integration is not available on Android.
+-dontwarn javax.script.ScriptEngineFactory
+-dontwarn javax.script.ScriptEngine
+-dontwarn javax.script.ScriptEngineManager
+-dontwarn javax.script.ScriptException
