@@ -68,14 +68,12 @@ android {
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
 
-            // Optimize compiled code without deleting app features.
             isMinifyEnabled = true
-
-            // Remove resources that are confirmed to be unused.
             isShrinkResources = true
 
             proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt")
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
             )
         }
     }
