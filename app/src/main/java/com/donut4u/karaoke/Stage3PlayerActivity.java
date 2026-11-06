@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -35,6 +36,11 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.VideoSize;
 import androidx.media3.exoplayer.ExoPlayer;
+
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.MobileAds;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -94,6 +100,15 @@ public class Stage3PlayerActivity extends Activity {
     private static final String FIT_FILL = "FILL";
     private static final String FIT = "FIT";
     private static final String FIT_STRETCH = "STRETCH";
+
+    // ---------------------------------------------------------
+    // ADMOB — STAGE 3 PLAYER
+    // ---------------------------------------------------------
+
+    private static final String STAGE3_AD_UNIT_ID =
+            "ca-app-pub-5625332026157890/2970292504";
+
+    private AdView stage3AdView;
 
     // ---------------------------------------------------------
     // STAGE 3 LAUNCH DIAGNOSTICS
@@ -518,7 +533,31 @@ public class Stage3PlayerActivity extends Activity {
 
         buildPlaybackControls();
 
-        setContentView(stage);
+        // Put the existing player above a dedicated ad area.
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(DARK_GREEN);
+
+        root.addView(
+                stage,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f));
+
+        FrameLayout adHolder = new FrameLayout(this);
+        adHolder.setBackgroundColor(DARK_GREEN);
+        adHolder.setGravity(Gravity.CENTER);
+
+        root.addView(
+                adHolder,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(250)));
+
+        setContentView(root);
+
+        loadStage3Ad(adHolder);
 
         getWindow().getDecorView().setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -527,6 +566,63 @@ public class Stage3PlayerActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    }
+
+    // ---------------------------------------------------------
+    // ADMOB LOADING
+    // ---------------------------------------------------------
+
+    private void loadStage3Ad(FrameLayout adHolder) {
+
+        try {
+            stage3AdView = new AdView(this);
+
+            stage3AdView.setAdSize(
+                    AdSize.MEDIUM_RECTANGLE);
+
+            stage3AdView.setAdUnitId(
+                    STAGE3_AD_UNIT_ID);
+
+            FrameLayout.LayoutParams adParams =
+                    new FrameLayout.LayoutParams(
+                            dp(300),
+                            dp(250),
+                            Gravity.CENTER);
+
+            adHolder.addView(stage3AdView, adParams);
+
+            MobileAds.initialize(
+                    getApplicationContext(),
+                    initializationStatus -> {
+
+                        if (stage3AdView == null
+                                || isFinishing()
+                                || isDestroyed()) {
+                            return;
+                        }
+
+                        runOnUiThread(() -> {
+
+                            if (stage3AdView == null
+                                    || isFinishing()
+                                    || isDestroyed()) {
+                                return;
+                            }
+
+                            AdRequest request =
+                                    new AdRequest.Builder().build();
+
+                            stage3AdView.loadAd(request);
+                        });
+                    });
+
+        } catch (Exception error) {
+
+            Log.e(
+                    "Stage3AdMob",
+                    "Could not initialize Stage 3 ad.",
+                    error);
+        }
     }
 
     private void buildPlaybackControls() {
@@ -799,9 +895,7 @@ public class Stage3PlayerActivity extends Activity {
             int[] grantResults) {
 
         super.onRequestPermissionsResult(
-                requestCode,
-                permissions,
-                grantResults);
+                requestCode, permissions, grantResults);
 
         if (requestCode != REQUEST_MIC_PERMISSION) {
             return;
@@ -2928,6 +3022,11 @@ public class Stage3PlayerActivity extends Activity {
 
         markPlayerLaunchCheckpoint("LIFECYCLE_ON_RESUME");
 
+        // Resume the ad view before any early return.
+        if (stage3AdView != null) {
+            stage3AdView.resume();
+        }
+
         if (returningToSongbook || released) {
             return;
         }
@@ -2946,6 +3045,16 @@ public class Stage3PlayerActivity extends Activity {
 
         handler.removeCallbacks(progressUpdater);
         handler.post(progressUpdater);
+    }
+
+    @Override
+    protected void onPause() {
+
+        if (stage3AdView != null) {
+            stage3AdView.pause();
+        }
+
+        super.onPause();
     }
 
     @Override
@@ -2983,6 +3092,18 @@ public class Stage3PlayerActivity extends Activity {
 
             midiEngine.release();
             midiEngine = null;
+        }
+
+        if (stage3AdView != null) {
+            try {
+                stage3AdView.destroy();
+            } catch (Exception error) {
+                Log.w(
+                        "Stage3AdMob",
+                        "Could not destroy Stage 3 ad view.",
+                        error);
+            }
+            stage3AdView = null;
         }
 
         super.onDestroy();
