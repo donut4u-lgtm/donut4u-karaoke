@@ -1,10 +1,12 @@
 
 package com.donut4u.karaoke;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -89,6 +91,27 @@ public class OnlineSongActivity extends Activity {
 
     private static final long CACHE_DURATION =
             24L * 60L * 60L * 1000L;
+
+    // 🟥 INSERTED: STAGE 1 MICROPHONE AND SCORING
+    private static final int REQUEST_STAGE12_MICROPHONE = 1201;
+
+    private Stage3MicrophoneMonitor microphoneMonitor;
+
+    private final Stage12PerformanceScorer performanceScorer =
+            new Stage12PerformanceScorer();
+
+    private Button microphoneButton;
+    private TextView microphoneStatus;
+    private TextView microphoneLevelText;
+    private TextView microphoneScoreText;
+    private TextView microphonePitchText;
+    private TextView microphoneStreakText;
+    private TextView microphoneRatingText;
+    private View microphoneLevelBar;
+    private View microphoneLevelFill;
+
+    private boolean microphonePermissionPending = false;
+    private boolean microphoneWasStoppedByLifecycle = false;
 
     private EditText searchBox;
     private Button searchButton;
@@ -1209,6 +1232,8 @@ public class OnlineSongActivity extends Activity {
         destroyPlayer();
         hideSystemBars();
 
+        performanceScorer.reset();
+
         playbackScreen = new FrameLayout(this);
         playbackScreen.setBackgroundColor(Color.BLACK);
 
@@ -1236,6 +1261,9 @@ public class OnlineSongActivity extends Activity {
         titleParams.setMargins(dp(10), dp(10), dp(10), 0);
 
         playbackScreen.addView(title, titleParams);
+
+        // 🟥 INSERTED: STAGE 1 MICROPHONE SCORE PANEL
+        addMicrophonePanel();
 
         Button backButton = makeButton("‹  BACK TO SONGS");
         backButton.setTextSize(13);
@@ -1292,18 +1320,432 @@ public class OnlineSongActivity extends Activity {
                 html, "text/html", "UTF-8", null);
     }
 
+    // 🟥 INSERTED: MICROPHONE PANEL UI
+    private void addMicrophonePanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        panel.setBackground(round(
+                Color.argb(235, 10, 20, 16), dp(14)));
+
+        FrameLayout.LayoutParams panelParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.BOTTOM);
+
+        panelParams.setMargins(
+                dp(10), 0, dp(10), dp(70));
+
+        playbackScreen.addView(panel, panelParams);
+
+        TextView heading = new TextView(this);
+        heading.setText("💚 SINGING PERFORMANCE");
+        heading.setTextColor(GREEN);
+        heading.setTextSize(14);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        panel.addView(heading, fullWidthWrap());
+
+        microphoneButton = makeButton("🎤 TURN MICROPHONE ON");
+        LinearLayout.LayoutParams buttonParams = fullWidth(dp(44));
+        buttonParams.topMargin = dp(7);
+        panel.addView(microphoneButton, buttonParams);
+
+        microphoneButton.setOnClickListener(
+                v -> toggleMicrophoneMonitoring());
+
+        microphoneStatus = new TextView(this);
+        microphoneStatus.setText("Microphone is OFF");
+        microphoneStatus.setTextColor(WHITE);
+        microphoneStatus.setTextSize(12);
+        microphoneStatus.setGravity(Gravity.CENTER);
+        microphoneStatus.setPadding(0, dp(6), 0, dp(4));
+        panel.addView(microphoneStatus, fullWidthWrap());
+
+        microphoneLevelText = new TextView(this);
+        microphoneLevelText.setText("MIC LEVEL: 0%");
+        microphoneLevelText.setTextColor(MUTED);
+        microphoneLevelText.setTextSize(11);
+        panel.addView(microphoneLevelText, fullWidthWrap());
+
+        FrameLayout meter = new FrameLayout(this);
+        meter.setBackground(round(Color.DKGRAY, dp(8)));
+
+        LinearLayout.LayoutParams meterParams = fullWidth(dp(9));
+        meterParams.topMargin = dp(4);
+        panel.addView(meter, meterParams);
+
+        microphoneLevelFill = new View(this);
+        microphoneLevelFill.setBackground(round(GREEN, dp(8)));
+
+        FrameLayout.LayoutParams fillParams =
+                new FrameLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.LEFT);
+
+        meter.addView(microphoneLevelFill, fillParams);
+
+        microphonePitchText = new TextView(this);
+        microphonePitchText.setText("PITCH: Waiting for singing");
+        microphonePitchText.setTextColor(WHITE);
+        microphonePitchText.setTextSize(11);
+        microphonePitchText.setPadding(0, dp(5), 0, 0);
+        panel.addView(microphonePitchText, fullWidthWrap());
+
+        microphoneScoreText = new TextView(this);
+        microphoneScoreText.setText("SCORE: 0%");
+        microphoneScoreText.setTextColor(GREEN);
+        microphoneScoreText.setTextSize(21);
+        microphoneScoreText.setTypeface(null, Typeface.BOLD);
+        microphoneScoreText.setGravity(Gravity.CENTER);
+        microphoneScoreText.setPadding(0, dp(5), 0, 0);
+        panel.addView(microphoneScoreText, fullWidthWrap());
+
+        microphoneStreakText = new TextView(this);
+        microphoneStreakText.setText("BEST STREAK: 0");
+        microphoneStreakText.setTextColor(WHITE);
+        microphoneStreakText.setTextSize(11);
+        microphoneStreakText.setGravity(Gravity.CENTER);
+        panel.addView(microphoneStreakText, fullWidthWrap());
+
+        microphoneRatingText = new TextView(this);
+        microphoneRatingText.setText("WAITING FOR SINGING");
+        microphoneRatingText.setTextColor(GREEN);
+        microphoneRatingText.setTextSize(12);
+        microphoneRatingText.setTypeface(null, Typeface.BOLD);
+        microphoneRatingText.setGravity(Gravity.CENTER);
+        microphoneRatingText.setPadding(0, dp(3), 0, 0);
+        panel.addView(microphoneRatingText, fullWidthWrap());
+    }
+
+    // 🟥 INSERTED: MICROPHONE PERMISSION AND CONTROL
+    private void toggleMicrophoneMonitoring() {
+        if (!playbackVisible || closing) {
+            return;
+        }
+
+        if (microphoneMonitor != null
+                && microphoneMonitor.isRunning()) {
+            stopMicrophoneMonitoring(true);
+            return;
+        }
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+
+            microphonePermissionPending = true;
+
+            requestPermissions(
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_STAGE12_MICROPHONE);
+
+            return;
+        }
+
+        startMicrophoneMonitoring();
+    }
+
+    private void startMicrophoneMonitoring() {
+        if (!playbackVisible || closing) {
+            return;
+        }
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            toast("Microphone permission is required.");
+            return;
+        }
+
+        if (microphoneMonitor != null
+                && microphoneMonitor.isRunning()) {
+            return;
+        }
+
+        performanceScorer.reset();
+        microphoneWasStoppedByLifecycle = false;
+
+        updateMicrophoneDisplay(0, -1, 0.0);
+
+        microphoneStatus.setText("Starting microphone...");
+        microphoneButton.setText("🎤 TURN MICROPHONE OFF");
+
+        microphoneMonitor = new Stage3MicrophoneMonitor(
+                new Stage3MicrophoneMonitor.Listener() {
+
+                    @Override
+                    public void onUpdate(
+                            int levelPercent,
+                            int midiNote,
+                            double confidence) {
+
+                        if (closing || !playbackVisible) {
+                            return;
+                        }
+
+                        performanceScorer.update(
+                                levelPercent,
+                                midiNote,
+                                confidence);
+
+                        updateMicrophoneDisplay(
+                                levelPercent,
+                                midiNote,
+                                confidence);
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (closing || !playbackVisible) {
+                                return;
+                            }
+
+                            stopMicrophoneMonitoring(false);
+
+                            microphoneStatus.setText(
+                                    "Microphone error");
+
+                            toast(message);
+                        });
+                    }
+                });
+
+        boolean started = microphoneMonitor.start();
+
+        if (!started) {
+            microphoneMonitor = null;
+            microphoneButton.setText(
+                    "🎤 TURN MICROPHONE ON");
+
+            microphoneStatus.setText(
+                    "Unable to start microphone.");
+
+            toast("Please check microphone permission and try again.");
+        } else {
+            microphoneStatus.setText(
+                    "MICROPHONE ON — START SINGING");
+        }
+    }
+
+    // 🟥 INSERTED: LIVE SCORE DISPLAY
+    private void updateMicrophoneDisplay(
+            int level,
+            int note,
+            double confidence) {
+
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread(() ->
+                    updateMicrophoneDisplay(level, note, confidence));
+            return;
+        }
+
+        if (microphoneStatus == null
+                || microphoneLevelText == null
+                || microphoneScoreText == null) {
+            return;
+        }
+
+        microphoneLevelText.setText(
+                "MIC LEVEL: " + level + "%");
+
+        if (microphoneLevelFill != null
+                && microphoneLevelFill.getLayoutParams() != null) {
+
+            ViewGroup.LayoutParams params =
+                    microphoneLevelFill.getLayoutParams();
+
+            int availableWidth = dp(300);
+
+            if (microphoneLevelFill.getParent() instanceof View) {
+                View parent = (View) microphoneLevelFill.getParent();
+
+                if (parent.getWidth() > 0) {
+                    availableWidth = parent.getWidth();
+                }
+            }
+
+            params.width = Math.max(
+                    0, availableWidth * Math.max(0,
+                            Math.min(100, level)) / 100);
+
+            microphoneLevelFill.setLayoutParams(params);
+        }
+
+        if (note >= 0 && confidence >= 0.72) {
+            microphonePitchText.setText(
+                    "PITCH NOTE: " + midiNoteName(note));
+        } else {
+            microphonePitchText.setText(
+                    "PITCH: Listening for a clear voice");
+        }
+
+        microphoneScoreText.setText(
+                "SCORE: " + performanceScorer.getScorePercent() + "%");
+
+        microphoneStreakText.setText(
+                "BEST STREAK: "
+                        + performanceScorer.getBestStreak());
+
+        microphoneRatingText.setText(
+                performanceScorer.getRating());
+    }
+
+    private String midiNoteName(int midiNote) {
+        String[] names = {
+                "C", "C#", "D", "D#", "E", "F",
+                "F#", "G", "G#", "A", "A#", "B"
+        };
+
+        int noteIndex = Math.floorMod(midiNote, 12);
+        int octave = Math.floorDiv(midiNote, 12) - 1;
+
+        return names[noteIndex] + octave;
+    }
+
+    // 🟥 INSERTED: STOP MICROPHONE AND SHOW RESULT
+    private void stopMicrophoneMonitoring(boolean showResult) {
+        Stage3MicrophoneMonitor active = microphoneMonitor;
+        microphoneMonitor = null;
+
+        if (active != null) {
+            active.stop();
+        }
+
+        if (microphoneButton != null) {
+            microphoneButton.setText(
+                    "🎤 TURN MICROPHONE ON");
+        }
+
+        if (microphoneStatus != null) {
+            microphoneStatus.setText(
+                    "Microphone is OFF");
+        }
+
+        if (showResult && playbackVisible) {
+            showFinalPerformanceResult();
+        }
+    }
+
+    // 🟥 INSERTED: FINAL PERFORMANCE RESULT
+    private void showFinalPerformanceResult() {
+        if (microphoneScoreText == null) {
+            return;
+        }
+
+        int score = performanceScorer.getScorePercent();
+
+        microphoneScoreText.setText(
+                "FINAL SCORE: " + score + "%");
+
+        microphoneStreakText.setText(
+                "BEST STREAK: "
+                        + performanceScorer.getBestStreak());
+
+        microphoneRatingText.setText(
+                performanceScorer.getRating());
+
+        if (!performanceScorer.hasScored()) {
+            microphoneStatus.setText(
+                    "No reliable singing pitch was recorded.");
+        } else {
+            microphoneStatus.setText(
+                    "Performance finished. Tap microphone to sing again.");
+        }
+
+        String details =
+                "FINAL SINGING PERFORMANCE\n\n"
+                + "Overall score: " + score + "%\n"
+                + "Pitch stability: "
+                + performanceScorer.getPitchStabilityPercent()
+                + "%\n"
+                + "Vocal control: "
+                + performanceScorer.getVocalControlPercent()
+                + "%\n"
+                + "Best streak: "
+                + performanceScorer.getBestStreak()
+                + "\n\n"
+                + performanceScorer.getRating()
+                + "\n\n"
+                + "This is a pitch-stability and vocal-control score. "
+                + "It does not measure exact melody accuracy.";
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("💚 YOUR KARAOKE RESULT")
+                .setMessage(details)
+                .setPositiveButton("CONTINUE", (dialog, which) -> {
+                    dialog.dismiss();
+                })
+                .show();
+    }
+
+    // 🟥 INSERTED: ANDROID MICROPHONE PERMISSION RESULT
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults) {
+
+        super.onRequestPermissionsResult(
+                requestCode, permissions, grantResults);
+
+        if (requestCode != REQUEST_STAGE12_MICROPHONE) {
+            return;
+        }
+
+        microphonePermissionPending = false;
+
+        if (grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+            if (playbackVisible && !closing) {
+                startMicrophoneMonitoring();
+            }
+
+        } else {
+            if (microphoneButton != null) {
+                microphoneButton.setText(
+                        "🎤 TURN MICROPHONE ON");
+            }
+
+            if (microphoneStatus != null) {
+                microphoneStatus.setText(
+                        "Microphone permission denied.");
+            }
+
+            toast("Allow microphone access to use singing score.");
+        }
+    }
+
     private void returnToResults() {
+        stopMicrophoneMonitoring(false);
+
         destroyPlayer();
 
         playbackScreen = null;
         playerHost = null;
         playbackVisible = false;
 
+        clearMicrophoneViews();
+
         showSystemBars();
 
         if (searchScreen != null) {
             setContentView(searchScreen);
         }
+    }
+
+    // 🟥 INSERTED: CLEAR STAGE 1 MICROPHONE UI REFERENCES
+    private void clearMicrophoneViews() {
+        microphoneButton = null;
+        microphoneStatus = null;
+        microphoneLevelText = null;
+        microphoneScoreText = null;
+        microphonePitchText = null;
+        microphoneStreakText = null;
+        microphoneRatingText = null;
+        microphoneLevelBar = null;
+        microphoneLevelFill = null;
     }
 
     private void hideSystemBars() {
@@ -1331,6 +1773,8 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void destroyPlayer() {
+        stopMicrophoneMonitoring(false);
+
         if (player != null) {
             player.stopLoading();
             player.loadUrl("about:blank");
@@ -1423,6 +1867,13 @@ public class OnlineSongActivity extends Activity {
             adView.pause();
         }
 
+        // 🟥 INSERTED: STOP MIC WHEN STAGE 1 GOES INTO BACKGROUND
+        if (microphoneMonitor != null
+                && microphoneMonitor.isRunning()) {
+            microphoneWasStoppedByLifecycle = true;
+            stopMicrophoneMonitoring(false);
+        }
+
         super.onPause();
     }
 
@@ -1432,6 +1883,15 @@ public class OnlineSongActivity extends Activity {
 
         if (adView != null) {
             adView.resume();
+        }
+
+        if (microphoneWasStoppedByLifecycle) {
+            microphoneWasStoppedByLifecycle = false;
+
+            if (playbackVisible && microphoneStatus != null) {
+                microphoneStatus.setText(
+                        "Microphone stopped. Tap ON to resume.");
+            }
         }
     }
 
@@ -1476,6 +1936,8 @@ public class OnlineSongActivity extends Activity {
         searchGeneration++;
 
         cancelPendingSessionMismatch();
+
+        stopMicrophoneMonitoring(false);
 
         if (connectionRef != null && connectionListener != null) {
             connectionRef.removeEventListener(connectionListener);
