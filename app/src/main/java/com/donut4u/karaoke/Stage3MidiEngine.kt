@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke
 
 import android.content.Context
@@ -340,6 +341,17 @@ class Stage3MidiEngine private constructor(
 
                 markDiagnostic(
                     "AFTER_FLUIDSYNTH_CONSTRUCTOR"
+                )
+
+                // Apply Stage 3 master gain before playback begins.
+                val gainApplied = Stage3MidiGain.apply(newPlayer)
+
+                markDiagnostic(
+                    if (gainApplied) {
+                        "FLUIDSYNTH_GAIN_APPLIED"
+                    } else {
+                        "FLUIDSYNTH_GAIN_FAILED"
+                    }
                 )
 
                 synchronized(this) {
