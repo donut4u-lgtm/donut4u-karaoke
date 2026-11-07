@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke
 
 import android.util.Log
