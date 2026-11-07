@@ -4,25 +4,19 @@ import android.util.Log
 import dev.kotlinds.fluidsynthkmp.MidiFilePlayer
 
 /**
- * Adjusts the FluidSynth master gain used by Stage 3 MIDI/KAR playback.
- *
- * FluidSynth's JNI gain function is available in the library, but
- * MidiFilePlayer does not expose it publicly.
+ * Sets the FluidSynth master gain for Stage 3 MIDI/KAR playback.
  */
 internal object Stage3MidiGain {
 
     private const val TAG = "Stage3MidiGain"
 
-    // FluidSynth's usual default is 0.2.
-    // Start at 0.5 to make playback substantially louder.
-    private const val TARGET_GAIN = 0.5f
+    // Full FluidSynth master gain.
+    private const val TARGET_GAIN = 1.0f
 
     fun apply(player: MidiFilePlayer): Boolean {
         return try {
-            val playerClass = player.javaClass
-
             val contextField =
-                playerClass.getDeclaredField("context").apply {
+                player.javaClass.getDeclaredField("context").apply {
                     isAccessible = true
                 }
 
@@ -36,8 +30,7 @@ internal object Stage3MidiGain {
                     isAccessible = true
                 }
 
-            val synthPointer =
-                synthField.getLong(fluidContext)
+            val synthPointer = synthField.getLong(fluidContext)
 
             check(synthPointer != 0L) {
                 "FluidSynth synth pointer is invalid."
@@ -71,26 +64,15 @@ internal object Stage3MidiGain {
                 TARGET_GAIN
             )
 
-            Log.i(
-                TAG,
-                "Stage 3 MIDI gain set to $TARGET_GAIN"
-            )
+            Log.i(TAG, "Stage 3 MIDI gain set to FULL: $TARGET_GAIN")
 
             true
 
         } catch (error: Exception) {
-            Log.e(
-                TAG,
-                "Could not adjust Stage 3 MIDI gain.",
-                error
-            )
+            Log.e(TAG, "Could not adjust Stage 3 MIDI gain.", error)
             false
         } catch (error: LinkageError) {
-            Log.e(
-                TAG,
-                "FluidSynth gain native function unavailable.",
-                error
-            )
+            Log.e(TAG, "FluidSynth native gain function unavailable.", error)
             false
         }
     }
