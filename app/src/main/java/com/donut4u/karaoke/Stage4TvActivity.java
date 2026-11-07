@@ -2,17 +2,22 @@
 package com.donut4u.karaoke;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.net.Uri;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.BaseAdapter;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -30,6 +35,8 @@ public class Stage4TvActivity extends Activity {
             "donut4u_stage3_songbook";
 
     private static final String SONGS_KEY = "songs_json";
+
+    private static final int REQUEST_IMPORT_TV_SONGS = 4101;
 
     private static final int BACKGROUND =
             Color.rgb(8, 20, 25);
@@ -49,15 +56,16 @@ public class Stage4TvActivity extends Activity {
     private final ArrayList<TvSong> songs =
             new ArrayList<>();
 
+    private SharedPreferences preferences;
+
     private ListView songList;
     private TextView countLabel;
+    private TextView emptyLabel;
+    private Button importButton;
     private SongAdapter adapter;
 
-    private int rawEntries;
-    private int invalidEntries;
-    private int filteredEntries;
-    private boolean preferenceKeyExists;
-    private String readStatus = "NOT READ";
+    private int nextNumber = 10000;
+    private int totalSavedEntries;
 
     private static final class TvSong {
         final String number;
@@ -65,7 +73,12 @@ public class Stage4TvActivity extends Activity {
         final String uri;
         final String type;
 
-        TvSong(String number, String title, String uri, String type) {
+        TvSong(
+                String number,
+                String title,
+                String uri,
+                String type
+        ) {
             this.number = number;
             this.title = title;
             this.uri = uri;
@@ -79,6 +92,7 @@ public class Stage4TvActivity extends Activity {
 
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
+
         getWindow().addFlags(
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         );
@@ -88,6 +102,11 @@ public class Stage4TvActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+
+        preferences = getSharedPreferences(
+                SONGBOOK_PREFS,
+                MODE_PRIVATE
         );
 
         loadSongs();
@@ -103,34 +122,21 @@ public class Stage4TvActivity extends Activity {
 
     private void loadSongs() {
         songs.clear();
-
-        rawEntries = 0;
-        invalidEntries = 0;
-        filteredEntries = 0;
-        preferenceKeyExists = false;
-        readStatus = "OK";
-
-        SharedPreferences preferences =
-                getSharedPreferences(
-                        SONGBOOK_PREFS,
-                        MODE_PRIVATE
-                );
+        totalSavedEntries = 0;
+        nextNumber = 10000;
 
         try {
-            preferenceKeyExists =
-                    preferences.contains(SONGS_KEY);
-
             String savedJson =
                     preferences.getString(SONGS_KEY, "[]");
 
             JSONArray array = new JSONArray(savedJson);
-            rawEntries = array.length();
+
+            totalSavedEntries = array.length();
 
             for (int i = 0; i < array.length(); i++) {
                 JSONObject object = array.optJSONObject(i);
 
                 if (object == null) {
-                    invalidEntries++;
                     continue;
                 }
 
@@ -149,12 +155,12 @@ public class Stage4TvActivity extends Activity {
                 if (number.trim().isEmpty()
                         || title.trim().isEmpty()
                         || uri.trim().isEmpty()) {
-                    invalidEntries++;
                     continue;
                 }
 
+                updateNextNumber(number);
+
                 if (!isPlayableEntry(title, type)) {
-                    filteredEntries++;
                     continue;
                 }
 
@@ -167,31 +173,75 @@ public class Stage4TvActivity extends Activity {
             }
 
         } catch (Exception e) {
-            readStatus = "ERROR: "
-                    + e.getClass().getSimpleName();
-
             android.util.Log.e(
                     "Stage4TV",
-                    "Could not read Stage 3 songbook.",
+                    "Could not load TV songbook.",
                     e
             );
-        }
 
-        android.util.Log.i(
-                "Stage4TV",
-                "package=" + getPackageName()
-                        + " prefs=" + SONGBOOK_PREFS
-                        + " key=" + SONGS_KEY
-                        + " keyExists=" + preferenceKeyExists
-                        + " raw=" + rawEntries
-                        + " valid=" + songs.size()
-                        + " invalid=" + invalidEntries
-                        + " filtered=" + filteredEntries
-                        + " status=" + readStatus
-        );
+            Toast.makeText(
+                    this,
+                    "Could not read the TV songbook.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
     }
 
-    private boolean isPlayableEntry(String title, String type) {
+    private void updateNextNumber(String number) {
+        try {
+            int value = Integer.parseInt(number);
+
+            if (value >= nextNumber && value < 99999) {
+                nextNumber = value + 1;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String generateNumber() {
+        String candidate;
+
+        do {
+            candidate = String.format(
+                    Locale.US,
+                    "%05d",
+                    nextNumber++
+            );
+
+            if (nextNumber > 99999) {
+                nextNumber = 10000;
+            }
+
+        } while (numberExists(candidate));
+
+        return candidate;
+    }
+
+    private boolean numberExists(String number) {
+        try {
+            JSONArray array = new JSONArray(
+                    preferences.getString(SONGS_KEY, "[]")
+            );
+
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject object = array.optJSONObject(i);
+
+                if (object != null
+                        && number.equals(
+                                object.optString("number", ""))) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        return false;
+    }
+
+    private boolean isPlayableEntry(
+            String title,
+            String type
+    ) {
         String safeTitle = title == null
                 ? ""
                 : title.toLowerCase(Locale.ROOT);
@@ -200,18 +250,11 @@ public class Stage4TvActivity extends Activity {
                 ? ""
                 : type.toUpperCase(Locale.ROOT);
 
-        boolean catalog =
-                "CATALOG".equals(safeType);
-
-        boolean soundFont =
-                "SOUNDFONT".equals(safeType)
-                        || safeTitle.endsWith(".sf2");
-
-        boolean lyricsFile =
-                "LYRICS".equals(safeType)
-                        || safeTitle.endsWith(".lrc");
-
-        return !catalog && !soundFont && !lyricsFile;
+        return !"CATALOG".equals(safeType)
+                && !"SOUNDFONT".equals(safeType)
+                && !"LYRICS".equals(safeType)
+                && !safeTitle.endsWith(".sf2")
+                && !safeTitle.endsWith(".lrc");
     }
 
     private void buildScreen() {
@@ -220,45 +263,87 @@ public class Stage4TvActivity extends Activity {
         root.setBackgroundColor(BACKGROUND);
         root.setPadding(
                 dp(54),
-                dp(22),
+                dp(18),
                 dp(54),
-                dp(20)
+                dp(16)
         );
 
         TextView brand = new TextView(this);
         brand.setText("DONUT4U KARAOKE");
         brand.setTextColor(GREEN);
         brand.setTextSize(19);
-        brand.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        brand.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         brand.setGravity(Gravity.CENTER);
 
         root.addView(
                 brand,
-                new LinearLayout.LayoutParams(-1, dp(34))
+                new LinearLayout.LayoutParams(-1, dp(32))
         );
 
         TextView heading = new TextView(this);
         heading.setText("CHOOSE YOUR KARAOKE SONG");
         heading.setTextColor(WHITE);
         heading.setTextSize(29);
-        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        heading.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         heading.setGravity(Gravity.CENTER);
-        heading.setPadding(0, dp(8), 0, dp(8));
+        heading.setPadding(0, dp(5), 0, dp(5));
 
         root.addView(
                 heading,
-                new LinearLayout.LayoutParams(-1, dp(58))
+                new LinearLayout.LayoutParams(-1, dp(54))
         );
 
         countLabel = new TextView(this);
         countLabel.setTextColor(MUTED);
-        countLabel.setTextSize(13);
+        countLabel.setTextSize(15);
         countLabel.setGravity(Gravity.CENTER);
-        countLabel.setPadding(0, dp(2), 0, dp(12));
+        countLabel.setPadding(0, dp(2), 0, dp(8));
 
         root.addView(
                 countLabel,
-                new LinearLayout.LayoutParams(-1, dp(82))
+                new LinearLayout.LayoutParams(-1, dp(38))
+        );
+
+        importButton = new Button(this);
+        importButton.setText("IMPORT SONGS FROM THIS TV");
+        importButton.setTextSize(17);
+        importButton.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
+        importButton.setTextColor(Color.BLACK);
+        importButton.setAllCaps(false);
+        importButton.setBackground(createImportBackground());
+        importButton.setFocusable(true);
+        importButton.setFocusableInTouchMode(true);
+        importButton.setOnClickListener(v -> chooseSongsFromTv());
+
+        LinearLayout.LayoutParams importParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(54)
+                );
+
+        importParams.bottomMargin = dp(10);
+
+        root.addView(importButton, importParams);
+
+        emptyLabel = new TextView(this);
+        emptyLabel.setText(
+                "No songs imported on this TV yet.\n"
+                        + "Choose IMPORT SONGS FROM THIS TV."
+        );
+        emptyLabel.setTextColor(MUTED);
+        emptyLabel.setTextSize(18);
+        emptyLabel.setGravity(Gravity.CENTER);
+        emptyLabel.setPadding(
+                dp(20), dp(20), dp(20), dp(20)
         );
 
         songList = new ListView(this);
@@ -269,7 +354,9 @@ public class Stage4TvActivity extends Activity {
                 )
         );
         songList.setDividerHeight(dp(5));
-        songList.setPadding(dp(8), dp(5), dp(8), dp(5));
+        songList.setPadding(
+                dp(8), dp(5), dp(8), dp(5)
+        );
         songList.setClipToPadding(false);
         songList.setFocusable(true);
         songList.setFocusableInTouchMode(true);
@@ -278,10 +365,12 @@ public class Stage4TvActivity extends Activity {
 
         adapter = new SongAdapter();
         songList.setAdapter(adapter);
+        songList.setEmptyView(emptyLabel);
 
         songList.setOnItemClickListener(
                 (parent, view, position, id) -> {
-                    if (position >= 0 && position < songs.size()) {
+                    if (position >= 0
+                            && position < songs.size()) {
                         playSong(songs.get(position));
                     }
                 }
@@ -292,30 +381,42 @@ public class Stage4TvActivity extends Activity {
                 new LinearLayout.LayoutParams(-1, 0, 1f)
         );
 
+        root.addView(
+                emptyLabel,
+                new LinearLayout.LayoutParams(-1, 0, 1f)
+        );
+
         TextView instructions = new TextView(this);
         instructions.setText(
-                "REMOTE: UP / DOWN to choose  •  OK to play  •  BACK to exit"
+                "REMOTE: UP / DOWN to choose  •  OK to select  •  BACK to exit"
         );
         instructions.setTextColor(MUTED);
         instructions.setTextSize(14);
         instructions.setGravity(Gravity.CENTER);
-        instructions.setPadding(0, dp(10), 0, dp(4));
+        instructions.setPadding(0, dp(8), 0, 0);
 
         root.addView(
                 instructions,
-                new LinearLayout.LayoutParams(-1, dp(36))
+                new LinearLayout.LayoutParams(-1, dp(30))
         );
 
         setContentView(root);
+
         updateCount();
 
-        if (!songs.isEmpty()) {
+        if (songs.isEmpty()) {
+            importButton.requestFocus();
+        } else {
             songList.setSelection(0);
             songList.requestFocus();
-        } else {
-            songList.setFocusable(false);
-            songList.setFocusableInTouchMode(false);
         }
+    }
+
+    private GradientDrawable createImportBackground() {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(GREEN);
+        background.setCornerRadius(dp(10));
+        return background;
     }
 
     private StateListDrawable createListSelector() {
@@ -334,7 +435,10 @@ public class Stage4TvActivity extends Activity {
         GradientDrawable normal = new GradientDrawable();
         normal.setColor(Color.rgb(18, 34, 37));
         normal.setCornerRadius(dp(10));
-        normal.setStroke(dp(1), Color.rgb(40, 65, 65));
+        normal.setStroke(
+                dp(1),
+                Color.rgb(40, 65, 65)
+        );
 
         selector.addState(
                 new int[]{android.R.attr.state_pressed},
@@ -358,13 +462,316 @@ public class Stage4TvActivity extends Activity {
 
         countLabel.setText(
                 "AVAILABLE SONGS: " + songs.size()
-                        + "   •   RAW SAVED: " + rawEntries
-                        + "   •   INVALID: " + invalidEntries
-                        + "   •   FILTERED: " + filteredEntries
-                        + "\nPREFERENCE KEY EXISTS: "
-                        + (preferenceKeyExists ? "YES" : "NO")
-                        + "   •   READ: " + readStatus
+                        + "   •   SAVED FILES: "
+                        + totalSavedEntries
         );
+    }
+
+    private void chooseSongsFromTv() {
+        Intent intent = new Intent(
+                Intent.ACTION_OPEN_DOCUMENT
+        );
+
+        intent.addCategory(
+                Intent.CATEGORY_OPENABLE
+        );
+
+        intent.setType("*/*");
+
+        intent.putExtra(
+                Intent.EXTRA_ALLOW_MULTIPLE,
+                true
+        );
+
+        intent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        );
+
+        try {
+            startActivityForResult(
+                    intent,
+                    REQUEST_IMPORT_TV_SONGS
+            );
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage4TV",
+                    "Could not open TV file picker.",
+                    e
+            );
+
+            Toast.makeText(
+                    this,
+                    "Cannot open the TV file picker.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(
+            int requestCode,
+            int resultCode,
+            Intent data
+    ) {
+        super.onActivityResult(
+                requestCode,
+                resultCode,
+                data
+        );
+
+        if (requestCode != REQUEST_IMPORT_TV_SONGS
+                || resultCode != RESULT_OK
+                || data == null) {
+            return;
+        }
+
+        int imported = 0;
+        int skipped = 0;
+
+        ClipData clip = data.getClipData();
+
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri uri = clip.getItemAt(i).getUri();
+
+                if (importSong(uri, data.getFlags())) {
+                    imported++;
+                } else {
+                    skipped++;
+                }
+            }
+        } else {
+            Uri uri = data.getData();
+
+            if (uri != null) {
+                if (importSong(uri, data.getFlags())) {
+                    imported++;
+                } else {
+                    skipped++;
+                }
+            }
+        }
+
+        saveSongs();
+
+        loadSongs();
+
+        if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
+
+        updateCount();
+
+        Toast.makeText(
+                this,
+                "Imported: " + imported
+                        + "   Skipped: " + skipped,
+                Toast.LENGTH_LONG
+        ).show();
+
+        if (!songs.isEmpty()) {
+            songList.setSelection(0);
+            songList.requestFocus();
+        } else {
+            importButton.requestFocus();
+        }
+    }
+
+    private boolean importSong(Uri uri, int flags) {
+        if (uri == null) {
+            return false;
+        }
+
+        String uriString = uri.toString();
+
+        try {
+            JSONArray existing = new JSONArray(
+                    preferences.getString(SONGS_KEY, "[]")
+            );
+
+            for (int i = 0; i < existing.length(); i++) {
+                JSONObject object = existing.optJSONObject(i);
+
+                if (object != null
+                        && uriString.equals(
+                                object.optString("uri", ""))) {
+                    return false;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        String fileName = getFileName(uri);
+        String extension = getExtension(fileName);
+
+        if (!isSupported(extension)) {
+            Toast.makeText(
+                    this,
+                    "Unsupported file: " + fileName,
+                    Toast.LENGTH_SHORT
+            ).show();
+            return false;
+        }
+
+        try {
+            int permissionFlags = flags
+                    & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+
+            if (permissionFlags != 0) {
+                getContentResolver().takePersistableUriPermission(
+                        uri,
+                        permissionFlags
+                );
+            }
+        } catch (Exception e) {
+            android.util.Log.w(
+                    "Stage4TV",
+                    "Could not persist file permission: " + uri,
+                    e
+            );
+        }
+
+        try {
+            JSONArray array = new JSONArray(
+                    preferences.getString(SONGS_KEY, "[]")
+            );
+
+            JSONObject object = new JSONObject();
+            object.put("number", generateNumber());
+            object.put("title", fileName);
+            object.put("uri", uriString);
+            object.put("type", getType(extension));
+
+            array.put(object);
+
+            preferences.edit()
+                    .putString(SONGS_KEY, array.toString())
+                    .commit();
+
+            return true;
+
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage4TV",
+                    "Could not save imported TV song.",
+                    e
+            );
+            return false;
+        }
+    }
+
+    private void saveSongs() {
+        try {
+            preferences.edit()
+                    .putString(
+                            SONGS_KEY,
+                            preferences.getString(SONGS_KEY, "[]")
+                    )
+                    .commit();
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage4TV",
+                    "Could not commit TV songbook.",
+                    e
+            );
+        }
+    }
+
+    private String getFileName(Uri uri) {
+        String name = null;
+
+        try (Cursor cursor = getContentResolver().query(
+                uri,
+                null,
+                null,
+                null,
+                null
+        )) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(
+                        OpenableColumns.DISPLAY_NAME
+                );
+
+                if (index >= 0) {
+                    name = cursor.getString(index);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w(
+                    "Stage4TV",
+                    "Could not read file name.",
+                    e
+            );
+        }
+
+        if (name == null || name.trim().isEmpty()) {
+            name = uri.getLastPathSegment();
+        }
+
+        return name == null || name.trim().isEmpty()
+                ? "Untitled song"
+                : name;
+    }
+
+    private String getExtension(String name) {
+        if (name == null) {
+            return "";
+        }
+
+        int dot = name.lastIndexOf('.');
+
+        if (dot < 0 || dot == name.length() - 1) {
+            return "";
+        }
+
+        return name.substring(dot + 1)
+                .toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isSupported(String extension) {
+        switch (extension) {
+            case "mid":
+            case "midi":
+            case "kar":
+            case "mp3":
+            case "wav":
+            case "ogg":
+            case "m4a":
+            case "aac":
+            case "lrc":
+            case "mp4":
+            case "mkv":
+            case "webm":
+            case "sf2":
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private String getType(String extension) {
+        switch (extension) {
+            case "mid":
+            case "midi":
+            case "kar":
+                return "MIDI/KAR";
+
+            case "lrc":
+                return "LYRICS";
+
+            case "sf2":
+                return "SOUNDFONT";
+
+            case "mp4":
+            case "mkv":
+            case "webm":
+                return "VIDEO";
+
+            default:
+                return "AUDIO";
+        }
     }
 
     private void playSong(TvSong song) {
@@ -421,12 +828,6 @@ public class Stage4TvActivity extends Activity {
             loadSongs();
             adapter.notifyDataSetChanged();
             updateCount();
-
-            if (!songs.isEmpty()
-                    && songList != null
-                    && songList.getSelectedItemPosition() < 0) {
-                songList.setSelection(0);
-            }
         }
     }
 
@@ -458,12 +859,20 @@ public class Stage4TvActivity extends Activity {
             if (convertView instanceof TextView) {
                 row = (TextView) convertView;
             } else {
-                row = new TextView(Stage4TvActivity.this);
+                row = new TextView(
+                        Stage4TvActivity.this
+                );
+
                 row.setTextColor(WHITE);
                 row.setTextSize(19);
-                row.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                row.setTypeface(
+                        Typeface.DEFAULT,
+                        Typeface.BOLD
+                );
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(dp(22), dp(8), dp(22), dp(8));
+                row.setPadding(
+                        dp(22), dp(8), dp(22), dp(8)
+                );
                 row.setMinHeight(dp(66));
                 row.setMaxLines(2);
                 row.setEllipsize(
@@ -474,7 +883,8 @@ public class Stage4TvActivity extends Activity {
             TvSong song = songs.get(position);
 
             row.setText(
-                    song.number + "   •   "
+                    song.number
+                            + "   •   "
                             + song.title
                             + "\n"
                             + song.type.toUpperCase(Locale.ROOT)
