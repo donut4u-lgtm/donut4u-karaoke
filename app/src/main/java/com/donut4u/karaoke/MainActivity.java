@@ -1,8 +1,10 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -33,11 +35,9 @@ public class MainActivity extends Activity {
     private static final int PANEL = Color.rgb(35, 39, 42);
     private static final int MUTED = Color.rgb(185, 194, 189);
 
-    // Existing banner ad unit ID.
     private static final String BANNER_AD_UNIT_ID =
             "ca-app-pub-5625332026157890/7288125709";
 
-    // App Open ad unit ID.
     private static final String APP_OPEN_AD_UNIT_ID =
             "ca-app-pub-5625332026157890/8915386770";
 
@@ -55,6 +55,29 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // STAGE 4 FIX:
+        // Android TV must open the dedicated TV songbook.
+        // It must not enter the phone login/session-check route.
+        if (getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_LEANBACK)) {
+
+            Intent tvIntent = new Intent(
+                    MainActivity.this,
+                    Stage4TvActivity.class
+            );
+
+            tvIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            | Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
+            );
+
+            startActivity(tvIntent);
+            finish();
+            return;
+        }
+
+        // Existing phone behavior remains below.
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
@@ -72,7 +95,6 @@ public class MainActivity extends Activity {
             showWelcomeScreen();
         }
 
-        // Keep the existing update checker.
         AppUpdateChecker.checkForUpdates(this);
 
         MobileAds.initialize(this, initializationStatus ->
@@ -154,8 +176,6 @@ public class MainActivity extends Activity {
                     public void onAdFailedToLoad(
                             LoadAdError error) {
                         appOpenAd = null;
-
-                        // Continue without an ad if loading fails.
                         continueAfterAd();
                     }
                 }
