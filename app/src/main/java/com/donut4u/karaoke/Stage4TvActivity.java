@@ -12,7 +12,6 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -54,18 +53,19 @@ public class Stage4TvActivity extends Activity {
     private TextView countLabel;
     private SongAdapter adapter;
 
+    private int rawEntries;
+    private int invalidEntries;
+    private int filteredEntries;
+    private boolean preferenceKeyExists;
+    private String readStatus = "NOT READ";
+
     private static final class TvSong {
         final String number;
         final String title;
         final String uri;
         final String type;
 
-        TvSong(
-                String number,
-                String title,
-                String uri,
-                String type
-        ) {
+        TvSong(String number, String title, String uri, String type) {
             this.number = number;
             this.title = title;
             this.uri = uri;
@@ -79,7 +79,6 @@ public class Stage4TvActivity extends Activity {
 
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
-
         getWindow().addFlags(
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         );
@@ -105,6 +104,12 @@ public class Stage4TvActivity extends Activity {
     private void loadSongs() {
         songs.clear();
 
+        rawEntries = 0;
+        invalidEntries = 0;
+        filteredEntries = 0;
+        preferenceKeyExists = false;
+        readStatus = "OK";
+
         SharedPreferences preferences =
                 getSharedPreferences(
                         SONGBOOK_PREFS,
@@ -112,14 +117,20 @@ public class Stage4TvActivity extends Activity {
                 );
 
         try {
-            JSONArray array = new JSONArray(
-                    preferences.getString(SONGS_KEY, "[]")
-            );
+            preferenceKeyExists =
+                    preferences.contains(SONGS_KEY);
+
+            String savedJson =
+                    preferences.getString(SONGS_KEY, "[]");
+
+            JSONArray array = new JSONArray(savedJson);
+            rawEntries = array.length();
 
             for (int i = 0; i < array.length(); i++) {
                 JSONObject object = array.optJSONObject(i);
 
                 if (object == null) {
+                    invalidEntries++;
                     continue;
                 }
 
@@ -138,10 +149,12 @@ public class Stage4TvActivity extends Activity {
                 if (number.trim().isEmpty()
                         || title.trim().isEmpty()
                         || uri.trim().isEmpty()) {
+                    invalidEntries++;
                     continue;
                 }
 
                 if (!isPlayableEntry(title, type)) {
+                    filteredEntries++;
                     continue;
                 }
 
@@ -154,24 +167,31 @@ public class Stage4TvActivity extends Activity {
             }
 
         } catch (Exception e) {
+            readStatus = "ERROR: "
+                    + e.getClass().getSimpleName();
+
             android.util.Log.e(
                     "Stage4TV",
                     "Could not read Stage 3 songbook.",
                     e
             );
-
-            Toast.makeText(
-                    this,
-                    "Could not read the saved songbook.",
-                    Toast.LENGTH_LONG
-            ).show();
         }
+
+        android.util.Log.i(
+                "Stage4TV",
+                "package=" + getPackageName()
+                        + " prefs=" + SONGBOOK_PREFS
+                        + " key=" + SONGS_KEY
+                        + " keyExists=" + preferenceKeyExists
+                        + " raw=" + rawEntries
+                        + " valid=" + songs.size()
+                        + " invalid=" + invalidEntries
+                        + " filtered=" + filteredEntries
+                        + " status=" + readStatus
+        );
     }
 
-    private boolean isPlayableEntry(
-            String title,
-            String type
-    ) {
+    private boolean isPlayableEntry(String title, String type) {
         String safeTitle = title == null
                 ? ""
                 : title.toLowerCase(Locale.ROOT);
@@ -191,9 +211,7 @@ public class Stage4TvActivity extends Activity {
                 "LYRICS".equals(safeType)
                         || safeTitle.endsWith(".lrc");
 
-        return !catalog
-                && !soundFont
-                && !lyricsFile;
+        return !catalog && !soundFont && !lyricsFile;
     }
 
     private void buildScreen() {
@@ -211,61 +229,36 @@ public class Stage4TvActivity extends Activity {
         brand.setText("DONUT4U KARAOKE");
         brand.setTextColor(GREEN);
         brand.setTextSize(19);
-        brand.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
+        brand.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         brand.setGravity(Gravity.CENTER);
 
         root.addView(
                 brand,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(34)
-                )
+                new LinearLayout.LayoutParams(-1, dp(34))
         );
 
         TextView heading = new TextView(this);
         heading.setText("CHOOSE YOUR KARAOKE SONG");
         heading.setTextColor(WHITE);
         heading.setTextSize(29);
-        heading.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
-        heading.setPadding(
-                0,
-                dp(8),
-                0,
-                dp(8)
-        );
+        heading.setPadding(0, dp(8), 0, dp(8));
 
         root.addView(
                 heading,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(58)
-                )
+                new LinearLayout.LayoutParams(-1, dp(58))
         );
 
         countLabel = new TextView(this);
         countLabel.setTextColor(MUTED);
-        countLabel.setTextSize(15);
+        countLabel.setTextSize(13);
         countLabel.setGravity(Gravity.CENTER);
-        countLabel.setPadding(
-                0,
-                dp(2),
-                0,
-                dp(12)
-        );
+        countLabel.setPadding(0, dp(2), 0, dp(12));
 
         root.addView(
                 countLabel,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(38)
-                )
+                new LinearLayout.LayoutParams(-1, dp(82))
         );
 
         songList = new ListView(this);
@@ -276,12 +269,7 @@ public class Stage4TvActivity extends Activity {
                 )
         );
         songList.setDividerHeight(dp(5));
-        songList.setPadding(
-                dp(8),
-                dp(5),
-                dp(8),
-                dp(5)
-        );
+        songList.setPadding(dp(8), dp(5), dp(8), dp(5));
         songList.setClipToPadding(false);
         songList.setFocusable(true);
         songList.setFocusableInTouchMode(true);
@@ -293,21 +281,16 @@ public class Stage4TvActivity extends Activity {
 
         songList.setOnItemClickListener(
                 (parent, view, position, id) -> {
-                    if (position >= 0
-                            && position < songs.size()) {
+                    if (position >= 0 && position < songs.size()) {
                         playSong(songs.get(position));
                     }
                 }
         );
 
-        LinearLayout.LayoutParams listParams =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1f
-                );
-
-        root.addView(songList, listParams);
+        root.addView(
+                songList,
+                new LinearLayout.LayoutParams(-1, 0, 1f)
+        );
 
         TextView instructions = new TextView(this);
         instructions.setText(
@@ -316,23 +299,14 @@ public class Stage4TvActivity extends Activity {
         instructions.setTextColor(MUTED);
         instructions.setTextSize(14);
         instructions.setGravity(Gravity.CENTER);
-        instructions.setPadding(
-                0,
-                dp(10),
-                0,
-                dp(4)
-        );
+        instructions.setPadding(0, dp(10), 0, dp(4));
 
         root.addView(
                 instructions,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(36)
-                )
+                new LinearLayout.LayoutParams(-1, dp(36))
         );
 
         setContentView(root);
-
         updateCount();
 
         if (!songs.isEmpty()) {
@@ -345,32 +319,22 @@ public class Stage4TvActivity extends Activity {
     }
 
     private StateListDrawable createListSelector() {
-        StateListDrawable selector =
-                new StateListDrawable();
+        StateListDrawable selector = new StateListDrawable();
 
-        GradientDrawable focused =
-                new GradientDrawable();
-
+        GradientDrawable focused = new GradientDrawable();
         focused.setColor(PANEL);
         focused.setCornerRadius(dp(10));
         focused.setStroke(dp(3), GREEN);
 
-        GradientDrawable pressed =
-                new GradientDrawable();
-
+        GradientDrawable pressed = new GradientDrawable();
         pressed.setColor(Color.rgb(35, 75, 55));
         pressed.setCornerRadius(dp(10));
         pressed.setStroke(dp(3), GREEN);
 
-        GradientDrawable normal =
-                new GradientDrawable();
-
+        GradientDrawable normal = new GradientDrawable();
         normal.setColor(Color.rgb(18, 34, 37));
         normal.setCornerRadius(dp(10));
-        normal.setStroke(
-                dp(1),
-                Color.rgb(40, 65, 65)
-        );
+        normal.setStroke(dp(1), Color.rgb(40, 65, 65));
 
         selector.addState(
                 new int[]{android.R.attr.state_pressed},
@@ -382,10 +346,7 @@ public class Stage4TvActivity extends Activity {
                 focused
         );
 
-        selector.addState(
-                new int[]{},
-                normal
-        );
+        selector.addState(new int[]{}, normal);
 
         return selector;
     }
@@ -397,7 +358,12 @@ public class Stage4TvActivity extends Activity {
 
         countLabel.setText(
                 "AVAILABLE SONGS: " + songs.size()
-                        + "     •     STAGE 3 SONGBOOK"
+                        + "   •   RAW SAVED: " + rawEntries
+                        + "   •   INVALID: " + invalidEntries
+                        + "   •   FILTERED: " + filteredEntries
+                        + "\nPREFERENCE KEY EXISTS: "
+                        + (preferenceKeyExists ? "YES" : "NO")
+                        + "   •   READ: " + readStatus
         );
     }
 
@@ -405,13 +371,11 @@ public class Stage4TvActivity extends Activity {
         if (song == null
                 || song.uri == null
                 || song.uri.trim().isEmpty()) {
-
             Toast.makeText(
                     this,
                     "This song has no playable media file.",
                     Toast.LENGTH_LONG
             ).show();
-
             return;
         }
 
@@ -494,23 +458,12 @@ public class Stage4TvActivity extends Activity {
             if (convertView instanceof TextView) {
                 row = (TextView) convertView;
             } else {
-                row = new TextView(
-                        Stage4TvActivity.this
-                );
-
+                row = new TextView(Stage4TvActivity.this);
                 row.setTextColor(WHITE);
                 row.setTextSize(19);
-                row.setTypeface(
-                        Typeface.DEFAULT,
-                        Typeface.BOLD
-                );
+                row.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(
-                        dp(22),
-                        dp(8),
-                        dp(22),
-                        dp(8)
-                );
+                row.setPadding(dp(22), dp(8), dp(22), dp(8));
                 row.setMinHeight(dp(66));
                 row.setMaxLines(2);
                 row.setEllipsize(
@@ -524,9 +477,7 @@ public class Stage4TvActivity extends Activity {
                     song.number + "   •   "
                             + song.title
                             + "\n"
-                            + song.type.toUpperCase(
-                                    Locale.ROOT
-                            )
+                            + song.type.toUpperCase(Locale.ROOT)
             );
 
             return row;
