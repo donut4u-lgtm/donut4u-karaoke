@@ -25,6 +25,28 @@ jobs:
           ref: 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
           path: fluidsynth-source
 
+      - name: Increase FluidSynth Gradle download timeout
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="fluidsynth-source/gradle/wrapper/gradle-wrapper.properties"
+          test -f "$FILE"
+
+          sed -i \
+            -e 's/^networkTimeout=.*/networkTimeout=120000/' \
+            -e 's/^retries=.*/retries=3/' \
+            -e 's/^retryBackOffMs=.*/retryBackOffMs=2000/' \
+            "$FILE"
+
+          grep -q '^networkTimeout=120000$' "$FILE"
+          grep -q '^retries=3$' "$FILE"
+          grep -q '^retryBackOffMs=2000$' "$FILE"
+
+          cat "$FILE"
+
+          echo "PASS: Gradle download timeout and retries configured."
+
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
@@ -38,19 +60,39 @@ jobs:
 
       - name: Install Android NDK and CMake
         run: |
+          set -euo pipefail
+
           sdkmanager --install \
             "ndk;30.0.16248370" \
             "cmake;3.22.1"
 
-      - name: Build FluidSynth release AAR
+      - name: Build FluidSynth release AAR (retry transient failures)
         working-directory: fluidsynth-source
+        shell: bash
         run: |
+          set -uo pipefail
+
           chmod +x ./gradlew
 
-          ./gradlew :fluidsynth-kmp:assembleRelease \
-            --no-daemon \
-            --stacktrace \
-            --console=plain
+          for ATTEMPT in 1 2 3; do
+            echo "FluidSynth build attempt $ATTEMPT of 3"
+
+            if ./gradlew :fluidsynth-kmp:assembleRelease \
+              --no-daemon \
+              --stacktrace \
+              --console=plain; then
+              echo "PASS: FluidSynth AAR build completed."
+              exit 0
+            fi
+
+            if [[ "$ATTEMPT" -lt 3 ]]; then
+              echo "Build failed. Waiting 20 seconds before retry."
+              sleep 20
+            fi
+          done
+
+          echo "FAIL: FluidSynth build failed after 3 attempts."
+          exit 1
 
       - name: Verify 64-bit native libraries use 16 KB ELF alignment
         shell: bash
