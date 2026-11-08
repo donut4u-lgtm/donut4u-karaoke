@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -37,6 +36,11 @@ public class Stage4TvActivity extends Activity {
     private static final String SONGS_KEY = "songs_json";
 
     private static final int REQUEST_IMPORT_TV_SONGS = 4101;
+
+    private static final String EXTRA_NUMBER = "stage4_song_number";
+    private static final String EXTRA_TITLE = "stage4_song_title";
+    private static final String EXTRA_URI = "stage4_song_uri";
+    private static final String EXTRA_TYPE = "stage4_song_type";
 
     private static final int BACKGROUND =
             Color.rgb(8, 20, 25);
@@ -578,6 +582,10 @@ public class Stage4TvActivity extends Activity {
         }
     }
 
+    /*
+     * Only save a song after Android confirms that read access
+     * can be persisted. This prevents dead entries in the songbook.
+     */
     private boolean importSong(Uri uri, int flags) {
         if (uri == null) {
             return false;
@@ -614,22 +622,66 @@ public class Stage4TvActivity extends Activity {
             return false;
         }
 
-        try {
-            int permissionFlags = flags
-                    & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        boolean persistableGrant =
+                (flags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0;
 
-            if (permissionFlags != 0) {
-                getContentResolver().takePersistableUriPermission(
-                        uri,
-                        permissionFlags
-                );
-            }
+        int permissionFlags = flags
+                & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+        boolean hasReadGrant =
+                (permissionFlags
+                        & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0;
+
+        if (!persistableGrant || !hasReadGrant) {
+            Toast.makeText(
+                    this,
+                    "Android did not provide permanent file access: "
+                            + fileName,
+                    Toast.LENGTH_LONG
+            ).show();
+            return false;
+        }
+
+        try {
+            getContentResolver().takePersistableUriPermission(
+                    uri,
+                    permissionFlags
+            );
         } catch (Exception e) {
             android.util.Log.w(
                     "Stage4TV",
                     "Could not persist file permission: " + uri,
                     e
             );
+
+            Toast.makeText(
+                    this,
+                    "Could not save access to: " + fileName,
+                    Toast.LENGTH_LONG
+            ).show();
+
+            return false;
+        }
+
+        boolean savedReadPermission = false;
+
+        for (android.content.UriPermission saved
+                : getContentResolver().getPersistedUriPermissions()) {
+            if (uri.equals(saved.getUri())
+                    && saved.isReadPermission()) {
+                savedReadPermission = true;
+                break;
+            }
+        }
+
+        if (!savedReadPermission) {
+            Toast.makeText(
+                    this,
+                    "TV could not keep access to: " + fileName,
+                    Toast.LENGTH_LONG
+            ).show();
+            return false;
         }
 
         try {
@@ -645,11 +697,19 @@ public class Stage4TvActivity extends Activity {
 
             array.put(object);
 
-            preferences.edit()
+            boolean saved = preferences.edit()
                     .putString(SONGS_KEY, array.toString())
                     .commit();
 
-            return true;
+            if (!saved) {
+                Toast.makeText(
+                        this,
+                        "Could not save songbook entry: " + fileName,
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+
+            return saved;
 
         } catch (Exception e) {
             android.util.Log.e(
@@ -787,34 +847,28 @@ public class Stage4TvActivity extends Activity {
         }
 
         try {
-            Stage3SongQueue.initialize(this);
-
-            Stage3SongQueue.setNowPlaying(
-                    new Stage3SongQueue.QueuedSong(
-                            song.number,
-                            song.title,
-                            song.uri,
-                            song.type
-                    )
+            Intent intent = new Intent(
+                    Stage4TvActivity.this,
+                    Stage4TvPlayerActivity.class
             );
 
-            startActivity(
-                    new Intent(
-                            Stage4TvActivity.this,
-                            Stage3PlayerActivity.class
-                    )
-            );
+            intent.putExtra(EXTRA_NUMBER, song.number);
+            intent.putExtra(EXTRA_TITLE, song.title);
+            intent.putExtra(EXTRA_URI, song.uri);
+            intent.putExtra(EXTRA_TYPE, song.type);
+
+            startActivity(intent);
 
         } catch (Exception e) {
             android.util.Log.e(
                     "Stage4TV",
-                    "Could not open Stage 3 player.",
+                    "Could not open Stage 4 TV player.",
                     e
             );
 
             Toast.makeText(
                     this,
-                    "Could not open the karaoke player.",
+                    "Could not open the TV karaoke player.",
                     Toast.LENGTH_LONG
             ).show();
         }
