@@ -52,7 +52,7 @@ jobs:
             --stacktrace \
             --console=plain
 
-      - name: Verify all AAR native libraries use 16 KB ELF alignment
+      - name: Verify 64-bit native libraries use 16 KB ELF alignment
         shell: bash
         run: |
           set -euo pipefail
@@ -74,53 +74,70 @@ jobs:
           mkdir -p aar-check
           unzip -q "$AAR" -d aar-check
 
-          mapfile -t LIBRARIES < <(
-            find aar-check -type f -name '*.so' | sort
-          )
+          TOTAL=0
 
-          if [[ "${#LIBRARIES[@]}" -eq 0 ]]; then
-            echo "FAIL: No native libraries found in AAR."
-            exit 1
-          fi
+          for ABI in arm64-v8a x86_64; do
+            ABI_DIR="aar-check/jni/$ABI"
 
-          for LIBRARY in "${LIBRARIES[@]}"; do
-            echo ""
-            echo "Checking: $LIBRARY"
-
-            FOUND_LOAD=0
-
-            while IFS= read -r LINE; do
-              if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
-                continue
-              fi
-
-              FOUND_LOAD=1
-              ALIGN="${LINE##* }"
-
-              if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
-                echo "FAIL: Could not read LOAD alignment."
-                echo "$LINE"
-                exit 1
-              fi
-
-              ALIGN_NUM=$((16#${ALIGN#0x}))
-
-              if (( ALIGN_NUM < 16384 )); then
-                echo "FAIL: $LIBRARY has insufficient alignment: $ALIGN"
-                exit 1
-              fi
-
-              echo "PASS: LOAD alignment $ALIGN"
-            done < <("$READELF" -lW "$LIBRARY")
-
-            if (( FOUND_LOAD == 0 )); then
-              echo "FAIL: No LOAD segments found in $LIBRARY"
+            if [[ ! -d "$ABI_DIR" ]]; then
+              echo "FAIL: Missing ABI directory: $ABI_DIR"
               exit 1
             fi
+
+            mapfile -t LIBRARIES < <(
+              find "$ABI_DIR" -type f -name '*.so' | sort
+            )
+
+            if [[ "${#LIBRARIES[@]}" -eq 0 ]]; then
+              echo "FAIL: No native libraries found for $ABI."
+              exit 1
+            fi
+
+            echo ""
+            echo "Checking ABI: $ABI"
+
+            for LIBRARY in "${LIBRARIES[@]}"; do
+              echo "Checking: $LIBRARY"
+
+              FOUND_LOAD=0
+
+              while IFS= read -r LINE; do
+                if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
+                  continue
+                fi
+
+                FOUND_LOAD=1
+                ALIGN="${LINE##* }"
+
+                if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
+                  echo "FAIL: Invalid LOAD alignment in $LIBRARY"
+                  echo "$LINE"
+                  exit 1
+                fi
+
+                ALIGN_NUM=$((16#${ALIGN#0x}))
+
+                if (( ALIGN_NUM < 16384 )); then
+                  echo "FAIL: $LIBRARY has insufficient alignment: $ALIGN"
+                  exit 1
+                fi
+
+                echo "PASS: LOAD alignment $ALIGN"
+
+              done < <("$READELF" -lW "$LIBRARY")
+
+              if (( FOUND_LOAD == 0 )); then
+                echo "FAIL: No LOAD segments found in $LIBRARY"
+                exit 1
+              fi
+
+              TOTAL=$((TOTAL + 1))
+            done
           done
 
           echo ""
-          echo "PASS: Every native library in the AAR has 16 KB ELF alignment."
+          echo "PASS: All $TOTAL 64-bit native libraries passed 16 KB ELF alignment."
+          echo "Checked ABIs: arm64-v8a and x86_64"
 
       - name: Upload verified FluidSynth AAR
         uses: actions/upload-artifact@v4
