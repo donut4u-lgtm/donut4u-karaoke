@@ -1,0 +1,101 @@
+
+name: Stage 4 - Build 16 KB FluidSynth
+
+on:
+  push:
+    branches:
+      - stage4-16kb-native-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-fluidsynth:
+    name: Build and verify corrected FluidSynth AAR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Donut4U workflow
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream 16 KB fix
+        uses: actions/checkout@v4
+        with:
+          repository: Virtover/fluidsynth-kmp
+          ref: 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
+          path: fluidsynth-source
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;30.0.16248370" "cmake;3.22.1"
+
+      - name: Build FluidSynth Android release AAR
+        working-directory: fluidsynth-source
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :fluidsynth-kmp:assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+      - name: Verify every native library has 16 KB ELF alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
+            -maxdepth 1 -name '*.aar' -print -quit)"
+
+          test -n "$AAR"
+          mkdir -p aar-check
+          unzip -q "$AAR" -d aar-check
+
+          mapfile -t LIBS < <(find aar-check -name '*.so' -type f)
+
+          test "${#LIBS[@]}" -gt 0
+
+          for LIB in "${LIBS[@]}"; do
+            echo "Checking: $LIB"
+            FOUND_LOAD=0
+
+            while IFS= read -r LINE; do
+              [[ "$LINE" == *" LOAD "* || "$LINE" == LOAD* ]] || continue
+              FOUND_LOAD=1
+
+              ALIGN="${LINE##* }"
+              ALIGN_NUM=$((16#${ALIGN#0x}))
+
+              if (( ALIGN_NUM < 16384 )); then
+                echo "FAIL: $LIB has LOAD alignment $ALIGN"
+                exit 1
+              fi
+            done < <("$READELF" -lW "$LIB")
+
+            if (( FOUND_LOAD == 0 )); then
+              echo "FAIL: No LOAD segments found in $LIB"
+              exit 1
+            fi
+          done
+
+          echo "PASS: All AAR native libraries have 16 KB LOAD alignment."
+
+      - name: Upload verified FluidSynth AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidsynth-16kb-verified-aar
+          path: fluidsynth-source/fluidsynth-kmp/build/outputs/aar/*.aar
+          if-no-files-found: error
+          retention-days: 14
