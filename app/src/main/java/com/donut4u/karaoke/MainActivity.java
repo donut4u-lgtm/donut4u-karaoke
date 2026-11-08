@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -30,6 +29,9 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
 public class MainActivity extends Activity {
+
+    public static final String EXTRA_TV_MODE =
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
 
     private static final int BG = Color.rgb(16, 19, 21);
     private static final int GREEN = Color.rgb(0, 210, 105);
@@ -70,7 +72,7 @@ public class MainActivity extends Activity {
         }
 
         // Android TV must authenticate before entering Stage 4.
-        // Do not show phone ads or modify the phone active session.
+        // TV does not use phone advertisements or phone active sessions.
         if (isAndroidTv()) {
             AppUpdateChecker.checkForUpdates(this);
 
@@ -117,7 +119,8 @@ public class MainActivity extends Activity {
     }
 
     private void loadBannerAd() {
-        if (adView != null
+        if (isAndroidTv()
+                || adView != null
                 || verifiedUserAtLaunch
                 || isFinishing()
                 || isDestroyed()) {
@@ -155,7 +158,9 @@ public class MainActivity extends Activity {
     }
 
     private void loadAppOpenAd() {
-        if (isFinishing() || isDestroyed()) {
+        if (isAndroidTv()
+                || isFinishing()
+                || isDestroyed()) {
             return;
         }
 
@@ -251,6 +256,10 @@ public class MainActivity extends Activity {
                 OnlineSongActivity.class
         );
 
+        if (isAndroidTv()) {
+            intent.putExtra(EXTRA_TV_MODE, true);
+        }
+
         intent.addFlags(
                 Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_NEW_TASK
@@ -304,28 +313,30 @@ public class MainActivity extends Activity {
         addButton(root, shareButton, 18);
         shareButton.setOnClickListener(v -> shareApp());
 
-        TextView advertisement = new TextView(this);
-        advertisement.setText("Advertisement");
-        advertisement.setTextColor(MUTED);
-        advertisement.setTextSize(12);
-        advertisement.setGravity(Gravity.CENTER);
-        advertisement.setPadding(0, dp(8), 0, dp(8));
-        root.addView(advertisement, fullWidthWrap());
+        if (!isAndroidTv()) {
+            TextView advertisement = new TextView(this);
+            advertisement.setText("Advertisement");
+            advertisement.setTextColor(MUTED);
+            advertisement.setTextSize(12);
+            advertisement.setGravity(Gravity.CENTER);
+            advertisement.setPadding(0, dp(8), 0, dp(8));
+            root.addView(advertisement, fullWidthWrap());
 
-        LinearLayout adContainer = new LinearLayout(this);
-        adContainer.setTag("donut4u_banner_container");
-        adContainer.setOrientation(LinearLayout.VERTICAL);
-        adContainer.setGravity(Gravity.CENTER);
-        adContainer.setBackground(
-                roundDrawable(PANEL, dp(10))
-        );
-        adContainer.setPadding(
-                dp(4), dp(12), dp(4), dp(12)
-        );
+            LinearLayout adContainer = new LinearLayout(this);
+            adContainer.setTag("donut4u_banner_container");
+            adContainer.setOrientation(LinearLayout.VERTICAL);
+            adContainer.setGravity(Gravity.CENTER);
+            adContainer.setBackground(
+                    roundDrawable(PANEL, dp(10))
+            );
+            adContainer.setPadding(
+                    dp(4), dp(12), dp(4), dp(12)
+            );
 
-        LinearLayout.LayoutParams adParams = fullWidthWrap();
-        adParams.bottomMargin = dp(20);
-        root.addView(adContainer, adParams);
+            LinearLayout.LayoutParams adParams = fullWidthWrap();
+            adParams.bottomMargin = dp(20);
+            root.addView(adContainer, adParams);
+        }
 
         Button donateButton = makeButton("Donate");
         addButton(root, donateButton, 10);
@@ -339,7 +350,6 @@ public class MainActivity extends Activity {
 
         setContentView(scrollView);
 
-        // Put the TV remote focus on Sign in by default.
         signInButton.setFocusable(true);
         signInButton.setFocusableInTouchMode(true);
         signInButton.requestFocus();
@@ -408,6 +418,11 @@ public class MainActivity extends Activity {
         );
 
         intent.putExtra("create_mode", createMode);
+
+        if (isAndroidTv()) {
+            intent.putExtra(EXTRA_TV_MODE, true);
+        }
+
         startActivity(intent);
     }
 
