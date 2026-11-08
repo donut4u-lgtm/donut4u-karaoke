@@ -1,4 +1,4 @@
-name: Stage 4 - Build and Verify 16 KB FluidSynth
+name: Stage 4 - Verify 16 KB FluidSynth
 
 on:
   push:
@@ -8,91 +8,47 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  build-fluidsynth:
-    name: Build and Verify FluidSynth AAR
+  verify-fluidsynth:
+    name: Verify Previously Built FluidSynth AAR
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Donut4U repository
-        uses: actions/checkout@v4
-
-      - name: Checkout FluidSynth 16 KB alignment fix
-        uses: actions/checkout@v4
+      - name: Download previously verified FluidSynth AAR
+        uses: actions/download-artifact@v4
         with:
-          repository: Virtover/fluidsynth-kmp
-          ref: 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
-          path: fluidsynth-source
+          name: fluidsynth-16kb-verified-aar
+          repository: donut4u-lgtm/donut4u-karaoke
+          run-id: 42462751189
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: verified-aar
 
-      - name: Increase FluidSynth Gradle download timeout
+      - name: Verify AAR exists
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="fluidsynth-source/gradle/wrapper/gradle-wrapper.properties"
-          test -f "$FILE"
+          AAR="$(find verified-aar -type f -name '*.aar' -print -quit)"
 
-          sed -i \
-            -e 's/^networkTimeout=.*/networkTimeout=120000/' \
-            -e 's/^retries=.*/retries=3/' \
-            -e 's/^retryBackOffMs=.*/retryBackOffMs=2000/' \
-            "$FILE"
+          if [[ -z "$AAR" || ! -s "$AAR" ]]; then
+            echo "FAIL: Previously verified AAR is missing."
+            exit 1
+          fi
 
-          grep -q '^networkTimeout=120000$' "$FILE"
-          grep -q '^retries=3$' "$FILE"
-          grep -q '^retryBackOffMs=2000$' "$FILE"
-
-          cat "$FILE"
-
-          echo "PASS: Gradle download timeout and retries configured."
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
+          echo "Found: $AAR"
+          ls -lh "$AAR"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
 
-      - name: Install Android NDK and CMake
+      - name: Install Android NDK
         run: |
           set -euo pipefail
-
-          sdkmanager --install \
-            "ndk;30.0.16248370" \
-            "cmake;3.22.1"
-
-      - name: Build FluidSynth release AAR (retry transient failures)
-        working-directory: fluidsynth-source
-        shell: bash
-        run: |
-          set -uo pipefail
-
-          chmod +x ./gradlew
-
-          for ATTEMPT in 1 2 3; do
-            echo "FluidSynth build attempt $ATTEMPT of 3"
-
-            if ./gradlew :fluidsynth-kmp:assembleRelease \
-              --no-daemon \
-              --stacktrace \
-              --console=plain; then
-              echo "PASS: FluidSynth AAR build completed."
-              exit 0
-            fi
-
-            if [[ "$ATTEMPT" -lt 3 ]]; then
-              echo "Build failed. Waiting 20 seconds before retry."
-              sleep 20
-            fi
-          done
-
-          echo "FAIL: FluidSynth build failed after 3 attempts."
-          exit 1
+          sdkmanager --install "ndk;30.0.16248370"
 
       - name: Verify 64-bit native libraries use 16 KB ELF alignment
         shell: bash
@@ -102,16 +58,7 @@ jobs:
           NDK="$ANDROID_HOME/ndk/30.0.16248370"
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 
-          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
-            -maxdepth 1 \
-            -type f \
-            -name '*.aar' \
-            -print -quit)"
-
-          if [[ -z "$AAR" ]]; then
-            echo "FAIL: FluidSynth AAR was not generated."
-            exit 1
-          fi
+          AAR="$(find verified-aar -type f -name '*.aar' -print -quit)"
 
           mkdir -p aar-check
           unzip -q "$AAR" -d aar-check
@@ -119,57 +66,51 @@ jobs:
           TOTAL=0
 
           for ABI in arm64-v8a x86_64; do
-            ABI_DIR="aar-check/jni/$ABI"
+            DIR="aar-check/jni/$ABI"
 
-            if [[ ! -d "$ABI_DIR" ]]; then
-              echo "FAIL: Missing ABI directory: $ABI_DIR"
+            if [[ ! -d "$DIR" ]]; then
+              echo "FAIL: Missing ABI directory: $DIR"
               exit 1
             fi
 
-            mapfile -t LIBRARIES < <(
-              find "$ABI_DIR" -type f -name '*.so' | sort
+            mapfile -t LIBS < <(
+              find "$DIR" -type f -name '*.so' | sort
             )
 
-            if [[ "${#LIBRARIES[@]}" -eq 0 ]]; then
-              echo "FAIL: No native libraries found for $ABI."
+            if [[ "${#LIBS[@]}" -eq 0 ]]; then
+              echo "FAIL: No native libraries for $ABI."
               exit 1
             fi
 
-            echo ""
-            echo "Checking ABI: $ABI"
-
-            for LIBRARY in "${LIBRARIES[@]}"; do
-              echo "Checking: $LIBRARY"
-
-              FOUND_LOAD=0
+            for LIB in "${LIBS[@]}"; do
+              FOUND=0
 
               while IFS= read -r LINE; do
                 if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
                   continue
                 fi
 
-                FOUND_LOAD=1
+                FOUND=1
                 ALIGN="${LINE##* }"
 
                 if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
-                  echo "FAIL: Invalid LOAD alignment in $LIBRARY"
-                  echo "$LINE"
+                  echo "FAIL: Invalid ELF alignment: $LIB"
                   exit 1
                 fi
 
-                ALIGN_NUM=$((16#${ALIGN#0x}))
+                VALUE=$((16#${ALIGN#0x}))
 
-                if (( ALIGN_NUM < 16384 )); then
-                  echo "FAIL: $LIBRARY has insufficient alignment: $ALIGN"
+                if (( VALUE < 16384 )); then
+                  echo "FAIL: Insufficient alignment: $LIB ($ALIGN)"
                   exit 1
                 fi
 
-                echo "PASS: LOAD alignment $ALIGN"
+                echo "PASS: $ABI $(basename "$LIB") ($ALIGN)"
 
-              done < <("$READELF" -lW "$LIBRARY")
+              done < <("$READELF" -lW "$LIB")
 
-              if (( FOUND_LOAD == 0 )); then
-                echo "FAIL: No LOAD segments found in $LIBRARY"
+              if (( FOUND == 0 )); then
+                echo "FAIL: No LOAD segments: $LIB"
                 exit 1
               fi
 
@@ -178,13 +119,13 @@ jobs:
           done
 
           echo ""
-          echo "PASS: All $TOTAL 64-bit native libraries passed 16 KB ELF alignment."
-          echo "Checked ABIs: arm64-v8a and x86_64"
+          echo "PASS: $TOTAL native libraries verified."
+          echo "PASS: arm64-v8a and x86_64 ELF alignment."
 
-      - name: Upload verified FluidSynth AAR
+      - name: Upload verified AAR copy
         uses: actions/upload-artifact@v4
         with:
-          name: fluidsynth-16kb-verified-aar
-          path: fluidsynth-source/fluidsynth-kmp/build/outputs/aar/*.aar
+          name: stage4-fluidsynth-aar-reverified
+          path: verified-aar/*.aar
           if-no-files-found: error
           retention-days: 14
