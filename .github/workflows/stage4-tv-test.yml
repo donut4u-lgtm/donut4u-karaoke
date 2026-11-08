@@ -1,3 +1,4 @@
+
 name: Stage 4 TV Build and 16 KB APK Verification
 
 on:
@@ -8,169 +9,63 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build-and-verify:
     name: Build Donut4U and Verify 16 KB APK
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout Donut4U
         uses: actions/checkout@v4
 
-      - name: Checkout pinned 16 KB FluidSynth source
-        uses: actions/checkout@v4
+      - name: Download previously verified FluidSynth AAR
+        uses: actions/download-artifact@v4
         with:
-          repository: Virtover/fluidsynth-kmp
-          ref: 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
-          path: fluidsynth-source
+          name: fluidsynth-16kb-verified-aar
+          repository: donut4u-lgtm/donut4u-karaoke
+          run-id: 42462751189
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: verified-aar
 
-      - name: Increase FluidSynth Gradle download timeout
+      - name: Install verified FluidSynth AAR
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="fluidsynth-source/gradle/wrapper/gradle-wrapper.properties"
-
-          test -f "$FILE"
-
-          sed -i \
-            -e 's/^networkTimeout=.*/networkTimeout=120000/' \
-            -e 's/^retries=.*/retries=3/' \
-            -e 's/^retryBackOffMs=.*/retryBackOffMs=2000/' \
-            "$FILE"
-
-          cat "$FILE"
-
-          grep -q '^networkTimeout=120000$' "$FILE"
-          grep -q '^retries=3$' "$FILE"
-
-          echo "PASS: FluidSynth Gradle download retry settings updated."
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-
-      - name: Install NDK and CMake
-        run: |
-          set -euo pipefail
-          sdkmanager --install \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "ndk;30.0.16248370" \
-            "cmake;3.22.1"
-
-      - name: Build FluidSynth AAR
-        working-directory: fluidsynth-source
-        run: |
-          set -euo pipefail
-          chmod +x ./gradlew
-
-          ./gradlew :fluidsynth-kmp:assembleRelease \
-            --no-daemon \
-            --stacktrace \
-            --console=plain
-
-      - name: Verify FluidSynth AAR exists and has 16 KB alignment
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
-            -maxdepth 1 -type f -name '*.aar' -print -quit)"
-
+          AAR="$(find verified-aar -type f -name '*.aar' -print -quit)"
           if [[ -z "$AAR" || ! -s "$AAR" ]]; then
-            echo "FAIL: FluidSynth AAR was not generated."
+            echo "FAIL: Previously verified FluidSynth AAR was not downloaded."
             exit 1
           fi
 
-          echo "Found AAR: $AAR"
-
-          NDK="$ANDROID_HOME/ndk/30.0.16248370"
-          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
-
-          mkdir -p aar-check
-          unzip -q "$AAR" -d aar-check
-
-          TOTAL=0
-
-          for ABI in arm64-v8a x86_64; do
-            DIR="aar-check/jni/$ABI"
-
-            if [[ ! -d "$DIR" ]]; then
-              echo "FAIL: Missing ABI $ABI"
-              exit 1
-            fi
-
-            mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
-
-            if [[ "${#LIBS[@]}" -eq 0 ]]; then
-              echo "FAIL: No libraries found for $ABI"
-              exit 1
-            fi
-
-            for LIB in "${LIBS[@]}"; do
-              FOUND=0
-
-              while IFS= read -r LINE; do
-                if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
-                  continue
-                fi
-
-                FOUND=1
-                ALIGN="${LINE##* }"
-
-                if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
-                  echo "FAIL: Invalid ELF alignment: $LIB"
-                  exit 1
-                fi
-
-                VALUE=$((16#${ALIGN#0x}))
-
-                if (( VALUE < 16384 )); then
-                  echo "FAIL: Insufficient alignment: $LIB ($ALIGN)"
-                  exit 1
-                fi
-              done < <("$READELF" -lW "$LIB")
-
-              if (( FOUND == 0 )); then
-                echo "FAIL: No LOAD segments in $LIB"
-                exit 1
-              fi
-
-              echo "PASS: $ABI $(basename "$LIB")"
-              TOTAL=$((TOTAL + 1))
-            done
-          done
-
-          echo "PASS: $TOTAL FluidSynth 64-bit libraries."
-
-      - name: Install AAR into app/libs
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
-            -maxdepth 1 -type f -name '*.aar' -print -quit)"
-
-          test -n "$AAR"
-          test -s "$AAR"
-
           mkdir -p app/libs
           cp "$AAR" app/libs/fluidsynth-kmp-release.aar
-
-          echo "Checking exact Gradle dependency path..."
           test -s app/libs/fluidsynth-kmp-release.aar
           ls -lh app/libs/fluidsynth-kmp-release.aar
+          echo "PASS: Verified AAR installed."
 
-          echo "PASS: Gradle dependency file exists."
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK, NDK, and build tools
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-35
+            build-tools;35.0.0
+            platform-tools
+            ndk;30.0.16248370
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
 
       - name: Assemble and verify SoundFont
         shell: bash
@@ -178,7 +73,6 @@ jobs:
           set -euo pipefail
 
           mkdir -p app/src/main/assets
-
           cat \
             soundfont-parts/GeneralUser-GS.sf2.part01 \
             soundfont-parts/GeneralUser-GS.sf2.part02 \
@@ -188,20 +82,9 @@ jobs:
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 count=4 2>/dev/null)" = "RIFF"
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
 
-          echo "PASS: SoundFont verified."
+          echo "PASS: SoundFont assembled and verified."
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
-
-      - name: Build Donut4U debug APK
+      - name: Build Donut4U debug APK with dependency-download retries
         env:
           YOUTUBE_API_KEY: ""
           DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/unused.jks
@@ -209,15 +92,28 @@ jobs:
           DONUT4U_KEY_ALIAS: unused
           DONUT4U_KEY_PASSWORD: unused
           GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+        shell: bash
         run: |
           set -euo pipefail
 
           test -s app/libs/fluidsynth-kmp-release.aar
 
-          gradle assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --console=plain
+          for ATTEMPT in 1 2 3 4; do
+            echo "Donut4U APK build attempt $ATTEMPT/4"
+
+            if gradle assembleDebug --no-daemon --stacktrace --console=plain; then
+              echo "PASS: Donut4U debug APK assembled."
+              exit 0
+            fi
+
+            if [[ "$ATTEMPT" -lt 4 ]]; then
+              echo "Build failed. Waiting 45 seconds before retry."
+              sleep 45
+            fi
+          done
+
+          echo "FAIL: Donut4U APK build failed after four attempts."
+          exit 1
 
       - name: Verify final APK ELF and ZIP alignment
         shell: bash
@@ -230,31 +126,29 @@ jobs:
           ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
           test -s "$APK"
+          test -x "$READELF"
           test -x "$ZIPALIGN"
 
+          rm -rf apk-check
           mkdir -p apk-check
           unzip -q "$APK" 'lib/*' -d apk-check
 
           TOTAL=0
-
           for ABI in arm64-v8a x86_64; do
             DIR="apk-check/lib/$ABI"
-
             if [[ ! -d "$DIR" ]]; then
-              echo "FAIL: APK missing $ABI libraries"
+              echo "FAIL: APK is missing $ABI native libraries."
               exit 1
             fi
 
             mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
-
             if [[ "${#LIBS[@]}" -eq 0 ]]; then
-              echo "FAIL: No APK libraries for $ABI"
+              echo "FAIL: No native libraries found for $ABI."
               exit 1
             fi
 
             for LIB in "${LIBS[@]}"; do
               FOUND=0
-
               while IFS= read -r LINE; do
                 if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
                   continue
@@ -262,22 +156,20 @@ jobs:
 
                 FOUND=1
                 ALIGN="${LINE##* }"
-
                 if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
-                  echo "FAIL: Invalid APK ELF alignment: $LIB"
+                  echo "FAIL: Could not parse ELF LOAD alignment in $LIB: $ALIGN"
                   exit 1
                 fi
 
                 VALUE=$((16#${ALIGN#0x}))
-
                 if (( VALUE < 16384 )); then
-                  echo "FAIL: APK library below 16 KB alignment: $LIB ($ALIGN)"
+                  echo "FAIL: $LIB has a LOAD segment aligned below 16 KB ($ALIGN)."
                   exit 1
                 fi
               done < <("$READELF" -lW "$LIB")
 
               if (( FOUND == 0 )); then
-                echo "FAIL: No LOAD segments in $LIB"
+                echo "FAIL: No ELF LOAD segments found in $LIB."
                 exit 1
               fi
 
@@ -290,7 +182,7 @@ jobs:
           "$ZIPALIGN" -v -c -P 16 4 "$APK"
 
           echo "PASS: Final APK passed ELF and ZIP alignment checks."
-          echo "Verified 64-bit libraries: $TOTAL"
+          echo "Verified 64-bit native libraries: $TOTAL"
 
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
