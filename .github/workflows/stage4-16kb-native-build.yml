@@ -1,10 +1,9 @@
-
-name: Stage 4 - Build 16 KB FluidSynth
+name: Stage 4 - Build and Verify 16 KB FluidSynth
 
 on:
   push:
     branches:
-      - stage4-16kb-native-build
+      - stage4-tv-isolated
   workflow_dispatch:
 
 permissions:
@@ -12,14 +11,14 @@ permissions:
 
 jobs:
   build-fluidsynth:
-    name: Build and verify corrected FluidSynth AAR
+    name: Build and Verify FluidSynth AAR
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Donut4U workflow
+      - name: Checkout Donut4U repository
         uses: actions/checkout@v4
 
-      - name: Checkout upstream 16 KB fix
+      - name: Checkout FluidSynth 16 KB alignment fix
         uses: actions/checkout@v4
         with:
           repository: Virtover/fluidsynth-kmp
@@ -35,20 +34,23 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK and CMake
+      - name: Install Android NDK and CMake
         run: |
-          sdkmanager "ndk;30.0.16248370" "cmake;3.22.1"
+          sdkmanager --install \
+            "ndk;30.0.16248370" \
+            "cmake;3.22.1"
 
-      - name: Build FluidSynth Android release AAR
+      - name: Build FluidSynth release AAR
         working-directory: fluidsynth-source
         run: |
           chmod +x ./gradlew
+
           ./gradlew :fluidsynth-kmp:assembleRelease \
             --no-daemon \
             --stacktrace \
             --console=plain
 
-      - name: Verify every native library has 16 KB ELF alignment
+      - name: Verify all AAR native libraries use 16 KB ELF alignment
         shell: bash
         run: |
           set -euo pipefail
@@ -57,40 +59,66 @@ jobs:
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 
           AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
-            -maxdepth 1 -name '*.aar' -print -quit)"
+            -maxdepth 1 \
+            -type f \
+            -name '*.aar' \
+            -print -quit)"
 
-          test -n "$AAR"
+          if [[ -z "$AAR" ]]; then
+            echo "FAIL: FluidSynth AAR was not generated."
+            exit 1
+          fi
+
           mkdir -p aar-check
           unzip -q "$AAR" -d aar-check
 
-          mapfile -t LIBS < <(find aar-check -name '*.so' -type f)
+          mapfile -t LIBRARIES < <(
+            find aar-check -type f -name '*.so' | sort
+          )
 
-          test "${#LIBS[@]}" -gt 0
+          if [[ "${#LIBRARIES[@]}" -eq 0 ]]; then
+            echo "FAIL: No native libraries found in AAR."
+            exit 1
+          fi
 
-          for LIB in "${LIBS[@]}"; do
-            echo "Checking: $LIB"
+          for LIBRARY in "${LIBRARIES[@]}"; do
+            echo ""
+            echo "Checking: $LIBRARY"
+
             FOUND_LOAD=0
 
             while IFS= read -r LINE; do
-              [[ "$LINE" == *" LOAD "* || "$LINE" == LOAD* ]] || continue
-              FOUND_LOAD=1
+              if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
+                continue
+              fi
 
+              FOUND_LOAD=1
               ALIGN="${LINE##* }"
+
+              if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
+                echo "FAIL: Could not read LOAD alignment."
+                echo "$LINE"
+                exit 1
+              fi
+
               ALIGN_NUM=$((16#${ALIGN#0x}))
 
               if (( ALIGN_NUM < 16384 )); then
-                echo "FAIL: $LIB has LOAD alignment $ALIGN"
+                echo "FAIL: $LIBRARY has insufficient alignment: $ALIGN"
                 exit 1
               fi
-            done < <("$READELF" -lW "$LIB")
+
+              echo "PASS: LOAD alignment $ALIGN"
+            done < <("$READELF" -lW "$LIBRARY")
 
             if (( FOUND_LOAD == 0 )); then
-              echo "FAIL: No LOAD segments found in $LIB"
+              echo "FAIL: No LOAD segments found in $LIBRARY"
               exit 1
             fi
           done
 
-          echo "PASS: All AAR native libraries have 16 KB LOAD alignment."
+          echo ""
+          echo "PASS: Every native library in the AAR passed 16 KB ELF alignment."
 
       - name: Upload verified FluidSynth AAR
         uses: actions/upload-artifact@v4
