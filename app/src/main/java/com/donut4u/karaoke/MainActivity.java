@@ -1,58 +1,195 @@
+**File 2:** `app/src/main/java/com/donut4u/karaoke/OnlineSongActivity.java`
+
+This preserves the existing Stage 1 YouTube search, playback, and microphone scoring code. The changes let the TV menu open Stage 1, suppress the phone ad banner on TV, and return to the TV menu when Back is pressed.
+
+Copy the entire file. **Part 1 of 4 — continue with the next parts in order, without adding or deleting lines.**
+
+```java
 package com.donut4u.karaoke;
 
+import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
-import com.google.android.gms.ads.AdError;
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
-import com.google.android.gms.ads.FullScreenContentCallback;
-import com.google.android.gms.ads.LoadAdError;
 import com.google.android.gms.ads.MobileAds;
-import com.google.android.gms.ads.appopen.AppOpenAd;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
 
-public class MainActivity extends Activity {
+import org.json.JSONArray;
+import org.json.JSONObject;
 
-    public static final String EXTRA_TV_MODE =
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class OnlineSongActivity extends Activity {
+
+    private static final int GREEN = Color.rgb(0, 220, 105);
+    private static final int BG = Color.rgb(10, 12, 15);
+    private static final int PANEL = Color.rgb(27, 32, 35);
+    private static final int WHITE = Color.WHITE;
+    private static final int MUTED = Color.LTGRAY;
+
+    private static final String EXTRA_TV_MODE =
             "com.donut4u.karaoke.EXTRA_TV_MODE";
 
-    private static final int BG = Color.rgb(16, 19, 21);
-    private static final int GREEN = Color.rgb(0, 210, 105);
-    private static final int PANEL = Color.rgb(35, 39, 42);
-    private static final int MUTED = Color.rgb(185, 194, 189);
+    private static final String EXTRA_TV_STAGE1 =
+            "com.donut4u.karaoke.EXTRA_TV_STAGE1";
 
-    private static final String BANNER_AD_UNIT_ID =
-            "ca-app-pub-5625332026157890/7288125709";
+    private static final String DATABASE_URL =
+            "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
-    private static final String APP_OPEN_AD_UNIT_ID =
-            "ca-app-pub-5625332026157890/8915386770";
+    private static final String DEVICE_PREFS = "donut4u_device_session";
+    private static final String DEVICE_ID_KEY = "installation_id";
 
-    private static final String APK_URL =
-            "https://github.com/donut4u-lgtm/donut4u-karaoke/releases/download/v1.0.0/Donut4U-Karaoke.apk";
+    private static final String OFFLINE_SESSION_PREFS =
+            "donut4u_verified_offline_session";
 
+    private static final String OFFLINE_UID_KEY = "verified_uid";
+    private static final String OFFLINE_DEVICE_KEY = "verified_device_id";
+
+    private static final String CACHE_NAME = "donut4u_song_search_cache";
+
+    private static final String FACEBOOK_URL =
+            "https://www.facebook.com/share/17zkgf3o8j/";
+
+    private static final String AD_UNIT_ID =
+            "ca-app-pub-5625332026157890/2970292504";
+
+    private static final long CACHE_DURATION =
+            24L * 60L * 60L * 1000L;
+
+    private static final int REQUEST_STAGE12_MICROPHONE = 1201;
+
+    private Stage3MicrophoneMonitor microphoneMonitor;
+
+    private final Stage12PerformanceScorer performanceScorer =
+            new Stage12PerformanceScorer();
+
+    private Button microphoneButton;
+    private TextView microphoneStatus;
+    private TextView microphoneLevelText;
+    private TextView microphoneScoreText;
+    private TextView microphonePitchText;
+    private TextView microphoneStreakText;
+    private TextView microphoneRatingText;
+    private View microphoneLevelBar;
+    private View microphoneLevelFill;
+
+    private boolean microphonePermissionPending = false;
+    private boolean microphoneWasStoppedByLifecycle = false;
+
+    private EditText searchBox;
+    private Button searchButton;
+    private TextView status;
+    private LinearLayout resultsContainer;
+
+    private View searchScreen;
+    private FrameLayout playbackScreen;
+    private FrameLayout playerHost;
+    private WebView player;
     private AdView adView;
-    private AppOpenAd appOpenAd;
 
-    private boolean verifiedUserAtLaunch;
-    private boolean continuedAfterAd;
-    private boolean appOpenAdShowing;
+    private boolean donationScreenVisible = false;
+    private boolean playbackVisible = false;
+
+    private final ExecutorService executor =
+            Executors.newSingleThreadExecutor();
+
+    private final Handler sessionHandler =
+            new Handler(Looper.getMainLooper());
+
+    private volatile boolean closing = false;
+
+    private int searchGeneration = 0;
+
+    private FirebaseAuth auth;
+    private DatabaseReference sessionRef;
+    private ValueEventListener sessionListener;
+
+    private DatabaseReference connectionRef;
+    private ValueEventListener connectionListener;
+
+    private String installationId = "";
+
+    private boolean sessionValid = false;
+    private boolean signingOutForSessionChange = false;
+    private boolean databaseConnected = false;
+    private boolean offlineAccess = false;
+
+    private Runnable pendingSessionMismatch;
+
+    private static class Video {
+        String id;
+        String title;
+        String channel;
+    }
+
+    /**
+     * Detect Android TV using the explicit TV-mode flag,
+     * the Leanback system feature, or television UI mode.
+     *
+     * The explicit flag also supports TV routing when an
+     * activity is launched by another TV-aware activity.
+     */
+    private boolean isAndroidTv() {
+        if (getIntent() != null
+                && getIntent().getBooleanExtra(EXTRA_TV_MODE, false)) {
+            return true;
+        }
+
+        return getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_LEANBACK)
+                || (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_TYPE_MASK)
+                == Configuration.UI_MODE_TYPE_TELEVISION;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,442 +198,320 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        FirebaseUser user =
-                FirebaseAuth.getInstance().getCurrentUser();
+        auth = FirebaseAuth.getInstance();
 
-        verifiedUserAtLaunch =
-                user != null && user.isEmailVerified();
+        FirebaseUser user = auth.getCurrentUser();
 
-        if (user != null && !user.isEmailVerified()) {
-            FirebaseAuth.getInstance().signOut();
-        }
-
-        // Android TV must authenticate before entering Stage 4.
-        // TV does not use phone advertisements or phone active sessions.
-        if (isAndroidTv()) {
-            AppUpdateChecker.checkForUpdates(this);
-
-            if (verifiedUserAtLaunch) {
-                openSongSearch();
-            } else {
-                showWelcomeScreen();
-            }
-
+        if (user == null || !user.isEmailVerified()) {
+            openAuthentication();
             return;
-        }
-
-        // Existing phone behavior remains unchanged.
-        if (!verifiedUserAtLaunch) {
-            showWelcomeScreen();
         }
 
         AppUpdateChecker.checkForUpdates(this);
 
-        MobileAds.initialize(this, initializationStatus ->
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) {
-                        return;
-                    }
-
-                    loadBannerAd();
-                    loadAppOpenAd();
-                })
-        );
-    }
-
-    private boolean isAndroidTv() {
-        boolean hasLeanback =
-                getPackageManager().hasSystemFeature(
-                        PackageManager.FEATURE_LEANBACK
-                );
-
-        boolean hasTelevisionUi =
-                (getResources().getConfiguration().uiMode
-                        & Configuration.UI_MODE_TYPE_MASK)
-                        == Configuration.UI_MODE_TYPE_TELEVISION;
-
-        return hasLeanback || hasTelevisionUi;
-    }
-
-    private void loadBannerAd() {
+        /*
+         * Stage 1 on Android TV:
+         * Use the existing YouTube search screen without starting
+         * a phone-only installation session or changing the
+         * phone's active session.
+         */
         if (isAndroidTv()
-                || adView != null
-                || verifiedUserAtLaunch
-                || isFinishing()
-                || isDestroyed()) {
+                && getIntent() != null
+                && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
+            sessionValid = true;
+            buildSearchScreen();
             return;
         }
 
-        View content = findViewById(android.R.id.content);
-
-        if (!(content instanceof ViewGroup)) {
-            return;
-        }
-
-        View bannerContainer =
-                ((ViewGroup) content).findViewWithTag(
-                        "donut4u_banner_container"
-                );
-
-        if (!(bannerContainer instanceof LinearLayout)) {
-            return;
-        }
-
-        adView = new AdView(this);
-        adView.setAdSize(AdSize.BANNER);
-        adView.setAdUnitId(BANNER_AD_UNIT_ID);
-
-        ((LinearLayout) bannerContainer).addView(
-                adView,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
-
-        adView.loadAd(new AdRequest.Builder().build());
-    }
-
-    private void loadAppOpenAd() {
-        if (isAndroidTv()
-                || isFinishing()
-                || isDestroyed()) {
-            return;
-        }
-
-        AdRequest request = new AdRequest.Builder().build();
-
-        AppOpenAd.load(
-                this,
-                APP_OPEN_AD_UNIT_ID,
-                request,
-                new AppOpenAd.AppOpenAdLoadCallback() {
-
-                    @Override
-                    public void onAdLoaded(AppOpenAd ad) {
-                        appOpenAd = ad;
-
-                        if (isFinishing() || isDestroyed()) {
-                            appOpenAd = null;
-                            return;
-                        }
-
-                        showAppOpenAd();
-                    }
-
-                    @Override
-                    public void onAdFailedToLoad(
-                            LoadAdError error) {
-                        appOpenAd = null;
-                        continueAfterAd();
-                    }
-                }
-        );
-    }
-
-    private void showAppOpenAd() {
-        if (appOpenAd == null
-                || isFinishing()
-                || isDestroyed()) {
-            continueAfterAd();
-            return;
-        }
-
-        if (appOpenAdShowing) {
-            return;
-        }
-
-        appOpenAdShowing = true;
-
-        appOpenAd.setFullScreenContentCallback(
-                new FullScreenContentCallback() {
-
-                    @Override
-                    public void onAdShowedFullScreenContent() {
-                        appOpenAdShowing = true;
-                    }
-
-                    @Override
-                    public void onAdDismissedFullScreenContent() {
-                        appOpenAd = null;
-                        appOpenAdShowing = false;
-                        continueAfterAd();
-                    }
-
-                    @Override
-                    public void onAdFailedToShowFullScreenContent(
-                            AdError error) {
-                        appOpenAd = null;
-                        appOpenAdShowing = false;
-                        continueAfterAd();
-                    }
-                }
-        );
-
-        appOpenAd.show(this);
-    }
-
-    private void continueAfterAd() {
-        if (continuedAfterAd
-                || isFinishing()
-                || isDestroyed()) {
-            return;
-        }
-
-        continuedAfterAd = true;
-
-        if (verifiedUserAtLaunch) {
-            openSongSearch();
-        }
-    }
-
-    private void openSongSearch() {
-        Intent intent = new Intent(
-                MainActivity.this,
-                OnlineSongActivity.class
-        );
-
+        /*
+         * Direct Android TV entry without a selected stage opens
+         * the dedicated Stage 4 TV songbook.
+         */
         if (isAndroidTv()) {
-            intent.putExtra(EXTRA_TV_MODE, true);
+            Intent tvIntent = new Intent(
+                    OnlineSongActivity.this,
+                    Stage4TvActivity.class
+            );
+
+            tvIntent.putExtra(EXTRA_TV_MODE, true);
+
+            tvIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            | Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
+            );
+
+            startActivity(tvIntent);
+            finish();
+            return;
         }
 
-        intent.addFlags(
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        | Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
-        );
+        // Original phone session flow remains unchanged.
+        installationId = getInstallationId();
 
-        startActivity(intent);
-        finish();
+        showSessionLoadingScreen();
+
+        listenForConnection(user);
     }
 
-    private void showWelcomeScreen() {
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
-        scrollView.setBackgroundColor(BG);
+    private String getInstallationId() {
+        SharedPreferences prefs = getSharedPreferences(
+                DEVICE_PREFS, MODE_PRIVATE);
 
+        String id = prefs.getString(DEVICE_ID_KEY, null);
+
+        if (id == null || id.trim().isEmpty()) {
+            id = UUID.randomUUID().toString();
+            prefs.edit().putString(DEVICE_ID_KEY, id).apply();
+        }
+
+        return id;
+    }
+
+    private boolean hasSavedOfflineSession(FirebaseUser user) {
+        if (user == null || installationId == null) {
+            return false;
+        }
+
+        SharedPreferences prefs = getSharedPreferences(
+                OFFLINE_SESSION_PREFS, MODE_PRIVATE);
+
+        String savedUid = prefs.getString(OFFLINE_UID_KEY, "");
+        String savedDevice = prefs.getString(OFFLINE_DEVICE_KEY, "");
+
+        return user.getUid().equals(savedUid)
+                && installationId.equals(savedDevice);
+    }
+
+    private void saveVerifiedOfflineSession(FirebaseUser user) {
+        if (user == null || installationId == null) {
+            return;
+        }
+
+        getSharedPreferences(
+                OFFLINE_SESSION_PREFS, MODE_PRIVATE)
+                .edit()
+                .putString(OFFLINE_UID_KEY, user.getUid())
+                .putString(OFFLINE_DEVICE_KEY, installationId)
+                .apply();
+    }
+
+    private void clearSavedOfflineSession() {
+        getSharedPreferences(
+                OFFLINE_SESSION_PREFS, MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply();
+    }
+
+    private void allowOfflineAccess(FirebaseUser user) {
+        if (closing || isFinishing() || sessionValid) {
+            return;
+        }
+
+        if (!hasSavedOfflineSession(user)) {
+            showSessionError(
+                    "Internet is unavailable and this phone has no previously verified offline session. Connect to the internet and retry.");
+            return;
+        }
+
+        offlineAccess = true;
+        sessionValid = true;
+
+        buildSearchScreen();
+
+        toast("Offline mode: previously verified session. Connect to the internet to verify your account again.");
+    }
+
+    private void listenForConnection(FirebaseUser user) {
+        connectionRef = FirebaseDatabase.getInstance(DATABASE_URL)
+                .getReference(".info")
+                .child("connected");
+
+        connectionListener = new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snapshot) {
+                if (closing || isFinishing()) {
+                    return;
+                }
+
+                Boolean connected = snapshot.getValue(Boolean.class);
+
+                databaseConnected = Boolean.TRUE.equals(connected);
+
+                if (databaseConnected) {
+                    if (sessionListener == null) {
+                        listenForActiveSession(user);
+                    }
+                } else {
+                    if (sessionRef != null && sessionListener != null) {
+                        sessionRef.removeEventListener(sessionListener);
+                        sessionListener = null;
+                    }
+
+                    if (!sessionValid) {
+                        allowOfflineAccess(user);
+                    } else {
+                        offlineAccess = true;
+                    }
+                }
+            }
+
+            @Override
+            public void onCancelled(DatabaseError error) {
+                if (closing || isFinishing()) {
+                    return;
+                }
+
+                if (!sessionValid) {
+                    allowOfflineAccess(user);
+                }
+            }
+        };
+
+        connectionRef.addValueEventListener(connectionListener);
+    }
+
+    private void showSessionLoadingScreen() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(24), dp(28), dp(24), dp(28));
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(24), dp(24), dp(24), dp(24));
         root.setBackgroundColor(BG);
 
-        scrollView.addView(root);
+        TextView heading = new TextView(this);
+        heading.setText("DONUT4U KARAOKE");
+        heading.setTextColor(GREEN);
+        heading.setTextSize(24);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        root.addView(heading, fullWidthWrap());
 
-        TextView title = new TextView(this);
-        title.setText("Donut4U Karaoke");
-        title.setTextColor(GREEN);
-        title.setTextSize(28);
-        title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
-        root.addView(title, fullWidthWrap());
+        TextView message = new TextView(this);
+        message.setText("Checking your active phone session...");
+        message.setTextColor(WHITE);
+        message.setTextSize(15);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, dp(16), 0, dp(16));
+        root.addView(message, fullWidthWrap());
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Your songs. Your karaoke.");
-        subtitle.setTextColor(MUTED);
-        subtitle.setTextSize(15);
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(10), 0, dp(24));
-        root.addView(subtitle, fullWidthWrap());
+        setContentView(root);
+    }
 
-        Button createButton = makeButton("Create account");
-        addButton(root, createButton, 10);
-        createButton.setOnClickListener(v ->
-                openAuthentication(true));
+    private void showSessionError(String messageText) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(24), dp(24), dp(24), dp(24));
+        root.setBackgroundColor(BG);
 
-        Button signInButton = makeButton("Sign in");
-        addButton(root, signInButton, 10);
-        signInButton.setOnClickListener(v ->
-                openAuthentication(false));
+        TextView heading = new TextView(this);
+        heading.setText("SESSION CHECK FAILED");
+        heading.setTextColor(GREEN);
+        heading.setTextSize(21);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        root.addView(heading, fullWidthWrap());
 
-        Button shareButton = makeButton("Share app");
-        addButton(root, shareButton, 18);
-        shareButton.setOnClickListener(v -> shareApp());
+        TextView message = new TextView(this);
+        message.setText(messageText);
+        message.setTextColor(WHITE);
+        message.setTextSize(14);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, dp(16), 0, dp(16));
+        root.addView(message, fullWidthWrap());
 
-        if (!isAndroidTv()) {
-            TextView advertisement = new TextView(this);
-            advertisement.setText("Advertisement");
-            advertisement.setTextColor(MUTED);
-            advertisement.setTextSize(12);
-            advertisement.setGravity(Gravity.CENTER);
-            advertisement.setPadding(0, dp(8), 0, dp(8));
-            root.addView(advertisement, fullWidthWrap());
+        Button retryButton = makeButton("RETRY SESSION CHECK");
 
-            LinearLayout adContainer = new LinearLayout(this);
-            adContainer.setTag("donut4u_banner_container");
-            adContainer.setOrientation(LinearLayout.VERTICAL);
-            adContainer.setGravity(Gravity.CENTER);
-            adContainer.setBackground(
-                    roundDrawable(PANEL, dp(10))
-            );
-            adContainer.setPadding(
-                    dp(4), dp(12), dp(4), dp(12)
-            );
+        LinearLayout.LayoutParams retryParams = fullWidth(dp(50));
+        retryParams.topMargin = dp(8);
+        root.addView(retryButton, retryParams);
 
-            LinearLayout.LayoutParams adParams = fullWidthWrap();
-            adParams.bottomMargin = dp(20);
-            root.addView(adContainer, adParams);
+        retryButton.setOnClickListener(v -> {
+            FirebaseUser user = auth.getCurrentUser();
+
+            if (user == null || !user.isEmailVerified()) {
+                openAuthentication();
+                return;
+            }
+
+            if (sessionRef != null && sessionListener != null) {
+                sessionRef.removeEventListener(sessionListener);
+                sessionListener = null;
+            }
+
+            sessionValid = false;
+            offlineAccess = false;
+
+            showSessionLoadingScreen();
+
+            listenForConnection(user);
+        });
+
+        Button signOutButton = makeButton("SIGN OUT");
+
+        LinearLayout.LayoutParams signOutParams = fullWidth(dp(50));
+        signOutParams.topMargin = dp(10);
+        root.addView(signOutButton, signOutParams);
+
+        signOutButton.setOnClickListener(
+                v -> signOutAndSwitchAccount());
+
+        setContentView(root);
+    }
+
+    private void listenForActiveSession(FirebaseUser user) {
+        if (closing || isFinishing() || !databaseConnected) {
+            return;
         }
 
-        Button donateButton = makeButton("Donate");
-        addButton(root, donateButton, 10);
-        donateButton.setOnClickListener(v ->
-                showDonationMessage());
-
-        Button questionButton = makeButton("Question");
-        addButton(root, questionButton, 10);
-        questionButton.setOnClickListener(v ->
-                showQuestionDialog());
-
-        setContentView(scrollView);
-
-        signInButton.setFocusable(true);
-        signInButton.setFocusableInTouchMode(true);
-        signInButton.requestFocus();
-    }
-
-    private void addButton(
-            LinearLayout root,
-            Button button,
-            int bottomMargin) {
-
-        LinearLayout.LayoutParams params = fullWidth(dp(52));
-        params.bottomMargin = dp(bottomMargin);
-        root.addView(button, params);
-    }
-
-    private void shareApp() {
-        Intent shareIntent = new Intent(Intent.ACTION_SEND);
-        shareIntent.setType("text/plain");
-
-        shareIntent.putExtra(
-                Intent.EXTRA_SUBJECT,
-                "Donut4U Karaoke"
-        );
-
-        shareIntent.putExtra(
-                Intent.EXTRA_TEXT,
-                "Try Donut4U Karaoke! Download the app here:\n"
-                        + APK_URL
-        );
-
-        startActivity(Intent.createChooser(
-                shareIntent,
-                "Share Donut4U Karaoke"
-        ));
-    }
-
-    private void showDonationMessage() {
-        new AlertDialog.Builder(this)
-                .setTitle("Support Donut4U Karaoke")
-                .setMessage(
-                        "Thank you for supporting Donut4U Karaoke. "
-                                + "The donation options will be available "
-                                + "when their payment details are configured."
-                )
-                .setPositiveButton("OK", null)
-                .show();
-    }
-
-    private void showQuestionDialog() {
-        new AlertDialog.Builder(this)
-                .setTitle("Question and Answer")
-                .setMessage(
-                        "Create an account or sign in to continue "
-                                + "to the karaoke song screen. "
-                                + "You can find songs and access the "
-                                + "available support options there."
-                )
-                .setPositiveButton("OK", null)
-                .show();
-    }
-
-    private void openAuthentication(boolean createMode) {
-        Intent intent = new Intent(
-                MainActivity.this,
-                AuthActivity.class
-        );
-
-        intent.putExtra("create_mode", createMode);
-
-        if (isAndroidTv()) {
-            intent.putExtra(EXTRA_TV_MODE, true);
+        if (sessionRef != null && sessionListener != null) {
+            sessionRef.removeEventListener(sessionListener);
+            sessionListener = null;
         }
 
-        startActivity(intent);
-    }
+        sessionRef = FirebaseDatabase.getInstance(DATABASE_URL)
+                .getReference("activeSessions")
+                .child(user.getUid());
 
-    private Button makeButton(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextColor(Color.BLACK);
-        button.setTextSize(14);
-        button.setTypeface(null, Typeface.BOLD);
-        button.setAllCaps(false);
-        button.setMinHeight(dp(48));
-        button.setBackground(roundDrawable(GREEN, dp(10)));
-        button.setStateListAnimator(null);
-        return button;
-    }
+        sessionListener = new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snapshot) {
+                if (closing || isFinishing()) {
+                    return;
+                }
 
-    private GradientDrawable roundDrawable(
-            int color,
-            int radius) {
+                String activeId = snapshot.child("sessionId")
+                        .getValue(String.class);
 
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        return drawable;
-    }
+                if (activeId == null || activeId.trim().isEmpty()
+                        || !installationId.equals(activeId)) {
 
-    private LinearLayout.LayoutParams fullWidth(int height) {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                height
-        );
-    }
+                    scheduleSessionMismatch(
+                            activeId == null || activeId.trim().isEmpty()
+                                    ? "Your active session could not be found. Please sign in again."
+                                    : "Your account was signed in on another phone. Please sign in again."
+                    );
 
-    private LinearLayout.LayoutParams fullWidthWrap() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-    }
+                    return;
+                }
 
-    private int dp(int value) {
-        return (int) (
-                value * getResources()
-                        .getDisplayMetrics().density + 0.5f
-        );
-    }
+                cancelPendingSessionMismatch();
 
-    @Override
-    protected void onResume() {
-        super.onResume();
+                offlineAccess = false;
+                sessionValid = true;
 
-        if (adView != null) {
-            adView.resume();
-        }
-    }
+                saveVerifiedOfflineSession(user);
 
-    @Override
-    protected void onPause() {
-        if (adView != null) {
-            adView.pause();
-        }
+                if (searchScreen == null) {
+                    buildSearchScreen();
 
-        super.onPause();
-    }
+                    String initialQuery =
+                            getIntent().getStringExtra("search_query");
 
-    @Override
-    protected void onDestroy() {
-        if (adView != null) {
-            adView.destroy();
-            adView = null;
-        }
-
-        appOpenAd = null;
-
-        super.onDestroy();
-    }
-}
+                    if (initialQuery != null
+                            && !initialQuery.trim().isEmpty()) {
+                        searchBox.setText(initialQuery);
+                        searchVideos();
+                    }
+                }
