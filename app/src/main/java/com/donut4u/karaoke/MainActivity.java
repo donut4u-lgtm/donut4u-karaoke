@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -55,12 +56,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // STAGE 4 FIX:
-        // Android TV must open the dedicated TV songbook.
-        // It must not enter the phone login/session-check route.
-        if (getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_LEANBACK)) {
-
+        // Android TV must open Stage 4 directly.
+        // Do not enter the phone login or active-session route.
+        if (isAndroidTv()) {
             Intent tvIntent = new Intent(
                     MainActivity.this,
                     Stage4TvActivity.class
@@ -77,7 +75,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Existing phone behavior remains below.
+        // Existing phone behavior remains unchanged.
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
@@ -107,6 +105,20 @@ public class MainActivity extends Activity {
                     loadAppOpenAd();
                 })
         );
+    }
+
+    private boolean isAndroidTv() {
+        boolean hasLeanback =
+                getPackageManager().hasSystemFeature(
+                        PackageManager.FEATURE_LEANBACK
+                );
+
+        boolean hasTelevisionUi =
+                (getResources().getConfiguration().uiMode
+                        & Configuration.UI_MODE_TYPE_MASK)
+                        == Configuration.UI_MODE_TYPE_TELEVISION;
+
+        return hasLeanback || hasTelevisionUi;
     }
 
     private void loadBannerAd() {
