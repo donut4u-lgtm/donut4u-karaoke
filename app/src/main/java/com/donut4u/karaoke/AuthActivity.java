@@ -1,9 +1,9 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -51,10 +51,14 @@ public class AuthActivity extends Activity {
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
-    private static final String DEVICE_PREFS = "donut4u_device_session";
-    private static final String DEVICE_ID_KEY = "installation_id";
+    private static final String DEVICE_PREFS =
+            "donut4u_device_session";
+
+    private static final String DEVICE_ID_KEY =
+            "installation_id";
 
     private FirebaseAuth auth;
+
     private EditText emailInput;
     private EditText passwordInput;
     private TextView statusText;
@@ -69,6 +73,7 @@ public class AuthActivity extends Activity {
         getWindow().setNavigationBarColor(DARK);
 
         auth = FirebaseAuth.getInstance();
+
         buildScreen();
 
         FirebaseUser user = auth.getCurrentUser();
@@ -77,9 +82,14 @@ public class AuthActivity extends Activity {
             setLoading(true, "Checking your account...");
 
             user.reload().addOnCompleteListener(this, task -> {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+
                 FirebaseUser refreshed = auth.getCurrentUser();
 
-                if (refreshed != null && refreshed.isEmailVerified()) {
+                if (refreshed != null
+                        && refreshed.isEmailVerified()) {
                     createActiveSession(refreshed);
                 } else {
                     setLoading(false, "");
@@ -89,11 +99,24 @@ public class AuthActivity extends Activity {
     }
 
     private boolean isAndroidTv() {
-        return getPackageManager().hasSystemFeature(
-                android.content.pm.PackageManager.FEATURE_LEANBACK)
-                || (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_TYPE_MASK)
-                == Configuration.UI_MODE_TYPE_TELEVISION;
+        boolean explicitTvMode =
+                getIntent() != null
+                        && getIntent().getBooleanExtra(
+                                MainActivity.EXTRA_TV_MODE,
+                                false
+                        );
+
+        boolean hasLeanback =
+                getPackageManager().hasSystemFeature(
+                        PackageManager.FEATURE_LEANBACK
+                );
+
+        boolean televisionUi =
+                (getResources().getConfiguration().uiMode
+                        & Configuration.UI_MODE_TYPE_MASK)
+                        == Configuration.UI_MODE_TYPE_TELEVISION;
+
+        return explicitTvMode || hasLeanback || televisionUi;
     }
 
     private void buildScreen() {
@@ -145,6 +168,8 @@ public class AuthActivity extends Activity {
         );
         emailInput.setPadding(dp(12), 0, dp(12), 0);
         emailInput.setBackgroundColor(PANEL);
+        emailInput.setFocusable(true);
+        emailInput.setFocusableInTouchMode(true);
 
         LinearLayout.LayoutParams fieldParams = fullWidth(dp(54));
         fieldParams.bottomMargin = dp(14);
@@ -167,6 +192,8 @@ public class AuthActivity extends Activity {
         );
         passwordInput.setPadding(dp(12), 0, dp(12), 0);
         passwordInput.setBackgroundColor(PANEL);
+        passwordInput.setFocusable(true);
+        passwordInput.setFocusableInTouchMode(true);
 
         LinearLayout.LayoutParams passwordParams = fullWidth(dp(54));
         passwordParams.bottomMargin = dp(16);
@@ -188,25 +215,27 @@ public class AuthActivity extends Activity {
         resetButton.setOnClickListener(v -> resetPassword());
         root.addView(resetButton, buttonParams());
 
-        TextView advertisement = new TextView(this);
-        advertisement.setText("Advertisement");
-        advertisement.setTextColor(MUTED);
-        advertisement.setTextSize(12);
-        advertisement.setGravity(Gravity.CENTER);
-        advertisement.setPadding(0, dp(16), 0, dp(8));
-        root.addView(advertisement, fullWidthWrap());
+        if (!isAndroidTv()) {
+            TextView advertisement = new TextView(this);
+            advertisement.setText("Advertisement");
+            advertisement.setTextColor(MUTED);
+            advertisement.setTextSize(12);
+            advertisement.setGravity(Gravity.CENTER);
+            advertisement.setPadding(0, dp(16), 0, dp(8));
+            root.addView(advertisement, fullWidthWrap());
 
-        LinearLayout bannerContainer = new LinearLayout(this);
-        bannerContainer.setOrientation(LinearLayout.VERTICAL);
-        bannerContainer.setGravity(Gravity.CENTER_HORIZONTAL);
+            LinearLayout bannerContainer = new LinearLayout(this);
+            bannerContainer.setOrientation(LinearLayout.VERTICAL);
+            bannerContainer.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        LinearLayout.LayoutParams bannerContainerParams =
-                fullWidthWrap();
-        bannerContainerParams.topMargin = dp(4);
-        bannerContainerParams.bottomMargin = dp(8);
+            LinearLayout.LayoutParams bannerContainerParams =
+                    fullWidthWrap();
+            bannerContainerParams.topMargin = dp(4);
+            bannerContainerParams.bottomMargin = dp(8);
 
-        root.addView(bannerContainer, bannerContainerParams);
-        loadBannerAd(bannerContainer);
+            root.addView(bannerContainer, bannerContainerParams);
+            loadBannerAd(bannerContainer);
+        }
 
         progressBar = new ProgressBar(this);
         progressBar.setVisibility(View.GONE);
@@ -230,9 +259,20 @@ public class AuthActivity extends Activity {
         root.addView(information, fullWidthWrap());
 
         setContentView(scrollView);
+
+        // Keep the sign-in button as the initial remote focus.
+        signInButton.setFocusable(true);
+        signInButton.setFocusableInTouchMode(true);
+        signInButton.requestFocus();
     }
 
     private void loadBannerAd(LinearLayout container) {
+        if (isAndroidTv()
+                || isFinishing()
+                || isDestroyed()) {
+            return;
+        }
+
         try {
             MobileAds.initialize(
                     getApplicationContext(),
@@ -290,12 +330,18 @@ public class AuthActivity extends Activity {
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
-        if (!validate(email, password, false)) return;
+        if (!validate(email, password, false)) {
+            return;
+        }
 
         setLoading(true, "Signing in...");
 
         auth.signInWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+
                     if (!task.isSuccessful()) {
                         setLoading(false, "");
                         showError(task.getException(), "Sign-in failed.");
@@ -311,6 +357,10 @@ public class AuthActivity extends Activity {
                     }
 
                     user.reload().addOnCompleteListener(this, reloadTask -> {
+                        if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
+
                         FirebaseUser refreshed = auth.getCurrentUser();
 
                         if (refreshed == null) {
@@ -340,7 +390,7 @@ public class AuthActivity extends Activity {
             return;
         }
 
-        // Android TV must not overwrite the phone's active session.
+        // TV must never overwrite the phone's active session.
         if (isAndroidTv()) {
             openMainScreen();
             return;
@@ -360,7 +410,9 @@ public class AuthActivity extends Activity {
 
         sessionRef.updateChildren(session)
                 .addOnCompleteListener(this, task -> {
-                    if (isFinishing() || isDestroyed()) return;
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
 
                     if (task.isSuccessful()) {
                         openMainScreen();
@@ -394,12 +446,18 @@ public class AuthActivity extends Activity {
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
-        if (!validate(email, password, true)) return;
+        if (!validate(email, password, true)) {
+            return;
+        }
 
         setLoading(true, "Creating your account...");
 
         auth.createUserWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+
                     if (!task.isSuccessful()) {
                         setLoading(false, "");
                         showError(task.getException(), "Account creation failed.");
@@ -418,6 +476,10 @@ public class AuthActivity extends Activity {
 
                     user.sendEmailVerification()
                             .addOnCompleteListener(this, verifyTask -> {
+                                if (isFinishing() || isDestroyed()) {
+                                    return;
+                                }
+
                                 setLoading(false, "");
 
                                 if (verifyTask.isSuccessful()) {
@@ -440,12 +502,18 @@ public class AuthActivity extends Activity {
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
-        if (!validate(email, password, false)) return;
+        if (!validate(email, password, false)) {
+            return;
+        }
 
         setLoading(true, "Checking account...");
 
         auth.signInWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+
                     if (!task.isSuccessful()) {
                         setLoading(false, "");
                         showError(
@@ -464,6 +532,10 @@ public class AuthActivity extends Activity {
                     }
 
                     user.reload().addOnCompleteListener(this, reloadTask -> {
+                        if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
+
                         FirebaseUser refreshed = auth.getCurrentUser();
 
                         if (refreshed == null) {
@@ -479,6 +551,10 @@ public class AuthActivity extends Activity {
 
                         refreshed.sendEmailVerification()
                                 .addOnCompleteListener(this, sendTask -> {
+                                    if (isFinishing() || isDestroyed()) {
+                                        return;
+                                    }
+
                                     setLoading(false, "");
 
                                     if (sendTask.isSuccessful()) {
@@ -516,6 +592,10 @@ public class AuthActivity extends Activity {
 
         auth.sendPasswordResetEmail(email)
                 .addOnCompleteListener(this, task -> {
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+
                     setLoading(false, "");
 
                     if (task.isSuccessful()) {
@@ -568,12 +648,22 @@ public class AuthActivity extends Activity {
 
     private void setLoading(boolean loading, String message) {
         if (progressBar != null) {
-            progressBar.setVisibility(loading ? View.VISIBLE : View.GONE);
+            progressBar.setVisibility(
+                    loading ? View.VISIBLE : View.GONE
+            );
         }
 
-        if (statusText != null) statusText.setText(message);
-        if (emailInput != null) emailInput.setEnabled(!loading);
-        if (passwordInput != null) passwordInput.setEnabled(!loading);
+        if (statusText != null) {
+            statusText.setText(message);
+        }
+
+        if (emailInput != null) {
+            emailInput.setEnabled(!loading);
+        }
+
+        if (passwordInput != null) {
+            passwordInput.setEnabled(!loading);
+        }
     }
 
     private void showError(Exception exception, String fallback) {
@@ -589,12 +679,20 @@ public class AuthActivity extends Activity {
     }
 
     private void showMessage(String message) {
-        if (statusText != null) statusText.setText(message);
+        if (statusText != null) {
+            statusText.setText(message);
+        }
+
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
     private void openMainScreen() {
         Intent intent = new Intent(this, MainActivity.class);
+
+        if (isAndroidTv()) {
+            intent.putExtra(MainActivity.EXTRA_TV_MODE, true);
+        }
+
         intent.addFlags(
                 Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_NEW_TASK
@@ -612,6 +710,9 @@ public class AuthActivity extends Activity {
         button.setTextSize(14);
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
+        button.setMinHeight(dp(48));
+        button.setFocusable(true);
+        button.setFocusableInTouchMode(true);
         button.setBackgroundColor(GREEN);
         return button;
     }
@@ -624,7 +725,8 @@ public class AuthActivity extends Activity {
 
     private LinearLayout.LayoutParams fullWidth(int height) {
         return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, height
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                height
         );
     }
 
@@ -643,14 +745,20 @@ public class AuthActivity extends Activity {
 
     @Override
     protected void onPause() {
-        if (adView != null) adView.pause();
+        if (adView != null) {
+            adView.pause();
+        }
+
         super.onPause();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (adView != null) adView.resume();
+
+        if (adView != null) {
+            adView.resume();
+        }
     }
 
     @Override
@@ -659,6 +767,7 @@ public class AuthActivity extends Activity {
             adView.destroy();
             adView = null;
         }
+
         super.onDestroy();
     }
 }
