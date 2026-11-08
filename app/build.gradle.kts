@@ -116,8 +116,8 @@ dependencies {
 
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
 
-    // Stage 3: MIDI/KAR playback through FluidSynth.
-    implementation("dev.kotlinds:fluidsynth-kmp:1.1.1")
+    // Stage 3: rebuilt FluidSynth AAR with verified 16 KB ELF alignment.
+    implementation(files("libs/fluidsynth-kmp-release.aar"))
 
     // Required for Java API compatibility.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
