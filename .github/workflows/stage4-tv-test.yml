@@ -84,7 +84,9 @@ jobs:
           echo "Android SDK: $SDK_ROOT"
           echo "SDK manager: $SDKMANAGER"
 
+          set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
 
           "$SDKMANAGER" \
             "platforms;android-35" \
