@@ -1,14 +1,10 @@
-
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <uses-feature
-        android:name="android.software.leanback"
-        android:required="false" />
-
+    <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.faketouch" android:required="false" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -34,80 +30,27 @@
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-5625332026157890~7539407143" />
 
-        <activity
-            android:name=".TvStageMenuActivity"
-            android:exported="false"
-            android:screenOrientation="landscape" />
+        <activity android:name=".TvStageMenuActivity" android:exported="false" android:screenOrientation="landscape" />
+        <activity android:name=".Stage4TvActivity" android:exported="false" android:screenOrientation="landscape" />
+        <activity android:name=".Stage4TvPlayerActivity" android:exported="false" android:screenOrientation="landscape" android:hardwareAccelerated="true" />
+        <activity android:name=".Stage3MediaFireActivity" android:exported="false" />
+        <activity android:name=".Stage3KaraokeMakerActivity" android:exported="false" android:hardwareAccelerated="true" />
+        <activity android:name=".Stage3PlayerActivity" android:exported="false" android:hardwareAccelerated="true" />
+        <activity android:name=".Stage3QueueActivity" android:exported="false" />
+        <activity android:name=".Stage3SongHubRemoteActivity" android:exported="false" android:hardwareAccelerated="true" />
+        <activity android:name=".Stage3SongbookActivity" android:exported="false" />
+        <activity android:name=".Stage3PostFileUploadActivity" android:exported="false" />
+        <activity android:name=".Stage3PostFileSearchActivity" android:exported="false" />
+        <activity android:name=".KaraokeStudioActivity" android:exported="false" android:hardwareAccelerated="true" />
+        <activity android:name=".OnlineSongActivity" android:exported="false" />
+        <activity android:name=".AuthActivity" android:exported="false" />
 
-        <activity
-            android:name=".Stage4TvActivity"
-            android:exported="false"
-            android:screenOrientation="landscape" />
-
-        <activity
-            android:name=".Stage4TvPlayerActivity"
-            android:exported="false"
-            android:screenOrientation="landscape"
-            android:hardwareAccelerated="true" />
-
-        <activity
-            android:name=".Stage3MediaFireActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".Stage3KaraokeMakerActivity"
-            android:exported="false"
-            android:hardwareAccelerated="true" />
-
-        <activity
-            android:name=".Stage3PlayerActivity"
-            android:exported="false"
-            android:hardwareAccelerated="true" />
-
-        <activity
-            android:name=".Stage3QueueActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".Stage3SongHubRemoteActivity"
-            android:exported="false"
-            android:hardwareAccelerated="true" />
-
-        <activity
-            android:name=".Stage3SongbookActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".Stage3PostFileUploadActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".Stage3PostFileSearchActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".KaraokeStudioActivity"
-            android:exported="false"
-            android:hardwareAccelerated="true" />
-
-        <activity
-            android:name=".OnlineSongActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".AuthActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-
         </activity>
 
     </application>
