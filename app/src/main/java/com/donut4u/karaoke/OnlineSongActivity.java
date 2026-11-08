@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -6,6 +5,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -92,7 +92,6 @@ public class OnlineSongActivity extends Activity {
     private static final long CACHE_DURATION =
             24L * 60L * 60L * 1000L;
 
-    // 🟥 INSERTED: STAGE 1 MICROPHONE AND SCORING
     private static final int REQUEST_STAGE12_MICROPHONE = 1201;
 
     private Stage3MicrophoneMonitor microphoneMonitor;
@@ -159,6 +158,18 @@ public class OnlineSongActivity extends Activity {
         String channel;
     }
 
+    /**
+     * Detect Android TV using both the Leanback system feature
+     * and the device's television UI mode.
+     */
+    private boolean isAndroidTv() {
+        return getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_LEANBACK)
+                || (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_TYPE_MASK)
+                == Configuration.UI_MODE_TYPE_TELEVISION;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -177,6 +188,30 @@ public class OnlineSongActivity extends Activity {
 
         AppUpdateChecker.checkForUpdates(this);
 
+        /*
+         * ANDROID TV ROUTE:
+         * Do not run the phone installation-ID session check on TV.
+         * The TV has a different installation ID from the phone.
+         * Keep the phone's active session unchanged.
+         */
+        if (isAndroidTv()) {
+            Intent tvIntent = new Intent(
+                    OnlineSongActivity.this,
+                    Stage4TvActivity.class
+            );
+
+            tvIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            | Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
+            );
+
+            startActivity(tvIntent);
+            finish();
+            return;
+        }
+
+        // Original phone session flow remains unchanged.
         installationId = getInstallationId();
 
         showSessionLoadingScreen();
@@ -1262,7 +1297,6 @@ public class OnlineSongActivity extends Activity {
 
         playbackScreen.addView(title, titleParams);
 
-        // 🟥 INSERTED: STAGE 1 MICROPHONE SCORE PANEL
         addMicrophonePanel();
 
         Button backButton = makeButton("‹  BACK TO SONGS");
@@ -1320,7 +1354,6 @@ public class OnlineSongActivity extends Activity {
                 html, "text/html", "UTF-8", null);
     }
 
-    // 🟥 INSERTED: MICROPHONE PANEL UI
     private void addMicrophonePanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -1419,7 +1452,6 @@ public class OnlineSongActivity extends Activity {
         panel.addView(microphoneRatingText, fullWidthWrap());
     }
 
-    // 🟥 INSERTED: MICROPHONE PERMISSION AND CONTROL
     private void toggleMicrophoneMonitoring() {
         if (!playbackVisible || closing) {
             return;
@@ -1528,7 +1560,6 @@ public class OnlineSongActivity extends Activity {
         }
     }
 
-    // 🟥 INSERTED: LIVE SCORE DISPLAY
     private void updateMicrophoneDisplay(
             int level,
             int note,
@@ -1603,7 +1634,6 @@ public class OnlineSongActivity extends Activity {
         return names[noteIndex] + octave;
     }
 
-    // 🟥 INSERTED: STOP MICROPHONE AND SHOW RESULT
     private void stopMicrophoneMonitoring(boolean showResult) {
         Stage3MicrophoneMonitor active = microphoneMonitor;
         microphoneMonitor = null;
@@ -1627,7 +1657,6 @@ public class OnlineSongActivity extends Activity {
         }
     }
 
-    // 🟥 INSERTED: FINAL PERFORMANCE RESULT
     private void showFinalPerformanceResult() {
         if (microphoneScoreText == null) {
             return;
@@ -1679,7 +1708,6 @@ public class OnlineSongActivity extends Activity {
                 .show();
     }
 
-    // 🟥 INSERTED: ANDROID MICROPHONE PERMISSION RESULT
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
@@ -1735,7 +1763,6 @@ public class OnlineSongActivity extends Activity {
         }
     }
 
-    // 🟥 INSERTED: CLEAR STAGE 1 MICROPHONE UI REFERENCES
     private void clearMicrophoneViews() {
         microphoneButton = null;
         microphoneStatus = null;
@@ -1867,7 +1894,6 @@ public class OnlineSongActivity extends Activity {
             adView.pause();
         }
 
-        // 🟥 INSERTED: STOP MIC WHEN STAGE 1 GOES INTO BACKGROUND
         if (microphoneMonitor != null
                 && microphoneMonitor.isRunning()) {
             microphoneWasStoppedByLifecycle = true;
