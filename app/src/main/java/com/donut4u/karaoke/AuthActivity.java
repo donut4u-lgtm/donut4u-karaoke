@@ -1,10 +1,10 @@
 
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -86,6 +86,14 @@ public class AuthActivity extends Activity {
                 }
             });
         }
+    }
+
+    private boolean isAndroidTv() {
+        return getPackageManager().hasSystemFeature(
+                android.content.pm.PackageManager.FEATURE_LEANBACK)
+                || (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_TYPE_MASK)
+                == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 
     private void buildScreen() {
@@ -188,7 +196,6 @@ public class AuthActivity extends Activity {
         advertisement.setPadding(0, dp(16), 0, dp(8));
         root.addView(advertisement, fullWidthWrap());
 
-        // Real AdMob banner, not just an Advertisement label.
         LinearLayout bannerContainer = new LinearLayout(this);
         bannerContainer.setOrientation(LinearLayout.VERTICAL);
         bannerContainer.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -330,6 +337,12 @@ public class AuthActivity extends Activity {
         if (user == null || user.getUid() == null) {
             setLoading(false, "");
             showMessage("Unable to identify your account.");
+            return;
+        }
+
+        // Android TV must not overwrite the phone's active session.
+        if (isAndroidTv()) {
+            openMainScreen();
             return;
         }
 
