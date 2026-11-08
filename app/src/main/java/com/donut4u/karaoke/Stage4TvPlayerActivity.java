@@ -1,13 +1,15 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -31,9 +33,13 @@ public class Stage4TvPlayerActivity extends Activity {
     private static final String EXTRA_TYPE = "stage4_song_type";
 
     private static final int BACKGROUND = Color.rgb(8, 20, 25);
+    private static final int PANEL = Color.rgb(20, 39, 42);
     private static final int GREEN = Color.rgb(0, 220, 115);
     private static final int WHITE = Color.rgb(245, 250, 247);
     private static final int MUTED = Color.rgb(175, 193, 187);
+
+    private static final long MEDIA_SEEK_MS = 10000L;
+    private static final long MEDIA_LONG_SEEK_MS = 30000L;
 
     private final Handler handler = new Handler();
 
@@ -47,7 +53,10 @@ public class Stage4TvPlayerActivity extends Activity {
     private TextView statusLabel;
     private TextView lyricsLabel;
     private TextView timeLabel;
+
     private Button playButton;
+    private Button stopButton;
+    private Button backButton;
 
     private String songTitle = "";
     private String songUri = "";
@@ -73,7 +82,7 @@ public class Stage4TvPlayerActivity extends Activity {
                 updateMediaDisplay();
             }
 
-            handler.postDelayed(this, 100);
+            handler.postDelayed(this, 150);
         }
     };
 
@@ -155,16 +164,16 @@ public class Stage4TvPlayerActivity extends Activity {
 
         root.addView(
                 statusLabel,
-                new LinearLayout.LayoutParams(-1, dp(34))
+                new LinearLayout.LayoutParams(-1, dp(32))
         );
 
         videoTexture = new TextureView(this);
         videoTexture.setBackgroundColor(Color.BLACK);
 
-        LinearLayout.LayoutParams videoParams =
-                new LinearLayout.LayoutParams(-1, 0, 1f);
-
-        root.addView(videoTexture, videoParams);
+        root.addView(
+                videoTexture,
+                new LinearLayout.LayoutParams(-1, 0, 1f)
+        );
 
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(true);
@@ -185,10 +194,10 @@ public class Stage4TvPlayerActivity extends Activity {
                 new ScrollView.LayoutParams(-1, -2)
         );
 
-        LinearLayout.LayoutParams lyricsParams =
-                new LinearLayout.LayoutParams(-1, 0, 2f);
-
-        root.addView(lyricsScroll, lyricsParams);
+        root.addView(
+                lyricsScroll,
+                new LinearLayout.LayoutParams(-1, 0, 2f)
+        );
 
         timeLabel = new TextView(this);
         timeLabel.setTextColor(MUTED);
@@ -197,40 +206,67 @@ public class Stage4TvPlayerActivity extends Activity {
 
         root.addView(
                 timeLabel,
-                new LinearLayout.LayoutParams(-1, dp(30))
+                new LinearLayout.LayoutParams(-1, dp(28))
         );
 
+        TextView remoteHelp = new TextView(this);
+        remoteHelp.setText(
+                "REMOTE: CENTER = PLAY / PAUSE     "
+                        + "LEFT / RIGHT = REWIND / FORWARD"
+        );
+        remoteHelp.setTextColor(MUTED);
+        remoteHelp.setTextSize(12);
+        remoteHelp.setGravity(Gravity.CENTER);
+
+        root.addView(
+                remoteHelp,
+                new LinearLayout.LayoutParams(-1, dp(26))
+        );
+
+        /*
+         * Controls are arranged vertically so the TV remote can
+         * reach every button with UP and DOWN. LEFT and RIGHT are
+         * reserved for media rewind and fast-forward.
+         */
         LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.VERTICAL);
         controls.setGravity(Gravity.CENTER);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
 
         playButton = createButton("PAUSE");
         playButton.setOnClickListener(v -> togglePlayback());
 
-        Button stopButton = createButton("STOP");
+        stopButton = createButton("STOP");
         stopButton.setOnClickListener(v -> stopPlayback());
 
-        Button backButton = createButton("BACK");
+        backButton = createButton("BACK");
         backButton.setOnClickListener(v -> finish());
 
-        controls.addView(
-                playButton,
-                new LinearLayout.LayoutParams(dp(180), dp(58))
-        );
+        LinearLayout.LayoutParams buttonParams =
+                new LinearLayout.LayoutParams(dp(220), dp(48));
 
-        controls.addView(
-                stopButton,
-                new LinearLayout.LayoutParams(dp(180), dp(58))
-        );
+        buttonParams.gravity = Gravity.CENTER;
+        buttonParams.bottomMargin = dp(5);
 
-        controls.addView(
-                backButton,
-                new LinearLayout.LayoutParams(dp(180), dp(58))
-        );
+        controls.addView(playButton, buttonParams);
+
+        LinearLayout.LayoutParams stopParams =
+                new LinearLayout.LayoutParams(dp(220), dp(48));
+
+        stopParams.gravity = Gravity.CENTER;
+        stopParams.bottomMargin = dp(5);
+
+        controls.addView(stopButton, stopParams);
+
+        LinearLayout.LayoutParams backParams =
+                new LinearLayout.LayoutParams(dp(220), dp(48));
+
+        backParams.gravity = Gravity.CENTER;
+
+        controls.addView(backButton, backParams);
 
         root.addView(
                 controls,
-                new LinearLayout.LayoutParams(-1, dp(72))
+                new LinearLayout.LayoutParams(-1, dp(160))
         );
 
         setContentView(root);
@@ -238,18 +274,60 @@ public class Stage4TvPlayerActivity extends Activity {
         if (!songType.toUpperCase(Locale.ROOT).contains("VIDEO")) {
             videoTexture.setVisibility(View.GONE);
         }
+
+        /*
+         * Start with a visible focus target for D-pad users.
+         */
+        playButton.requestFocus();
     }
 
     private Button createButton(String label) {
         Button button = new Button(this);
+
         button.setText(label);
         button.setTextSize(17);
-        button.setTextColor(Color.BLACK);
+        button.setTextColor(WHITE);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setAllCaps(false);
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
-        button.setBackgroundColor(GREEN);
+        button.setClickable(true);
+        button.setBackground(createButtonBackground());
+
         return button;
+    }
+
+    private StateListDrawable createButtonBackground() {
+        StateListDrawable states = new StateListDrawable();
+
+        GradientDrawable focused = new GradientDrawable();
+        focused.setColor(Color.rgb(24, 75, 53));
+        focused.setCornerRadius(dp(10));
+        focused.setStroke(dp(3), GREEN);
+
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setColor(Color.rgb(35, 95, 65));
+        pressed.setCornerRadius(dp(10));
+        pressed.setStroke(dp(3), WHITE);
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(PANEL);
+        normal.setCornerRadius(dp(10));
+        normal.setStroke(dp(2), GREEN);
+
+        states.addState(
+                new int[]{android.R.attr.state_pressed},
+                pressed
+        );
+
+        states.addState(
+                new int[]{android.R.attr.state_focused},
+                focused
+        );
+
+        states.addState(new int[]{}, normal);
+
+        return states;
     }
 
     private void startMidiSong() {
@@ -287,7 +365,8 @@ public class Stage4TvPlayerActivity extends Activity {
                                 statusLabel.setText("MIDI / KAR PLAYING");
                             } else {
                                 lyricsLabel.setText(
-                                        "No timed lyrics were found in this MIDI/KAR file."
+                                        "No timed lyrics were found "
+                                                + "in this MIDI/KAR file."
                                 );
                                 statusLabel.setText("MIDI / KAR PLAYING");
                             }
@@ -352,6 +431,19 @@ public class Stage4TvPlayerActivity extends Activity {
                 }
 
                 @Override
+                public void onIsPlayingChanged(boolean isPlaying) {
+                    if (released) return;
+
+                    playButton.setText(
+                            isPlaying ? "PAUSE" : "PLAY"
+                    );
+
+                    if (isPlaying) {
+                        statusLabel.setText("PLAYING");
+                    }
+                }
+
+                @Override
                 public void onPlayerError(
                         androidx.media3.common.PlaybackException error
                 ) {
@@ -376,31 +468,199 @@ public class Stage4TvPlayerActivity extends Activity {
         }
     }
 
+    /*
+     * Android TV remote media-key handling.
+     *
+     * D-pad CENTER:
+     *   Toggles playback when focus is not on a button.
+     *   The focused button receives CENTER normally.
+     *
+     * D-pad LEFT / RIGHT:
+     *   Rewinds / fast-forwards the current song.
+     *
+     * MEDIA_PLAY_PAUSE:
+     *   Toggles playback.
+     *
+     * MEDIA_REWIND / MEDIA_FAST_FORWARD:
+     *   Performs a larger seek.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            int keyCode = event.getKeyCode();
+
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                togglePlayback();
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) {
+                startPlayback();
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+                pausePlayback();
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_REWIND) {
+                seekBackward(MEDIA_LONG_SEEK_MS);
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
+                seekForward(MEDIA_LONG_SEEK_MS);
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                seekBackward(MEDIA_SEEK_MS);
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                seekForward(MEDIA_SEEK_MS);
+                return true;
+            }
+
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER) {
+
+                View focused = getCurrentFocus();
+
+                if (!(focused instanceof Button)) {
+                    togglePlayback();
+                    return true;
+                }
+            }
+        }
+
+        return super.dispatchKeyEvent(event);
+    }
+
     private void togglePlayback() {
+        if (isPlaybackRunning()) {
+            pausePlayback();
+        } else {
+            startPlayback();
+        }
+    }
+
+    private boolean isPlaybackRunning() {
+        if (midiMode) {
+            return midiReady
+                    && midiEngine != null
+                    && midiEngine.isPlaying();
+        }
+
+        return mediaPlayer != null && mediaPlayer.isPlaying();
+    }
+
+    private void startPlayback() {
         if (midiMode) {
             if (!midiReady || midiEngine == null) return;
 
-            if (midiEngine.isPlaying()) {
-                midiEngine.pause();
-                playButton.setText("PLAY");
-                statusLabel.setText("PAUSED");
-            } else {
-                midiEngine.resume();
-                playButton.setText("PAUSE");
-                statusLabel.setText("PLAYING");
-            }
+            midiEngine.resume();
+            playButton.setText("PAUSE");
+            statusLabel.setText("PLAYING");
 
         } else if (mediaPlayer != null) {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.pause();
-                playButton.setText("PLAY");
-                statusLabel.setText("PAUSED");
-            } else {
-                mediaPlayer.play();
-                playButton.setText("PAUSE");
-                statusLabel.setText("PLAYING");
-            }
+            mediaPlayer.play();
+            playButton.setText("PAUSE");
+            statusLabel.setText("PLAYING");
         }
+    }
+
+    private void pausePlayback() {
+        if (midiMode) {
+            if (!midiReady || midiEngine == null) return;
+
+            midiEngine.pause();
+            playButton.setText("PLAY");
+            statusLabel.setText("PAUSED");
+
+        } else if (mediaPlayer != null) {
+            mediaPlayer.pause();
+            playButton.setText("PLAY");
+            statusLabel.setText("PAUSED");
+        }
+    }
+
+    private void seekBackward(long amountMs) {
+        seekBy(-Math.max(1L, amountMs));
+    }
+
+    private void seekForward(long amountMs) {
+        seekBy(Math.max(1L, amountMs));
+    }
+
+    private void seekBy(long amount) {
+        if (midiMode) {
+            seekMidi(amount);
+        } else {
+            seekMedia(amount);
+        }
+    }
+
+    /*
+     * The MIDI engine exposes tick-based seeking.
+     * A small percentage of the song duration is used per
+     * D-pad press because MIDI tick rates vary between files.
+     */
+    private void seekMidi(long direction) {
+        if (!midiReady || midiEngine == null) return;
+
+        long duration = midiEngine.getDurationTicks();
+
+        if (duration <= 0L) return;
+
+        long current = midiEngine.getCurrentTick();
+
+        long step = Math.max(1L, duration / 50L);
+
+        if (Math.abs(direction) >= MEDIA_LONG_SEEK_MS) {
+            step = Math.max(1L, duration / 10L);
+        }
+
+        long target;
+
+        if (direction < 0L) {
+            target = Math.max(0L, current - step);
+        } else {
+            target = Math.min(duration, current + step);
+        }
+
+        midiEngine.seekTo(target);
+
+        statusLabel.setText(
+                direction < 0L ? "REWIND" : "FAST FORWARD"
+        );
+
+        updateMidiDisplay();
+    }
+
+    private void seekMedia(long amountMs) {
+        if (mediaPlayer == null) return;
+
+        long duration = mediaPlayer.getDuration();
+
+        if (duration <= 0L) return;
+
+        long current = mediaPlayer.getCurrentPosition();
+
+        long target = Math.max(
+                0L,
+                Math.min(duration, current + amountMs)
+        );
+
+        mediaPlayer.seekTo(target);
+
+        statusLabel.setText(
+                amountMs < 0L ? "REWIND" : "FAST FORWARD"
+        );
+
+        updateMediaDisplay();
     }
 
     private void stopPlayback() {
@@ -450,6 +710,7 @@ public class Stage4TvPlayerActivity extends Activity {
 
                 if (layout != null
                         && offset <= lyricsLabel.length()) {
+
                     int safeOffset = Math.min(
                             offset,
                             Math.max(0, lyricsLabel.length() - 1)
@@ -507,9 +768,17 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void showError(String message) {
-        statusLabel.setText("PLAYBACK ERROR");
-        lyricsLabel.setText(message);
-        playButton.setText("PLAY");
+        if (statusLabel != null) {
+            statusLabel.setText("PLAYBACK ERROR");
+        }
+
+        if (lyricsLabel != null) {
+            lyricsLabel.setText(message);
+        }
+
+        if (playButton != null) {
+            playButton.setText("PLAY");
+        }
     }
 
     @Override
@@ -518,10 +787,13 @@ public class Stage4TvPlayerActivity extends Activity {
 
         if (midiMode && midiReady && midiEngine != null
                 && midiEngine.isPlaying()) {
+
             midiEngine.pause();
             pausedForLifecycle = true;
+
         } else if (!midiMode && mediaPlayer != null
                 && mediaPlayer.isPlaying()) {
+
             mediaPlayer.pause();
             pausedForLifecycle = true;
         }
@@ -537,6 +809,7 @@ public class Stage4TvPlayerActivity extends Activity {
 
         if (midiMode && midiReady && midiEngine != null) {
             midiEngine.resume();
+
         } else if (!midiMode && mediaPlayer != null) {
             mediaPlayer.play();
         }
