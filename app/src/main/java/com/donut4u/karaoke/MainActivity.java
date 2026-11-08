@@ -56,26 +56,6 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Android TV must open Stage 4 directly.
-        // Do not enter the phone login or active-session route.
-        if (isAndroidTv()) {
-            Intent tvIntent = new Intent(
-                    MainActivity.this,
-                    Stage4TvActivity.class
-            );
-
-            tvIntent.addFlags(
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            | Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
-            );
-
-            startActivity(tvIntent);
-            finish();
-            return;
-        }
-
-        // Existing phone behavior remains unchanged.
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
@@ -89,6 +69,21 @@ public class MainActivity extends Activity {
             FirebaseAuth.getInstance().signOut();
         }
 
+        // Android TV must authenticate before entering Stage 4.
+        // Do not show phone ads or modify the phone active session.
+        if (isAndroidTv()) {
+            AppUpdateChecker.checkForUpdates(this);
+
+            if (verifiedUserAtLaunch) {
+                openSongSearch();
+            } else {
+                showWelcomeScreen();
+            }
+
+            return;
+        }
+
+        // Existing phone behavior remains unchanged.
         if (!verifiedUserAtLaunch) {
             showWelcomeScreen();
         }
@@ -343,6 +338,11 @@ public class MainActivity extends Activity {
                 showQuestionDialog());
 
         setContentView(scrollView);
+
+        // Put the TV remote focus on Sign in by default.
+        signInButton.setFocusable(true);
+        signInButton.setFocusableInTouchMode(true);
+        signInButton.requestFocus();
     }
 
     private void addButton(
