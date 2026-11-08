@@ -8,9 +8,16 @@
         android:name="android.software.leanback"
         android:required="false" />
 
-    <uses-feature
-        android:name="android.hardware.touchscreen"
-        android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.faketouch" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -18,6 +25,7 @@
         android:label="Donut4U Karaoke"
         android:icon="@drawable/donut4u_icon"
         android:roundIcon="@drawable/donut4u_icon"
+        android:banner="@drawable/donut4u_tv_banner"
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -27,9 +35,14 @@
 
         <activity
             android:name=".Stage4TvActivity"
-            android:banner="@drawable/donut4u_tv_banner"
             android:exported="false"
             android:screenOrientation="landscape" />
+
+        <activity
+            android:name=".Stage4TvPlayerActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:hardwareAccelerated="true" />
 
         <activity
             android:name=".Stage3MediaFireActivity"
