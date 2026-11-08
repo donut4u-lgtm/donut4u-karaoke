@@ -69,6 +69,9 @@ public class OnlineSongActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
+    private static final String EXTRA_TV_MODE =
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
+
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
@@ -159,10 +162,18 @@ public class OnlineSongActivity extends Activity {
     }
 
     /**
-     * Detect Android TV using both the Leanback system feature
-     * and the device's television UI mode.
+     * Detect Android TV using the explicit TV-mode flag,
+     * the Leanback system feature, or television UI mode.
+     *
+     * The explicit flag also supports TV routing when an
+     * activity is launched by another TV-aware activity.
      */
     private boolean isAndroidTv() {
+        if (getIntent() != null
+                && getIntent().getBooleanExtra(EXTRA_TV_MODE, false)) {
+            return true;
+        }
+
         return getPackageManager().hasSystemFeature(
                 PackageManager.FEATURE_LEANBACK)
                 || (getResources().getConfiguration().uiMode
@@ -190,15 +201,20 @@ public class OnlineSongActivity extends Activity {
 
         /*
          * ANDROID TV ROUTE:
-         * Do not run the phone installation-ID session check on TV.
+         *
+         * TV must not run the phone installation-ID session check.
          * The TV has a different installation ID from the phone.
-         * Keep the phone's active session unchanged.
+         *
+         * Preserve the phone's active session and send TV directly
+         * to the dedicated Stage 4 TV songbook.
          */
         if (isAndroidTv()) {
             Intent tvIntent = new Intent(
                     OnlineSongActivity.this,
                     Stage4TvActivity.class
             );
+
+            tvIntent.putExtra(EXTRA_TV_MODE, true);
 
             tvIntent.addFlags(
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -564,6 +580,11 @@ public class OnlineSongActivity extends Activity {
 
     private void openAuthentication() {
         Intent intent = new Intent(this, AuthActivity.class);
+
+        if (isAndroidTv()) {
+            intent.putExtra(EXTRA_TV_MODE, true);
+        }
+
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
@@ -599,6 +620,11 @@ public class OnlineSongActivity extends Activity {
         auth.signOut();
 
         Intent intent = new Intent(this, AuthActivity.class);
+
+        if (isAndroidTv()) {
+            intent.putExtra(EXTRA_TV_MODE, true);
+        }
+
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
