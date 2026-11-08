@@ -1,4 +1,5 @@
-name: Stage 4 TV Isolated Build Check
+
+name: Stage 4 TV Build and 16 KB APK Verification
 
 on:
   push:
@@ -10,15 +11,146 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build Stage 4 Debug
+  build-and-verify:
+    name: Build Donut4U and Verify 16 KB APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Stage 4 branch
+      - name: Checkout Donut4U
         uses: actions/checkout@v4
 
-      - name: Assemble and verify bundled SoundFont
+      - name: Checkout pinned 16 KB FluidSynth source
+        uses: actions/checkout@v4
+        with:
+          repository: Virtover/fluidsynth-kmp
+          ref: 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
+          path: fluidsynth-source
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install NDK and CMake
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;30.0.16248370" \
+            "cmake;3.22.1"
+
+      - name: Build FluidSynth AAR
+        working-directory: fluidsynth-source
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew :fluidsynth-kmp:assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+      - name: Verify FluidSynth AAR exists and has 16 KB alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
+            -maxdepth 1 -type f -name '*.aar' -print -quit)"
+
+          if [[ -z "$AAR" || ! -s "$AAR" ]]; then
+            echo "FAIL: FluidSynth AAR was not generated."
+            exit 1
+          fi
+
+          echo "Found AAR: $AAR"
+
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          mkdir -p aar-check
+          unzip -q "$AAR" -d aar-check
+
+          TOTAL=0
+
+          for ABI in arm64-v8a x86_64; do
+            DIR="aar-check/jni/$ABI"
+
+            if [[ ! -d "$DIR" ]]; then
+              echo "FAIL: Missing ABI $ABI"
+              exit 1
+            fi
+
+            mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
+
+            if [[ "${#LIBS[@]}" -eq 0 ]]; then
+              echo "FAIL: No libraries found for $ABI"
+              exit 1
+            fi
+
+            for LIB in "${LIBS[@]}"; do
+              FOUND=0
+
+              while IFS= read -r LINE; do
+                if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
+                  continue
+                fi
+
+                FOUND=1
+                ALIGN="${LINE##* }"
+
+                if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
+                  echo "FAIL: Invalid ELF alignment: $LIB"
+                  exit 1
+                fi
+
+                VALUE=$((16#${ALIGN#0x}))
+
+                if (( VALUE < 16384 )); then
+                  echo "FAIL: Insufficient alignment: $LIB ($ALIGN)"
+                  exit 1
+                fi
+              done < <("$READELF" -lW "$LIB")
+
+              if (( FOUND == 0 )); then
+                echo "FAIL: No LOAD segments in $LIB"
+                exit 1
+              fi
+
+              echo "PASS: $ABI $(basename "$LIB")"
+              TOTAL=$((TOTAL + 1))
+            done
+          done
+
+          echo "PASS: $TOTAL FluidSynth 64-bit libraries."
+
+      - name: Install AAR into app/libs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
+            -maxdepth 1 -type f -name '*.aar' -print -quit)"
+
+          test -n "$AAR"
+          test -s "$AAR"
+
+          mkdir -p app/libs
+          cp "$AAR" app/libs/fluidsynth-kmp-release.aar
+
+          echo "Checking exact Gradle dependency path..."
+          test -s app/libs/fluidsynth-kmp-release.aar
+          ls -lh app/libs/fluidsynth-kmp-release.aar
+
+          echo "PASS: Gradle dependency file exists."
+
+      - name: Assemble and verify SoundFont
         shell: bash
         run: |
           set -euo pipefail
@@ -34,7 +166,7 @@ jobs:
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 count=4 2>/dev/null)" = "RIFF"
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
 
-          echo "SoundFont assembled and verified."
+          echo "PASS: SoundFont verified."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -42,12 +174,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      - name: Build debug APK
+      - name: Build Donut4U debug APK
         env:
           YOUTUBE_API_KEY: ""
           DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/unused.jks
@@ -55,12 +187,93 @@ jobs:
           DONUT4U_KEY_ALIAS: unused
           DONUT4U_KEY_PASSWORD: unused
           GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
-        run: gradle assembleDebug --no-daemon --stacktrace --console=plain
+        run: |
+          set -euo pipefail
 
-      - name: Upload Stage 4 debug APK
+          test -s app/libs/fluidsynth-kmp-release.aar
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+      - name: Verify final APK ELF and ZIP alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+
+          test -s "$APK"
+          test -x "$ZIPALIGN"
+
+          mkdir -p apk-check
+          unzip -q "$APK" 'lib/*' -d apk-check
+
+          TOTAL=0
+
+          for ABI in arm64-v8a x86_64; do
+            DIR="apk-check/lib/$ABI"
+
+            if [[ ! -d "$DIR" ]]; then
+              echo "FAIL: APK missing $ABI libraries"
+              exit 1
+            fi
+
+            mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
+
+            if [[ "${#LIBS[@]}" -eq 0 ]]; then
+              echo "FAIL: No APK libraries for $ABI"
+              exit 1
+            fi
+
+            for LIB in "${LIBS[@]}"; do
+              FOUND=0
+
+              while IFS= read -r LINE; do
+                if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
+                  continue
+                fi
+
+                FOUND=1
+                ALIGN="${LINE##* }"
+
+                if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
+                  echo "FAIL: Invalid APK ELF alignment: $LIB"
+                  exit 1
+                fi
+
+                VALUE=$((16#${ALIGN#0x}))
+
+                if (( VALUE < 16384 )); then
+                  echo "FAIL: APK library below 16 KB alignment: $LIB ($ALIGN)"
+                  exit 1
+                fi
+              done < <("$READELF" -lW "$LIB")
+
+              if (( FOUND == 0 )); then
+                echo "FAIL: No LOAD segments in $LIB"
+                exit 1
+              fi
+
+              echo "PASS: $ABI $(basename "$LIB")"
+              TOTAL=$((TOTAL + 1))
+            done
+          done
+
+          echo "Checking APK ZIP alignment..."
+          "$ZIPALIGN" -v -c -P 16 4 "$APK"
+
+          echo "PASS: Final APK passed ELF and ZIP alignment checks."
+          echo "Verified 64-bit libraries: $TOTAL"
+
+      - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-tv-debug-apk
+          name: stage4-tv-16kb-verified-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
