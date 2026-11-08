@@ -72,6 +72,9 @@ public class OnlineSongActivity extends Activity {
     private static final String EXTRA_TV_MODE =
             "com.donut4u.karaoke.EXTRA_TV_MODE";
 
+    private static final String EXTRA_TV_STAGE1 =
+            "com.donut4u.karaoke.EXTRA_TV_STAGE1";
+
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
@@ -200,13 +203,27 @@ public class OnlineSongActivity extends Activity {
         AppUpdateChecker.checkForUpdates(this);
 
         /*
-         * ANDROID TV ROUTE:
+         * STAGE 1 ON ANDROID TV:
          *
-         * TV must not run the phone installation-ID session check.
-         * The TV has a different installation ID from the phone.
+         * The TV launcher passes EXTRA_TV_STAGE1 when Stage 1
+         * is selected. Use the existing Stage 1 search, playback,
+         * microphone and scoring screen without running the
+         * phone-only installation session check.
          *
-         * Preserve the phone's active session and send TV directly
-         * to the dedicated Stage 4 TV songbook.
+         * This does not change or invalidate the phone session.
+         */
+        if (isAndroidTv()
+                && getIntent() != null
+                && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
+            sessionValid = true;
+            buildSearchScreen();
+            return;
+        }
+
+        /*
+         * Direct TV entry without a selected Stage 1 opens the
+         * TV launcher/songbook entry point. Normal Stage 1 access
+         * comes from TvStageMenuActivity.
          */
         if (isAndroidTv()) {
             Intent tvIntent = new Intent(
@@ -215,12 +232,6 @@ public class OnlineSongActivity extends Activity {
             );
 
             tvIntent.putExtra(EXTRA_TV_MODE, true);
-
-            tvIntent.addFlags(
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            | Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
-            );
 
             startActivity(tvIntent);
             finish();
@@ -818,6 +829,10 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void addAdMobBanner(LinearLayout parent) {
+        if (isAndroidTv()) {
+            return;
+        }
+
         try {
             MobileAds.initialize(this, initializationStatus -> {});
 
@@ -1977,6 +1992,13 @@ public class OnlineSongActivity extends Activity {
                     return;
                 }
             }
+        }
+
+        if (isAndroidTv()
+                && getIntent() != null
+                && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
+            finish();
+            return;
         }
 
         toast("You're in Donut4U Karaoke. Search for another song!");
