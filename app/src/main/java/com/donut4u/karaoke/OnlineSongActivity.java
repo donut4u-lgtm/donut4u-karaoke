@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -680,11 +681,38 @@ public class OnlineSongActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(20));
         root.addView(subtitle, fullWidthWrap());
 
+        // TV KEYBOARD FIX: make the search field focusable
+        // and explicitly request the Xiaomi TV soft keyboard.
         searchBox = new EditText(this);
         searchBox.setSingleLine(true);
         searchBox.setHint("Song title or artist");
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        searchBox.setFocusable(true);
+        searchBox.setFocusableInTouchMode(true);
+        searchBox.setShowSoftInputOnFocus(true);
         styleEdit(searchBox);
+
+        searchBox.setOnClickListener(v -> showSearchKeyboard());
+
+        searchBox.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus && isAndroidTv()) {
+                searchBox.postDelayed(
+                        this::showSearchKeyboard, 150);
+            }
+        });
+
+        searchBox.setOnKeyListener((v, keyCode, event) -> {
+            if (isAndroidTv()
+                    && event.getAction() == KeyEvent.ACTION_UP
+                    && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER)) {
+                showSearchKeyboard();
+                return true;
+            }
+
+            return false;
+        });
+
         root.addView(searchBox, fullWidth(dp(56)));
 
         searchButton = makeButton("FIND MY SONG");
@@ -826,6 +854,32 @@ public class OnlineSongActivity extends Activity {
 
             return false;
         });
+
+        // Give the TV search field initial focus after screen creation.
+        if (isAndroidTv()) {
+            searchBox.requestFocus();
+        }
+    }
+
+    private void showSearchKeyboard() {
+        if (searchBox == null) {
+            return;
+        }
+
+        searchBox.requestFocus();
+
+        InputMethodManager keyboard =
+                (InputMethodManager) getSystemService(
+                        Context.INPUT_METHOD_SERVICE);
+
+        if (keyboard != null) {
+            searchBox.post(() ->
+                    keyboard.showSoftInput(
+                            searchBox,
+                            InputMethodManager.SHOW_IMPLICIT
+                    )
+            );
+        }
     }
 
     private void addAdMobBanner(LinearLayout parent) {
