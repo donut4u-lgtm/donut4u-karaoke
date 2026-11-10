@@ -121,7 +121,7 @@ jobs:
 
       - name: Build Donut4U debug APK with dependency-download retries
         env:
-          YOUTUBE_API_KEY: ""
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/unused.jks
           DONUT4U_KEYSTORE_PASSWORD: unused
           DONUT4U_KEY_ALIAS: unused
@@ -130,6 +130,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          if [[ -z "${YOUTUBE_API_KEY:-}" ]]; then
+            echo "FAIL: GitHub Actions secret YOUTUBE_API_KEY is missing."
+            exit 1
+          fi
 
           test -s app/libs/fluidsynth-kmp-release.aar
 
