@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -18,7 +19,6 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import org.json.JSONObject;
 
@@ -32,13 +32,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Phone-side remote keyboard for Donut4U Karaoke.
- *
- * Finds a TV running TvKeyboardReceiver on the same
- * local network, pairs with its six-digit code, and
- * sends song titles to Stage 1.
- */
 public class PhoneRemoteActivity extends Activity {
 
     private static final int BG = Color.rgb(10, 12, 15);
@@ -72,6 +65,7 @@ public class PhoneRemoteActivity extends Activity {
     private EditText songInput;
     private TextView statusText;
     private TextView tvFoundText;
+
     private Button connectButton;
     private Button searchButton;
     private Button disconnectButton;
@@ -97,6 +91,7 @@ public class PhoneRemoteActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(22), dp(24), dp(22), dp(24));
+
         scrollView.addView(root);
 
         TextView heading = new TextView(this);
@@ -105,30 +100,42 @@ public class PhoneRemoteActivity extends Activity {
         heading.setTextSize(23);
         heading.setTypeface(null, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
+
         root.addView(heading, fullWidthWrap());
 
         TextView subtitle = new TextView(this);
         subtitle.setText(
-                "Use your phone to search songs on your TV."
+                "Use your phone to search songs on your TV.\n"
+                        + "Works with Stage 1, Stage 2, and Stage 3."
         );
         subtitle.setTextColor(MUTED);
         subtitle.setTextSize(14);
         subtitle.setGravity(Gravity.CENTER);
         subtitle.setPadding(0, dp(10), 0, dp(22));
+
         root.addView(subtitle, fullWidthWrap());
 
         TextView instruction = new TextView(this);
         instruction.setText(
                 "1. Connect your phone and TV to the same Wi-Fi "
                         + "or phone hotspot.\n\n"
-                        + "2. Open Stage 1 on the TV.\n\n"
-                        + "3. Wait for Donut4U TV to appear below.\n\n"
-                        + "4. Enter the six-digit code shown on the TV."
+                        + "2. Open Stage 1, Stage 2, or Stage 3 "
+                        + "on the TV.\n\n"
+                        + "3. Open the phone keyboard screen on "
+                        + "your phone.\n\n"
+                        + "4. Wait for Donut4U TV to appear below.\n\n"
+                        + "5. Enter the six-digit code shown on "
+                        + "the TV and tap CONNECT TO TV.\n\n"
+                        + "6. Type a song title on your phone "
+                        + "and tap SEARCH ON TV."
         );
         instruction.setTextColor(WHITE);
         instruction.setTextSize(14);
-        instruction.setPadding(dp(14), dp(14), dp(14), dp(14));
+        instruction.setPadding(
+                dp(14), dp(14), dp(14), dp(14)
+        );
         instruction.setBackground(round(PANEL, dp(12)));
+
         root.addView(instruction, fullWidthWrap());
 
         tvFoundText = new TextView(this);
@@ -138,6 +145,7 @@ public class PhoneRemoteActivity extends Activity {
         tvFoundText.setTypeface(null, Typeface.BOLD);
         tvFoundText.setGravity(Gravity.CENTER);
         tvFoundText.setPadding(0, dp(20), 0, dp(12));
+
         root.addView(tvFoundText, fullWidthWrap());
 
         pairingCodeInput = new EditText(this);
@@ -154,23 +162,32 @@ public class PhoneRemoteActivity extends Activity {
         pairingCodeInput.setPadding(
                 dp(12), dp(12), dp(12), dp(12)
         );
-        pairingCodeInput.setBackground(round(PANEL, dp(10)));
-        root.addView(pairingCodeInput, fullWidth(dp(58)));
+        pairingCodeInput.setBackground(
+                round(PANEL, dp(10))
+        );
+
+        root.addView(
+                pairingCodeInput,
+                fullWidth(dp(58))
+        );
 
         connectButton = makeButton("CONNECT TO TV");
+
         LinearLayout.LayoutParams connectParams =
                 fullWidth(dp(54));
         connectParams.topMargin = dp(12);
-        root.addView(connectButton, connectParams);
 
+        root.addView(connectButton, connectParams);
         connectButton.setOnClickListener(v -> connectToTv());
 
         View separator = new View(this);
         separator.setBackgroundColor(Color.DKGRAY);
+
         LinearLayout.LayoutParams separatorParams =
                 fullWidth(dp(1));
         separatorParams.topMargin = dp(22);
         separatorParams.bottomMargin = dp(18);
+
         root.addView(separator, separatorParams);
 
         TextView songHeading = new TextView(this);
@@ -178,6 +195,7 @@ public class PhoneRemoteActivity extends Activity {
         songHeading.setTextColor(GREEN);
         songHeading.setTextSize(17);
         songHeading.setTypeface(null, Typeface.BOLD);
+
         root.addView(songHeading, fullWidthWrap());
 
         songInput = new EditText(this);
@@ -190,21 +208,26 @@ public class PhoneRemoteActivity extends Activity {
                 dp(14), dp(12), dp(14), dp(12)
         );
         songInput.setBackground(round(PANEL, dp(10)));
+
         root.addView(songInput, fullWidth(dp(58)));
 
         searchButton = makeButton("SEARCH ON TV");
+
         LinearLayout.LayoutParams searchParams =
                 fullWidth(dp(58));
         searchParams.topMargin = dp(12);
+
         root.addView(searchButton, searchParams);
 
         searchButton.setEnabled(false);
         searchButton.setOnClickListener(v -> sendSearch());
 
         disconnectButton = makeButton("DISCONNECT");
+
         LinearLayout.LayoutParams disconnectParams =
                 fullWidth(dp(48));
         disconnectParams.topMargin = dp(10);
+
         root.addView(disconnectButton, disconnectParams);
 
         disconnectButton.setVisibility(View.GONE);
@@ -216,6 +239,7 @@ public class PhoneRemoteActivity extends Activity {
         statusText.setTextSize(14);
         statusText.setGravity(Gravity.CENTER);
         statusText.setPadding(0, dp(20), 0, dp(10));
+
         root.addView(statusText, fullWidthWrap());
 
         setContentView(scrollView);
@@ -238,9 +262,12 @@ public class PhoneRemoteActivity extends Activity {
                 new NsdManager.DiscoveryListener() {
 
                     @Override
-                    public void onDiscoveryStarted(String serviceType) {
+                    public void onDiscoveryStarted(
+                            String serviceType) {
                         discovering = true;
-                        setStatus("Searching for Donut4U TV...");
+                        setStatus(
+                                "Searching for Donut4U TV..."
+                        );
                     }
 
                     @Override
@@ -266,19 +293,24 @@ public class PhoneRemoteActivity extends Activity {
                     @Override
                     public void onServiceLost(
                             NsdServiceInfo serviceInfo) {
+
                         if (!connected) {
                             tvAddress = null;
                             tvPort = -1;
+
                             mainHandler.post(() -> {
-                                tvFoundText.setText(
-                                        "TV is not currently visible."
-                                );
+                                if (!closing && tvFoundText != null) {
+                                    tvFoundText.setText(
+                                            "TV is not currently visible."
+                                    );
+                                }
                             });
                         }
                     }
 
                     @Override
-                    public void onDiscoveryStopped(String serviceType) {
+                    public void onDiscoveryStopped(
+                            String serviceType) {
                         discovering = false;
                     }
 
@@ -286,7 +318,9 @@ public class PhoneRemoteActivity extends Activity {
                     public void onStartDiscoveryFailed(
                             String serviceType,
                             int errorCode) {
+
                         discovering = false;
+
                         setStatus(
                                 "Could not search for TV. "
                                         + "Please reopen this screen."
@@ -302,6 +336,7 @@ public class PhoneRemoteActivity extends Activity {
                     public void onStopDiscoveryFailed(
                             String serviceType,
                             int errorCode) {
+
                         try {
                             nsdManager.stopServiceDiscovery(this);
                         } catch (Exception ignored) {
@@ -321,7 +356,9 @@ public class PhoneRemoteActivity extends Activity {
     }
 
     @SuppressWarnings("deprecation")
-    private void resolveTvService(NsdServiceInfo serviceInfo) {
+    private void resolveTvService(
+            NsdServiceInfo serviceInfo) {
+
         nsdManager.resolveService(
                 serviceInfo,
                 new NsdManager.ResolveListener() {
@@ -330,7 +367,9 @@ public class PhoneRemoteActivity extends Activity {
                     public void onResolveFailed(
                             NsdServiceInfo serviceInfo,
                             int errorCode) {
+
                         resolving = false;
+
                         setStatus(
                                 "Found TV, but could not connect to it. "
                                         + "Check the Wi-Fi connection."
@@ -340,6 +379,7 @@ public class PhoneRemoteActivity extends Activity {
                     @Override
                     public void onServiceResolved(
                             NsdServiceInfo resolvedInfo) {
+
                         resolving = false;
 
                         tvAddress = resolvedInfo.getHost();
@@ -350,8 +390,10 @@ public class PhoneRemoteActivity extends Activity {
                                 tvFoundText.setText(
                                         "FOUND: " + discoveredServiceName
                                 );
+
                                 setStatus(
-                                        "TV found. Enter the code shown on the TV."
+                                        "TV found. Enter the code shown "
+                                                + "on the TV."
                                 );
                             }
                         });
@@ -368,7 +410,8 @@ public class PhoneRemoteActivity extends Activity {
 
         if (tvAddress == null || tvPort <= 0) {
             setStatus(
-                    "TV not found yet. Keep both devices on the same network."
+                    "TV not found yet. Keep both devices "
+                            + "on the same network."
             );
             return;
         }
@@ -392,25 +435,31 @@ public class PhoneRemoteActivity extends Activity {
         networkExecutor.execute(() -> {
             try {
                 Socket newSocket = new Socket();
+
                 newSocket.connect(
-                        new java.net.InetSocketAddress(address, port),
+                        new java.net.InetSocketAddress(
+                                address, port
+                        ),
                         8000
                 );
+
                 newSocket.setSoTimeout(15000);
 
-                BufferedReader newReader = new BufferedReader(
-                        new InputStreamReader(
-                                newSocket.getInputStream(),
-                                StandardCharsets.UTF_8
-                        )
-                );
+                BufferedReader newReader =
+                        new BufferedReader(
+                                new InputStreamReader(
+                                        newSocket.getInputStream(),
+                                        StandardCharsets.UTF_8
+                                )
+                        );
 
-                BufferedWriter newWriter = new BufferedWriter(
-                        new OutputStreamWriter(
-                                newSocket.getOutputStream(),
-                                StandardCharsets.UTF_8
-                        )
-                );
+                BufferedWriter newWriter =
+                        new BufferedWriter(
+                                new OutputStreamWriter(
+                                        newSocket.getOutputStream(),
+                                        StandardCharsets.UTF_8
+                                )
+                        );
 
                 JSONObject request = new JSONObject();
                 request.put("code", code);
@@ -422,7 +471,9 @@ public class PhoneRemoteActivity extends Activity {
                 String responseLine = newReader.readLine();
 
                 if (responseLine == null) {
-                    throw new Exception("TV did not respond.");
+                    throw new Exception(
+                            "TV did not respond."
+                    );
                 }
 
                 JSONObject response =
@@ -433,11 +484,13 @@ public class PhoneRemoteActivity extends Activity {
 
                     mainHandler.post(() -> {
                         connectButton.setEnabled(true);
+
                         setStatus(
                                 "Incorrect or expired code. "
                                         + "Check the TV screen."
                         );
                     });
+
                     return;
                 }
 
@@ -458,17 +511,25 @@ public class PhoneRemoteActivity extends Activity {
                     pairingCodeInput.setEnabled(false);
                     searchButton.setEnabled(true);
                     disconnectButton.setVisibility(View.VISIBLE);
-                    setStatus("CONNECTED. Type a song and tap SEARCH ON TV.");
+
+                    setStatus(
+                            "CONNECTED. Type a song and tap SEARCH ON TV."
+                    );
+
                     songInput.requestFocus();
                     showPhoneKeyboard();
                 });
 
             } catch (Exception e) {
                 mainHandler.post(() -> {
-                    connectButton.setEnabled(true);
-                    setStatus(
-                            "Connection failed. Check Wi-Fi and the TV code."
-                    );
+                    if (!closing) {
+                        connectButton.setEnabled(true);
+
+                        setStatus(
+                                "Connection failed. Check Wi-Fi "
+                                        + "and the TV code."
+                        );
+                    }
                 });
             }
         });
@@ -484,12 +545,16 @@ public class PhoneRemoteActivity extends Activity {
                 .toString().trim();
 
         if (songTitle.isEmpty()) {
-            songInput.setError("Type a song title first.");
+            songInput.setError(
+                    "Type a song title first."
+            );
             return;
         }
 
         if (songTitle.length() > 200) {
-            songInput.setError("Please use 200 characters or less.");
+            songInput.setError(
+                    "Please use 200 characters or less."
+            );
             return;
         }
 
@@ -509,7 +574,9 @@ public class PhoneRemoteActivity extends Activity {
                 String responseLine = reader.readLine();
 
                 if (responseLine == null) {
-                    throw new Exception("TV disconnected.");
+                    throw new Exception(
+                            "TV disconnected."
+                    );
                 }
 
                 JSONObject response =
@@ -519,6 +586,10 @@ public class PhoneRemoteActivity extends Activity {
                         response.optBoolean("ok", false);
 
                 mainHandler.post(() -> {
+                    if (closing) {
+                        return;
+                    }
+
                     searchButton.setEnabled(connected);
 
                     if (success) {
@@ -526,16 +597,21 @@ public class PhoneRemoteActivity extends Activity {
                                 "Search sent to TV: " + songTitle
                         );
                     } else {
-                        setStatus("TV could not accept that search.");
+                        setStatus(
+                                "TV could not accept that search."
+                        );
                     }
                 });
 
             } catch (Exception e) {
                 mainHandler.post(() -> {
-                    setStatus(
-                            "Connection lost. Please reconnect to the TV."
-                    );
-                    disconnect();
+                    if (!closing) {
+                        setStatus(
+                                "Connection lost. Please reconnect "
+                                        + "to the TV."
+                        );
+                        disconnect();
+                    }
                 });
             }
         });
@@ -544,21 +620,25 @@ public class PhoneRemoteActivity extends Activity {
     private void disconnect() {
         connected = false;
 
-        networkExecutor.execute(() -> {
-            try {
-                if (writer != null) {
-                    JSONObject request = new JSONObject();
-                    request.put("type", "disconnect");
+        try {
+            networkExecutor.execute(() -> {
+                try {
+                    if (writer != null) {
+                        JSONObject request = new JSONObject();
+                        request.put("type", "disconnect");
 
-                    writer.write(request.toString());
-                    writer.newLine();
-                    writer.flush();
+                        writer.write(request.toString());
+                        writer.newLine();
+                        writer.flush();
+                    }
+                } catch (Exception ignored) {
                 }
-            } catch (Exception ignored) {
-            }
 
+                closeSocket();
+            });
+        } catch (Exception ignored) {
             closeSocket();
-        });
+        }
 
         if (searchButton != null) {
             searchButton.setEnabled(false);
@@ -626,6 +706,7 @@ public class PhoneRemoteActivity extends Activity {
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
         button.setBackground(round(GREEN, dp(10)));
+
         return button;
     }
 
@@ -638,6 +719,7 @@ public class PhoneRemoteActivity extends Activity {
 
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
+
         return drawable;
     }
 
@@ -666,10 +748,13 @@ public class PhoneRemoteActivity extends Activity {
         closing = true;
         connected = false;
 
-        if (discovering && nsdManager != null
+        if (discovering
+                && nsdManager != null
                 && discoveryListener != null) {
             try {
-                nsdManager.stopServiceDiscovery(discoveryListener);
+                nsdManager.stopServiceDiscovery(
+                        discoveryListener
+                );
             } catch (Exception ignored) {
             }
         }
