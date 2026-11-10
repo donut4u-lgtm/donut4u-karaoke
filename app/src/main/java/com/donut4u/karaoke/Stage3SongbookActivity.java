@@ -1,18 +1,24 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.InputMethodManager;
+import android.content.Context;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -35,6 +41,9 @@ public class Stage3SongbookActivity extends Activity {
     private static final String SELECTED_SOUNDFONT_KEY =
             "selected_soundfont_uri";
 
+    private static final String EXTRA_TV_MODE =
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
+
     private static final int REQUEST_IMPORT_SONGS = 3103;
     private static final int REQUEST_IMPORT_SONGLIST = 3104;
     private static final int REQUEST_IMPORT_SONGHUB_FOLDER = 3105;
@@ -46,6 +55,14 @@ public class Stage3SongbookActivity extends Activity {
     private TextView countLabel;
     private SharedPreferences preferences;
     private int nextNumber = 10000;
+
+    // Phone-to-TV keyboard connection.
+    private boolean tvMode = false;
+    private boolean activityDestroyed = false;
+
+    private TvKeyboardReceiver tvKeyboardReceiver;
+    private TextView tvKeyboardCodeText;
+    private TextView tvKeyboardStatusText;
 
     private static class Song {
         String number;
@@ -64,6 +81,8 @@ public class Stage3SongbookActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        tvMode = getIntent().getBooleanExtra(EXTRA_TV_MODE, false);
 
         Stage3SongQueue.initialize(this);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -153,10 +172,43 @@ public class Stage3SongbookActivity extends Activity {
         searchInput.setTextColor(Color.WHITE);
         searchInput.setTextSize(16);
         searchInput.setPadding(dp(12), 0, dp(12), 0);
-        searchInput.setBackgroundColor(Color.rgb(35, 48, 40));
+
+        if (tvMode) {
+            searchInput.setBackground(createTvSearchBackground());
+            searchInput.setFocusable(true);
+            searchInput.setFocusableInTouchMode(true);
+            searchInput.setShowSoftInputOnFocus(false);
+            searchInput.setSelectAllOnFocus(false);
+            searchInput.setImeOptions(
+                    android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        } else {
+            searchInput.setBackgroundColor(Color.rgb(35, 48, 40));
+        }
 
         root.addView(searchInput,
-                new LinearLayout.LayoutParams(-1, dp(48)));
+                new LinearLayout.LayoutParams(-1, dp(52)));
+
+        if (tvMode) {
+            addTvPhoneKeyboardPanel(root);
+        } else {
+            Button phoneKeyboardButton =
+                    makeButton("USE PHONE AS KEYBOARD");
+
+            phoneKeyboardButton.setOnClickListener(v -> {
+                try {
+                    startActivity(new Intent(
+                            Stage3SongbookActivity.this,
+                            PhoneRemoteActivity.class));
+                } catch (Exception e) {
+                    Toast.makeText(
+                            Stage3SongbookActivity.this,
+                            "Could not open phone keyboard.",
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+
+            root.addView(phoneKeyboardButton, buttonParams());
+        }
 
         countLabel = new TextView(this);
         countLabel.setTextColor(Color.rgb(140, 255, 180));
@@ -197,6 +249,176 @@ public class Stage3SongbookActivity extends Activity {
         });
     }
 
+    private void addTvPhoneKeyboardPanel(LinearLayout root) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(12), dp(8), dp(12), dp(8));
+        panel.setBackgroundColor(Color.rgb(18, 38, 27));
+
+        TextView heading = new TextView(this);
+        heading.setText("PHONE KEYBOARD CONNECTION");
+        heading.setTextColor(Color.rgb(80, 255, 150));
+        heading.setTextSize(15);
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        panel.addView(heading);
+
+        TextView instructions = new TextView(this);
+        instructions.setText(
+                "Connect your phone and TV to the same Wi-Fi or hotspot.\n"
+                        + "Open Donut4U Phone Remote on your phone and enter this code:");
+        instructions.setTextColor(Color.WHITE);
+        instructions.setTextSize(13);
+        instructions.setGravity(Gravity.CENTER);
+        instructions.setPadding(0, dp(5), 0, dp(5));
+        panel.addView(instructions);
+
+        tvKeyboardCodeText = new TextView(this);
+        tvKeyboardCodeText.setText("------");
+        tvKeyboardCodeText.setTextColor(Color.rgb(80, 255, 150));
+        tvKeyboardCodeText.setTextSize(30);
+        tvKeyboardCodeText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        tvKeyboardCodeText.setGravity(Gravity.CENTER);
+        tvKeyboardCodeText.setLetterSpacing(0.18f);
+        panel.addView(tvKeyboardCodeText);
+
+        tvKeyboardStatusText = new TextView(this);
+        tvKeyboardStatusText.setText("Starting phone keyboard connection...");
+        tvKeyboardStatusText.setTextColor(Color.LTGRAY);
+        tvKeyboardStatusText.setTextSize(12);
+        tvKeyboardStatusText.setGravity(Gravity.CENTER);
+        tvKeyboardStatusText.setPadding(0, dp(3), 0, dp(3));
+        panel.addView(tvKeyboardStatusText);
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(8);
+        params.bottomMargin = dp(8);
+
+        root.addView(panel, params);
+    }
+
+    private StateListDrawable createTvSearchBackground() {
+        GradientDrawable focused = new GradientDrawable();
+        focused.setColor(Color.rgb(0, 0, 0));
+        focused.setCornerRadius(dp(6));
+        focused.setStroke(dp(3), Color.rgb(40, 255, 125));
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(Color.rgb(25, 35, 29));
+        normal.setCornerRadius(dp(6));
+        normal.setStroke(dp(1), Color.rgb(125, 150, 130));
+
+        GradientDrawable selected = new GradientDrawable();
+        selected.setColor(Color.rgb(0, 0, 0));
+        selected.setCornerRadius(dp(6));
+        selected.setStroke(dp(3), Color.rgb(40, 255, 125));
+
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_focused}, focused);
+        states.addState(new int[]{android.R.attr.state_selected}, selected);
+        states.addState(new int[]{}, normal);
+
+        return states;
+    }
+
+    private void startTvKeyboardReceiver() {
+        if (!tvMode || activityDestroyed
+                || tvKeyboardReceiver != null
+                || tvKeyboardCodeText == null
+                || tvKeyboardStatusText == null) {
+            return;
+        }
+
+        tvKeyboardStatusText.setText(
+                "Starting phone keyboard connection...");
+
+        tvKeyboardReceiver = new TvKeyboardReceiver(
+                this,
+                new TvKeyboardReceiver.Listener() {
+
+                    @Override
+                    public void onPairingCodeReady(String code) {
+                        if (activityDestroyed
+                                || tvKeyboardCodeText == null) {
+                            return;
+                        }
+
+                        tvKeyboardCodeText.setText(code);
+                    }
+
+                    @Override
+                    public void onSearchRequested(String songTitle) {
+                        if (activityDestroyed || searchInput == null) {
+                            return;
+                        }
+
+                        String text = songTitle == null
+                                ? "" : songTitle.trim();
+
+                        searchInput.setText(text);
+                        searchInput.setSelection(
+                                searchInput.getText().length());
+
+                        // The existing TextWatcher automatically
+                        // filters the Stage 3 songbook.
+                    }
+
+                    @Override
+                    public void onStatusChanged(String message) {
+                        if (activityDestroyed
+                                || tvKeyboardStatusText == null) {
+                            return;
+                        }
+
+                        tvKeyboardStatusText.setText(message);
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        if (activityDestroyed
+                                || tvKeyboardStatusText == null) {
+                            return;
+                        }
+
+                        tvKeyboardStatusText.setText(
+                                "Connection error: " + message);
+
+                        android.util.Log.e(
+                                "Stage3Songbook",
+                                "Phone keyboard receiver: " + message);
+                    }
+                });
+
+        try {
+            tvKeyboardReceiver.start();
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage3Songbook",
+                    "Could not start phone keyboard receiver.", e);
+
+            tvKeyboardStatusText.setText(
+                    "Could not start phone keyboard connection.");
+            tvKeyboardReceiver = null;
+        }
+    }
+
+    private void stopTvKeyboardReceiver() {
+        if (tvKeyboardReceiver == null) {
+            return;
+        }
+
+        try {
+            tvKeyboardReceiver.stop();
+        } catch (Exception e) {
+            android.util.Log.w(
+                    "Stage3Songbook",
+                    "Error stopping phone keyboard receiver.", e);
+        }
+
+        tvKeyboardReceiver = null;
+    }
+
     private Button makeButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -204,8 +426,7 @@ public class Stage3SongbookActivity extends Activity {
         button.setTextSize(14);
         button.setAllCaps(false);
         button.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(
-                        Color.rgb(20, 125, 65)));
+                ColorStateList.valueOf(Color.rgb(20, 125, 65)));
         return button;
     }
 
@@ -213,8 +434,7 @@ public class Stage3SongbookActivity extends Activity {
         Button button = makeButton("DELETE FROM LIST");
         button.setTextSize(12);
         button.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(
-                        Color.rgb(170, 45, 45)));
+                ColorStateList.valueOf(Color.rgb(170, 45, 45)));
         return button;
     }
 
@@ -950,8 +1170,6 @@ public class Stage3SongbookActivity extends Activity {
                                 return;
                             }
 
-                            // If this was the selected SoundFont,
-                            // clear its selection without deleting its file.
                             if ("SOUNDFONT".equalsIgnoreCase(song.type)
                                     || song.title.toLowerCase(Locale.ROOT)
                                     .endsWith(".sf2")) {
@@ -1145,8 +1363,6 @@ public class Stage3SongbookActivity extends Activity {
         }
 
         try {
-            // Internal player handoff is preserved.
-            // This is not a user-facing queue operation.
             Stage3SongQueue.initialize(this);
             Stage3SongQueue.setNowPlaying(
                     new Stage3SongQueue.QueuedSong(
@@ -1176,11 +1392,29 @@ public class Stage3SongbookActivity extends Activity {
 
             Stage3SongQueue.initialize(this);
 
-            // Reload saved songs, including newly registered downloads.
             loadSongs();
-
-            // Keep the current search text while refreshing the list.
             renderSongs(searchInput.getText().toString());
         }
+
+        if (tvMode) {
+            startTvKeyboardReceiver();
+
+            if (searchInput != null) {
+                searchInput.requestFocus();
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        stopTvKeyboardReceiver();
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        activityDestroyed = true;
+        stopTvKeyboardReceiver();
+        super.onDestroy();
     }
 }
