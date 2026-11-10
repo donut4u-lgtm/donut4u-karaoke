@@ -73,10 +73,10 @@ public class OnlineSongActivity extends Activity {
     private static final int MUTED = Color.LTGRAY;
 
     private static final String EXTRA_TV_MODE =
-            "com.donut4u.karaoke.EXTRA_TV_MODE";
+            "com.sakyna.karaoke.EXTRA_TV_MODE";
 
     private static final String EXTRA_TV_STAGE1 =
-            "com.donut4u.karaoke.EXTRA_TV_STAGE1";
+            "com.sakyna.karaoke.EXTRA_TV_STAGE1";
 
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
@@ -674,7 +674,6 @@ public class OnlineSongActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(20));
         root.addView(subtitle, fullWidthWrap());
 
-        // TV displays the pairing code. The phone supplies the keyboard.
         if (isTvStage1()) {
             addTvPhoneKeyboardPanel(root);
         } else {
@@ -707,7 +706,6 @@ public class OnlineSongActivity extends Activity {
         searchBox.setFocusable(true);
         searchBox.setFocusableInTouchMode(true);
 
-        // Do not open the TV's own soft keyboard.
         searchBox.setShowSoftInputOnFocus(!isTvStage1());
 
         styleEdit(searchBox);
@@ -895,6 +893,7 @@ public class OnlineSongActivity extends Activity {
         }
     }
 
+    // Only one declaration of createTvSearchBackground() is retained.
     private StateListDrawable createTvSearchBackground() {
         GradientDrawable focused = new GradientDrawable();
         focused.setColor(Color.rgb(0, 0, 0));
@@ -2097,37 +2096,6 @@ public class OnlineSongActivity extends Activity {
         edit.setTextSize(16);
         edit.setPadding(dp(12), 0, dp(12), 0);
         edit.setBackground(round(PANEL, dp(8)));
-    }
-
-    private StateListDrawable createTvSearchBackground() {
-        GradientDrawable focused = new GradientDrawable();
-        focused.setColor(Color.rgb(0, 0, 0));
-        focused.setCornerRadius(dp(8));
-        focused.setStroke(dp(3), GREEN);
-
-        GradientDrawable normal = new GradientDrawable();
-        normal.setColor(Color.rgb(15, 18, 20));
-        normal.setCornerRadius(dp(8));
-        normal.setStroke(dp(2), Color.rgb(80, 100, 90));
-
-        StateListDrawable states = new StateListDrawable();
-
-        states.addState(
-                new int[]{android.R.attr.state_focused},
-                focused
-        );
-
-        states.addState(
-                new int[]{android.R.attr.state_selected},
-                focused
-        );
-
-        states.addState(
-                new int[]{},
-                normal
-        );
-
-        return states;
     }
 
     private Button makeButton(String text) {
