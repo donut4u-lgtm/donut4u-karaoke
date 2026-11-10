@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -121,8 +122,16 @@ public class OnlineSongActivity extends Activity {
 
     private EditText searchBox;
     private Button searchButton;
+    private Button phoneKeyboardButton;
     private TextView status;
     private LinearLayout resultsContainer;
+
+    // Phone-to-TV keyboard connection.
+    private TvKeyboardReceiver tvKeyboardReceiver;
+    private TextView tvPairingCodeText;
+    private TextView tvKeyboardStatusText;
+
+    private boolean tvStage1Mode = false;
 
     private View searchScreen;
     private FrameLayout playbackScreen;
@@ -165,13 +174,6 @@ public class OnlineSongActivity extends Activity {
         String channel;
     }
 
-    /**
-     * Detect Android TV using the explicit TV-mode flag,
-     * the Leanback system feature, or television UI mode.
-     *
-     * The explicit flag also supports TV routing when an
-     * activity is launched by another TV-aware activity.
-     */
     private boolean isAndroidTv() {
         if (getIntent() != null
                 && getIntent().getBooleanExtra(EXTRA_TV_MODE, false)) {
@@ -183,6 +185,10 @@ public class OnlineSongActivity extends Activity {
                 || (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_TYPE_MASK)
                 == Configuration.UI_MODE_TYPE_TELEVISION;
+    }
+
+    private boolean isTvStage1() {
+        return tvStage1Mode;
     }
 
     @Override
@@ -203,29 +209,16 @@ public class OnlineSongActivity extends Activity {
 
         AppUpdateChecker.checkForUpdates(this);
 
-        /*
-         * STAGE 1 ON ANDROID TV:
-         *
-         * The TV launcher passes EXTRA_TV_STAGE1 when Stage 1
-         * is selected. Use the existing Stage 1 search, playback,
-         * microphone and scoring screen without running the
-         * phone-only installation session check.
-         *
-         * This does not change or invalidate the phone session.
-         */
         if (isAndroidTv()
                 && getIntent() != null
                 && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
+
+            tvStage1Mode = true;
             sessionValid = true;
             buildSearchScreen();
             return;
         }
 
-        /*
-         * Direct TV entry without a selected Stage 1 opens the
-         * TV launcher/songbook entry point. Normal Stage 1 access
-         * comes from TvStageMenuActivity.
-         */
         if (isAndroidTv()) {
             Intent tvIntent = new Intent(
                     OnlineSongActivity.this,
@@ -239,7 +232,6 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        // Original phone session flow remains unchanged.
         installationId = getInstallationId();
 
         showSessionLoadingScreen();
@@ -681,37 +673,58 @@ public class OnlineSongActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(20));
         root.addView(subtitle, fullWidthWrap());
 
-        // TV KEYBOARD FIX: make the search field focusable
-        // and explicitly request the Xiaomi TV soft keyboard.
+        // TV displays the pairing code. The phone supplies the keyboard.
+        if (isTvStage1()) {
+            addTvPhoneKeyboardPanel(root);
+        } else {
+            phoneKeyboardButton =
+                    makeButton("USE PHONE AS KEYBOARD");
+
+            LinearLayout.LayoutParams phoneKeyboardParams =
+                    fullWidth(dp(50));
+
+            phoneKeyboardParams.bottomMargin = dp(10);
+            root.addView(phoneKeyboardButton, phoneKeyboardParams);
+
+            phoneKeyboardButton.setOnClickListener(v -> {
+                if (!sessionValid || closing) {
+                    toast("Please wait while your session is checked.");
+                    return;
+                }
+
+                startActivity(new Intent(
+                        OnlineSongActivity.this,
+                        PhoneRemoteActivity.class
+                ));
+            });
+        }
+
         searchBox = new EditText(this);
         searchBox.setSingleLine(true);
         searchBox.setHint("Song title or artist");
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         searchBox.setFocusable(true);
         searchBox.setFocusableInTouchMode(true);
-        searchBox.setShowSoftInputOnFocus(true);
+
+        // Do not open the TV's own soft keyboard.
+        searchBox.setShowSoftInputOnFocus(!isTvStage1());
+
         styleEdit(searchBox);
 
-        searchBox.setOnClickListener(v -> showSearchKeyboard());
+        if (!isTvStage1()) {
+            searchBox.setOnClickListener(v -> showSearchKeyboard());
 
-        searchBox.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus && isAndroidTv()) {
-                searchBox.postDelayed(
-                        this::showSearchKeyboard, 150);
-            }
-        });
-
-        searchBox.setOnKeyListener((v, keyCode, event) -> {
-            if (isAndroidTv()
-                    && event.getAction() == KeyEvent.ACTION_UP
-                    && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
-                    || keyCode == KeyEvent.KEYCODE_ENTER)) {
-                showSearchKeyboard();
-                return true;
-            }
-
-            return false;
-        });
+            searchBox.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus && !isTvStage1()) {
+                    searchBox.postDelayed(
+                            this::showSearchKeyboard, 150);
+                }
+            });
+        } else {
+            searchBox.setOnClickListener(null);
+            searchBox.setOnFocusChangeListener(null);
+            searchBox.setOnKeyListener(null);
+        }
 
         root.addView(searchBox, fullWidth(dp(56)));
 
@@ -855,14 +868,112 @@ public class OnlineSongActivity extends Activity {
             return false;
         });
 
-        // Give the TV search field initial focus after screen creation.
-        if (isAndroidTv()) {
+        if (isTvStage1()) {
+            searchBox.clearFocus();
+            startTvPhoneKeyboardReceiver();
+        } else {
             searchBox.requestFocus();
         }
     }
 
+    private void addTvPhoneKeyboardPanel(LinearLayout root) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
+        panel.setBackground(round(PANEL, dp(12)));
+
+        LinearLayout.LayoutParams panelParams = fullWidthWrap();
+        panelParams.bottomMargin = dp(14);
+        root.addView(panel, panelParams);
+
+        TextView instruction = new TextView(this);
+        instruction.setText(
+                "USE YOUR PHONE KEYBOARD\n"
+                        + "Open Donut4U on your phone, enter Stage 1, "
+                        + "then tap USE PHONE AS KEYBOARD.\n"
+                        + "Connect both devices to the same Wi-Fi "
+                        + "or phone hotspot and enter this code."
+        );
+        instruction.setTextColor(WHITE);
+        instruction.setTextSize(14);
+        instruction.setGravity(Gravity.CENTER);
+        panel.addView(instruction, fullWidthWrap());
+
+        tvPairingCodeText = new TextView(this);
+        tvPairingCodeText.setText("------");
+        tvPairingCodeText.setTextColor(GREEN);
+        tvPairingCodeText.setTextSize(38);
+        tvPairingCodeText.setTypeface(null, Typeface.BOLD);
+        tvPairingCodeText.setGravity(Gravity.CENTER);
+        tvPairingCodeText.setLetterSpacing(0.18f);
+        tvPairingCodeText.setPadding(0, dp(12), 0, dp(8));
+        panel.addView(tvPairingCodeText, fullWidthWrap());
+
+        tvKeyboardStatusText = new TextView(this);
+        tvKeyboardStatusText.setText("Starting phone keyboard connection...");
+        tvKeyboardStatusText.setTextColor(MUTED);
+        tvKeyboardStatusText.setTextSize(12);
+        tvKeyboardStatusText.setGravity(Gravity.CENTER);
+        panel.addView(tvKeyboardStatusText, fullWidthWrap());
+    }
+
+    private void startTvPhoneKeyboardReceiver() {
+        if (!isTvStage1() || closing || tvKeyboardReceiver != null) {
+            return;
+        }
+
+        tvKeyboardReceiver = new TvKeyboardReceiver(
+                getApplicationContext(),
+                new TvKeyboardReceiver.Listener() {
+                    @Override
+                    public void onPairingCodeReady(String code) {
+                        if (closing || tvPairingCodeText == null) {
+                            return;
+                        }
+
+                        tvPairingCodeText.setText(code);
+                    }
+
+                    @Override
+                    public void onSearchRequested(String songTitle) {
+                        if (closing || searchBox == null) {
+                            return;
+                        }
+
+                        searchBox.setText(songTitle);
+                        searchVideos();
+                    }
+
+                    @Override
+                    public void onStatusChanged(String message) {
+                        if (closing || tvKeyboardStatusText == null) {
+                            return;
+                        }
+
+                        tvKeyboardStatusText.setText(message);
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        if (closing) {
+                            return;
+                        }
+
+                        if (tvKeyboardStatusText != null) {
+                            tvKeyboardStatusText.setText(message);
+                        }
+
+                        toast(message);
+                    }
+                }
+        );
+
+        tvKeyboardReceiver.start();
+    }
+
     private void showSearchKeyboard() {
-        if (searchBox == null) {
+        if (searchBox == null || isTvStage1()) {
             return;
         }
 
@@ -2064,6 +2175,11 @@ public class OnlineSongActivity extends Activity {
         searchGeneration++;
 
         cancelPendingSessionMismatch();
+
+        if (tvKeyboardReceiver != null) {
+            tvKeyboardReceiver.stop();
+            tvKeyboardReceiver = null;
+        }
 
         stopMicrophoneMonitoring(false);
 
