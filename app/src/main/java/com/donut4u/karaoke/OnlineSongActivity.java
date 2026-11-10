@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -72,11 +71,12 @@ public class OnlineSongActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
+    // FIXED: Must match TvStageMenuActivity and MainActivity.
     private static final String EXTRA_TV_MODE =
-            "com.sakyna.karaoke.EXTRA_TV_MODE";
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
 
     private static final String EXTRA_TV_STAGE1 =
-            "com.sakyna.karaoke.EXTRA_TV_STAGE1";
+            "com.donut4u.karaoke.EXTRA_TV_STAGE1";
 
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
