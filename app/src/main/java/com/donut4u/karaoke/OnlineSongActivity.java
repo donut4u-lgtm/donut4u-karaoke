@@ -11,6 +11,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -711,19 +712,33 @@ public class OnlineSongActivity extends Activity {
 
         styleEdit(searchBox);
 
-        if (!isTvStage1()) {
+        if (isTvStage1()) {
+            searchBox.setBackground(createTvSearchBackground());
+            searchBox.setFocusable(true);
+            searchBox.setFocusableInTouchMode(true);
+            searchBox.setShowSoftInputOnFocus(false);
+
+            searchBox.setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() == KeyEvent.ACTION_UP
+                        && (keyCode == KeyEvent.KEYCODE_ENTER
+                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                        || keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
+                    searchVideos();
+                    return true;
+                }
+
+                return false;
+            });
+
+        } else {
             searchBox.setOnClickListener(v -> showSearchKeyboard());
 
             searchBox.setOnFocusChangeListener((v, hasFocus) -> {
-                if (hasFocus && !isTvStage1()) {
+                if (hasFocus) {
                     searchBox.postDelayed(
                             this::showSearchKeyboard, 150);
                 }
             });
-        } else {
-            searchBox.setOnClickListener(null);
-            searchBox.setOnFocusChangeListener(null);
-            searchBox.setOnKeyListener(null);
         }
 
         root.addView(searchBox, fullWidth(dp(56)));
@@ -860,7 +875,12 @@ public class OnlineSongActivity extends Activity {
         setContentView(searchScreen);
 
         searchBox.setOnEditorActionListener((view, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH
+                    || (event != null
+                    && event.getAction() == KeyEvent.ACTION_UP
+                    && (event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                    || event.getKeyCode()
+                    == KeyEvent.KEYCODE_NUMPAD_ENTER))) {
                 searchVideos();
                 return true;
             }
@@ -870,10 +890,40 @@ public class OnlineSongActivity extends Activity {
 
         if (isTvStage1()) {
             searchBox.clearFocus();
-            startTvPhoneKeyboardReceiver();
         } else {
             searchBox.requestFocus();
         }
+    }
+
+    private StateListDrawable createTvSearchBackground() {
+        GradientDrawable focused = new GradientDrawable();
+        focused.setColor(Color.rgb(0, 0, 0));
+        focused.setCornerRadius(dp(8));
+        focused.setStroke(dp(3), GREEN);
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(Color.rgb(15, 18, 20));
+        normal.setCornerRadius(dp(8));
+        normal.setStroke(dp(2), Color.rgb(80, 100, 90));
+
+        StateListDrawable states = new StateListDrawable();
+
+        states.addState(
+                new int[]{android.R.attr.state_focused},
+                focused
+        );
+
+        states.addState(
+                new int[]{android.R.attr.state_selected},
+                focused
+        );
+
+        states.addState(
+                new int[]{},
+                normal
+        );
+
+        return states;
     }
 
     private void addTvPhoneKeyboardPanel(LinearLayout root) {
@@ -2049,6 +2099,37 @@ public class OnlineSongActivity extends Activity {
         edit.setBackground(round(PANEL, dp(8)));
     }
 
+    private StateListDrawable createTvSearchBackground() {
+        GradientDrawable focused = new GradientDrawable();
+        focused.setColor(Color.rgb(0, 0, 0));
+        focused.setCornerRadius(dp(8));
+        focused.setStroke(dp(3), GREEN);
+
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(Color.rgb(15, 18, 20));
+        normal.setCornerRadius(dp(8));
+        normal.setStroke(dp(2), Color.rgb(80, 100, 90));
+
+        StateListDrawable states = new StateListDrawable();
+
+        states.addState(
+                new int[]{android.R.attr.state_focused},
+                focused
+        );
+
+        states.addState(
+                new int[]{android.R.attr.state_selected},
+                focused
+        );
+
+        states.addState(
+                new int[]{},
+                normal
+        );
+
+        return states;
+    }
+
     private Button makeButton(String text) {
         Button button = new Button(this);
 
@@ -2100,6 +2181,11 @@ public class OnlineSongActivity extends Activity {
             adView.pause();
         }
 
+        if (tvKeyboardReceiver != null) {
+            tvKeyboardReceiver.stop();
+            tvKeyboardReceiver = null;
+        }
+
         if (microphoneMonitor != null
                 && microphoneMonitor.isRunning()) {
             microphoneWasStoppedByLifecycle = true;
@@ -2115,6 +2201,22 @@ public class OnlineSongActivity extends Activity {
 
         if (adView != null) {
             adView.resume();
+        }
+
+        if (isTvStage1()
+                && searchScreen != null
+                && searchBox != null
+                && !playbackVisible
+                && !donationScreenVisible
+                && !closing) {
+
+            startTvPhoneKeyboardReceiver();
+
+            searchBox.post(() -> {
+                if (searchBox != null && !closing) {
+                    searchBox.requestFocus();
+                }
+            });
         }
 
         if (microphoneWasStoppedByLifecycle) {
