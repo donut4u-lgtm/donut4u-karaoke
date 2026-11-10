@@ -30,6 +30,11 @@
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-5625332026157890~7539407143" />
 
+        <activity
+            android:name=".PhoneRemoteActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <activity android:name=".TvStageMenuActivity" android:exported="false" android:screenOrientation="landscape" />
         <activity android:name=".Stage4TvActivity" android:exported="false" android:screenOrientation="landscape" />
         <activity android:name=".Stage4TvPlayerActivity" android:exported="false" android:screenOrientation="landscape" android:hardwareAccelerated="true" />
