@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -9,6 +10,8 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -75,6 +78,9 @@ public class KaraokeStudioActivity extends Activity {
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/2970292504";
 
+    private static final String EXTRA_TV_MODE =
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
+
     private static final int BG = Color.rgb(18, 18, 24);
     private static final int PANEL = Color.rgb(35, 35, 46);
     private static final int ACCENT = Color.rgb(255, 185, 70);
@@ -96,6 +102,12 @@ public class KaraokeStudioActivity extends Activity {
     private ProgressBar progressBar;
     private WebView videoWebView;
     private AdView adView;
+
+    // PHONE-TO-TV KEYBOARD
+    private boolean tvMode;
+    private TvKeyboardReceiver tvKeyboardReceiver;
+    private TextView tvKeyboardCodeText;
+    private TextView tvKeyboardStatusText;
 
     // STAGE 2 MICROPHONE AND SINGING SCORE
     private Stage3MicrophoneMonitor microphoneMonitor;
@@ -151,6 +163,11 @@ public class KaraokeStudioActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        tvMode = getIntent().getBooleanExtra(
+                EXTRA_TV_MODE,
+                false
+        );
 
         FirebaseUser user =
                 FirebaseAuth.getInstance().getCurrentUser();
@@ -274,7 +291,18 @@ public class KaraokeStudioActivity extends Activity {
         searchInput.setPadding(
                 dp(12), dp(8), dp(12), dp(8)
         );
-        searchInput.setBackgroundColor(PANEL);
+
+        if (tvMode) {
+            searchInput.setBackground(
+                    createTvSearchBackground()
+            );
+            searchInput.setFocusable(true);
+            searchInput.setFocusableInTouchMode(true);
+            searchInput.setShowSoftInputOnFocus(false);
+            searchInput.setSelectAllOnFocus(false);
+        } else {
+            searchInput.setBackgroundColor(PANEL);
+        }
 
         root.addView(searchInput, matchWrap());
 
@@ -288,6 +316,46 @@ public class KaraokeStudioActivity extends Activity {
         root.addView(searchButton, searchParams);
 
         searchButton.setOnClickListener(v -> searchSongs());
+
+        if (tvMode) {
+            addTvPhoneKeyboardPanel();
+        } else {
+            Button phoneRemoteButton =
+                    button("USE PHONE AS KEYBOARD");
+
+            LinearLayout.LayoutParams remoteParams =
+                    matchWrap();
+
+            remoteParams.topMargin = dp(8);
+
+            root.addView(
+                    phoneRemoteButton,
+                    remoteParams
+            );
+
+            phoneRemoteButton.setOnClickListener(v -> {
+                try {
+                    startActivity(
+                            new Intent(
+                                    KaraokeStudioActivity.this,
+                                    PhoneRemoteActivity.class
+                            )
+                    );
+                } catch (Exception e) {
+                    Log.e(
+                            TAG,
+                            "Could not open phone remote",
+                            e
+                    );
+
+                    Toast.makeText(
+                            KaraokeStudioActivity.this,
+                            "Unable to open Phone Remote.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                }
+            });
+        }
 
         progressBar = new ProgressBar(this);
         progressBar.setVisibility(View.GONE);
@@ -555,6 +623,7 @@ public class KaraokeStudioActivity extends Activity {
 
             stopPlayback();
             stopStage2Microphone(false);
+            stopTvPhoneKeyboardReceiver();
 
             FirebaseAuth.getInstance().signOut();
 
@@ -658,6 +727,239 @@ public class KaraokeStudioActivity extends Activity {
         adParams.topMargin = dp(6);
 
         root.addView(adView, adParams);
+    }
+
+    // ------------------------------------------------
+    // TV PHONE KEYBOARD
+    // ------------------------------------------------
+
+    private GradientDrawable createSearchDrawable(
+            int fillColor,
+            int strokeColor,
+            int strokeWidth
+    ) {
+        GradientDrawable drawable =
+                new GradientDrawable();
+
+        drawable.setColor(fillColor);
+        drawable.setCornerRadius(dp(8));
+
+        if (strokeWidth > 0) {
+            drawable.setStroke(
+                    dp(strokeWidth),
+                    strokeColor
+            );
+        }
+
+        return drawable;
+    }
+
+    private StateListDrawable createTvSearchBackground() {
+
+        StateListDrawable states =
+                new StateListDrawable();
+
+        GradientDrawable focused =
+                createSearchDrawable(
+                        Color.BLACK,
+                        GREEN,
+                        3
+                );
+
+        GradientDrawable normal =
+                createSearchDrawable(
+                        PANEL,
+                        Color.rgb(95, 95, 110),
+                        1
+                );
+
+        states.addState(
+                new int[]{android.R.attr.state_focused},
+                focused
+        );
+
+        states.addState(
+                new int[]{android.R.attr.state_selected},
+                focused
+        );
+
+        states.addState(
+                new int[]{},
+                normal
+        );
+
+        return states;
+    }
+
+    private void addTvPhoneKeyboardPanel() {
+
+        addSectionTitle("PHONE KEYBOARD");
+
+        LinearLayout panel =
+                new LinearLayout(this);
+
+        panel.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        panel.setPadding(
+                dp(14), dp(12), dp(14), dp(12)
+        );
+
+        panel.setBackground(
+                createSearchDrawable(
+                        Color.rgb(24, 48, 37),
+                        GREEN,
+                        1
+                )
+        );
+
+        LinearLayout.LayoutParams panelParams =
+                matchWrap();
+
+        panelParams.topMargin = dp(8);
+
+        root.addView(panel, panelParams);
+
+        TextView instruction = text(
+                "Connect your phone and TV to the same Wi-Fi "
+                        + "or phone hotspot. Open Donut4U Phone Remote "
+                        + "on your phone and enter this code.",
+                14, WHITE, false
+        );
+
+        panel.addView(
+                instruction,
+                matchWrap()
+        );
+
+        tvKeyboardCodeText = text(
+                "------",
+                32, GREEN, true
+        );
+
+        tvKeyboardCodeText.setGravity(
+                Gravity.CENTER
+        );
+
+        tvKeyboardCodeText.setLetterSpacing(0.15f);
+
+        LinearLayout.LayoutParams codeParams =
+                matchWrap();
+
+        codeParams.topMargin = dp(8);
+        codeParams.bottomMargin = dp(4);
+
+        panel.addView(
+                tvKeyboardCodeText,
+                codeParams
+        );
+
+        tvKeyboardStatusText = text(
+                "Starting phone keyboard connection...",
+                13, MUTED, false
+        );
+
+        tvKeyboardStatusText.setGravity(
+                Gravity.CENTER
+        );
+
+        panel.addView(
+                tvKeyboardStatusText,
+                matchWrap()
+        );
+    }
+
+    private void startTvPhoneKeyboardReceiver() {
+
+        if (!tvMode || activityDestroyed) {
+            return;
+        }
+
+        if (tvKeyboardReceiver != null) {
+            return;
+        }
+
+        if (tvKeyboardCodeText == null
+                || tvKeyboardStatusText == null) {
+            return;
+        }
+
+        tvKeyboardReceiver =
+                new TvKeyboardReceiver(
+                        getApplicationContext(),
+                        new TvKeyboardReceiver.Listener() {
+
+            @Override
+            public void onPairingCodeReady(String code) {
+
+                if (activityDestroyed
+                        || tvKeyboardCodeText == null) {
+                    return;
+                }
+
+                tvKeyboardCodeText.setText(code);
+            }
+
+            @Override
+            public void onSearchRequested(String songTitle) {
+
+                if (activityDestroyed
+                        || searchInput == null) {
+                    return;
+                }
+
+                searchInput.setText(songTitle);
+                searchInput.setSelection(
+                        searchInput.getText().length()
+                );
+
+                searchSongs();
+            }
+
+            @Override
+            public void onStatusChanged(String message) {
+
+                if (activityDestroyed
+                        || tvKeyboardStatusText == null) {
+                    return;
+                }
+
+                tvKeyboardStatusText.setText(message);
+            }
+
+            @Override
+            public void onError(String message) {
+
+                if (activityDestroyed
+                        || tvKeyboardStatusText == null) {
+                    return;
+                }
+
+                tvKeyboardStatusText.setText(message);
+
+                Log.e(TAG, message);
+            }
+        });
+
+        tvKeyboardReceiver.start();
+    }
+
+    private void stopTvPhoneKeyboardReceiver() {
+
+        if (tvKeyboardReceiver != null) {
+
+            tvKeyboardReceiver.stop();
+            tvKeyboardReceiver = null;
+        }
+
+        if (tvKeyboardStatusText != null
+                && !activityDestroyed) {
+
+            tvKeyboardStatusText.setText(
+                    "Phone keyboard disconnected."
+            );
+        }
     }
 
     // ------------------------------------------------
@@ -1941,6 +2243,12 @@ public class KaraokeStudioActivity extends Activity {
 
     private void hideKeyboard() {
 
+        // Keep the TV search field focused so its green
+        // focus border remains visible after a phone search.
+        if (tvMode) {
+            return;
+        }
+
         try {
 
             InputMethodManager manager =
@@ -1986,14 +2294,31 @@ public class KaraokeStudioActivity extends Activity {
         if (adView != null) {
             adView.resume();
         }
+
+        if (tvMode) {
+
+            startTvPhoneKeyboardReceiver();
+
+            if (searchInput != null) {
+                searchInput.post(() -> {
+                    if (!activityDestroyed
+                            && searchInput != null) {
+                        searchInput.requestFocus();
+                    }
+                });
+            }
+        }
     }
 
     @Override
     protected void onPause() {
 
+        // Stop the local receiver when Stage 2 is no
+        // longer the active TV screen.
+        stopTvPhoneKeyboardReceiver();
+
         // Stop microphone capture when leaving Stage 2.
         // Tap the microphone button again after returning.
-
         stopStage2Microphone(false);
 
         if (adView != null) {
@@ -2017,6 +2342,8 @@ public class KaraokeStudioActivity extends Activity {
     protected void onDestroy() {
 
         activityDestroyed = true;
+
+        stopTvPhoneKeyboardReceiver();
 
         if (microphoneMonitor != null) {
 
