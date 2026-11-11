@@ -39,10 +39,35 @@ public final class TvKeyboardReceiver {
             "Donut4U-TV-Keyboard";
 
     public interface Listener {
+
         void onPairingCodeReady(String code);
+
         void onSearchRequested(String songTitle);
+
         void onStatusChanged(String message);
+
         void onError(String message);
+
+        /**
+         * General phone keyboard input.
+         *
+         * target:
+         * Identifies the TV input field, such as "email",
+         * "password", "song_search", or another field ID.
+         *
+         * text:
+         * Text supplied by the phone.
+         *
+         * action:
+         * "replace", "append", "backspace", "clear", or "submit".
+         */
+        default void onTextInput(
+                String target,
+                String text,
+                String action
+        ) {
+            // Optional callback for activities that support text input.
+        }
     }
 
     private static final Object LOCK = new Object();
@@ -82,7 +107,6 @@ public final class TvKeyboardReceiver {
             Context context,
             Listener listener
     ) {
-        // FIX: initialize appContext in this constructor too.
         appContext = context.getApplicationContext();
 
         synchronized (LOCK) {
@@ -105,7 +129,7 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * Called by the TV menu when CONNECT PHONE is selected.
+     * Enables the application-wide phone connection.
      */
     public static void enableSession(
             Context context,
@@ -131,7 +155,7 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * Called when the user chooses TV ONLY or ends the session.
+     * Ends the application-wide phone connection.
      */
     public static void disableSession() {
         TvKeyboardReceiver receiver;
@@ -155,13 +179,12 @@ public final class TvKeyboardReceiver {
         synchronized (LOCK) {
             return sharedReceiver == null
                     ? ""
-                    : sharedReceiver.pairingCode;
+                    : sharedReceiver.getPairingCode();
         }
     }
 
     /**
-     * Existing Stage 1, 2 and 3 activities call start().
-     * They now reuse the shared receiver.
+     * Existing Stage activities reuse the shared receiver.
      */
     public void start() {
         if (!sessionEnabled) {
@@ -180,13 +203,10 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * Intentionally does not stop the shared receiver.
-     * Activities call stop() when changing screens.
-     *
-     * The session remains alive while the user changes stages.
+     * Does not stop the application-wide TV session.
      */
     public void stop() {
-        // Do not stop the application-wide TV session here.
+        // Keep the shared connection alive while changing stages.
     }
 
     public synchronized String getPairingCode() {
@@ -207,9 +227,7 @@ public final class TvKeyboardReceiver {
 
         notifyPairingCode(pairingCode);
 
-        notifyStatus(
-                "Starting phone connection..."
-        );
+        notifyStatus("Starting phone connection...");
 
         try {
             networkExecutor.execute(() -> {
@@ -515,7 +533,6 @@ public final class TvKeyboardReceiver {
                 return;
             }
 
-            // Do not disconnect just because the phone is idle.
             socket.setSoTimeout(0);
 
             notifyStatus("Phone keyboard connected.");
@@ -532,70 +549,178 @@ public final class TvKeyboardReceiver {
                         request.optString("type", "");
 
                 if ("search".equals(type)) {
-                    String songTitle =
-                            request.optString(
-                                    "text",
-                                    ""
-                            ).trim();
 
-                    if (!songTitle.isEmpty()
-                            && songTitle.length() <= 200) {
+                    handleSearchRequest(
+                            request,
+                            writer
+                    );
 
-                        mainHandler.post(() -> {
-                            Listener listener = activeListener;
+                } else if ("input".equals(type)) {
 
-                            if (running
-                                    && sessionEnabled
-                                    && listener != null) {
-                                listener.onSearchRequested(
-                                        songTitle
-                                );
-                            }
-                        });
-
-                        JSONObject response =
-                                new JSONObject();
-
-                        response.put("ok", true);
-                        response.put(
-                                "message",
-                                "Search sent"
-                        );
-
-                        writer.write(response.toString());
-                        writer.newLine();
-                        writer.flush();
-
-                    } else {
-                        JSONObject response =
-                                new JSONObject();
-
-                        response.put("ok", false);
-                        response.put(
-                                "message",
-                                "Invalid song title"
-                        );
-
-                        writer.write(response.toString());
-                        writer.newLine();
-                        writer.flush();
-                    }
+                    handleTextInputRequest(
+                            request,
+                            writer
+                    );
 
                 } else if ("disconnect".equals(type)) {
+
                     notifyStatus(
                             "Phone disconnected. TV is ready to reconnect."
                     );
                     return;
+
+                } else {
+
+                    sendResponse(
+                            writer,
+                            false,
+                            "Unknown command"
+                    );
                 }
             }
 
         } catch (Exception e) {
             if (running) {
-                notifyStatus(
-                        "Phone connection ended."
-                );
+                notifyStatus("Phone connection ended.");
             }
         }
+    }
+
+    private void handleSearchRequest(
+            JSONObject request,
+            BufferedWriter writer
+    ) throws Exception {
+
+        String songTitle =
+                request.optString(
+                        "text",
+                        ""
+                ).trim();
+
+        if (songTitle.isEmpty()
+                || songTitle.length() > 200) {
+
+            sendResponse(
+                    writer,
+                    false,
+                    "Invalid song title"
+            );
+            return;
+        }
+
+        mainHandler.post(() -> {
+            Listener listener = activeListener;
+
+            if (running
+                    && sessionEnabled
+                    && listener != null) {
+                listener.onSearchRequested(songTitle);
+            }
+        });
+
+        sendResponse(
+                writer,
+                true,
+                "Search sent"
+        );
+    }
+
+    private void handleTextInputRequest(
+            JSONObject request,
+            BufferedWriter writer
+    ) throws Exception {
+
+        String target =
+                request.optString(
+                        "target",
+                        ""
+                ).trim();
+
+        String text =
+                request.optString(
+                        "text",
+                        ""
+                );
+
+        String action =
+                request.optString(
+                        "action",
+                        "replace"
+                ).trim().toLowerCase(Locale.US);
+
+        if (target.isEmpty()
+                || target.length() > 64) {
+
+            sendResponse(
+                    writer,
+                    false,
+                    "Invalid input target"
+            );
+            return;
+        }
+
+        if (text.length() > 2000) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Text is too long"
+            );
+            return;
+        }
+
+        boolean validAction =
+                "replace".equals(action)
+                        || "append".equals(action)
+                        || "backspace".equals(action)
+                        || "clear".equals(action)
+                        || "submit".equals(action);
+
+        if (!validAction) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unsupported keyboard action"
+            );
+            return;
+        }
+
+        mainHandler.post(() -> {
+            Listener listener = activeListener;
+
+            if (running
+                    && sessionEnabled
+                    && listener != null) {
+
+                listener.onTextInput(
+                        target,
+                        text,
+                        action
+                );
+            }
+        });
+
+        sendResponse(
+                writer,
+                true,
+                "Text input sent"
+        );
+    }
+
+    private void sendResponse(
+            BufferedWriter writer,
+            boolean success,
+            String message
+    ) throws Exception {
+
+        JSONObject response =
+                new JSONObject();
+
+        response.put("ok", success);
+        response.put("message", message);
+
+        writer.write(response.toString());
+        writer.newLine();
+        writer.flush();
     }
 
     private void notifyPairingCode(String code) {
