@@ -94,6 +94,12 @@ public class KaraokeStudioActivity extends Activity {
             new Handler(Looper.getMainLooper());
 
     private LinearLayout root;
+    private LinearLayout searchPanel;
+    private LinearLayout playerPanel;
+    private LinearLayout activePanel;
+
+    private ScrollView mainScroll;
+
     private LinearLayout resultsContainer;
     private EditText searchInput;
     private TextView statusText;
@@ -243,11 +249,15 @@ public class KaraokeStudioActivity extends Activity {
         }
     }
 
+    // ------------------------------------------------
+    // MAIN INTERFACE
+    // ------------------------------------------------
+
     private void buildInterface() {
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
+        mainScroll = new ScrollView(this);
+        mainScroll.setFillViewport(true);
+        mainScroll.setBackgroundColor(BG);
 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -256,8 +266,8 @@ public class KaraokeStudioActivity extends Activity {
         );
         root.setBackgroundColor(BG);
 
-        scroll.addView(root);
-        setContentView(scroll);
+        mainScroll.addView(root);
+        setContentView(mainScroll);
 
         TextView title = text(
                 "DONUT4U KARAOKE", 25, ACCENT, true
@@ -279,6 +289,30 @@ public class KaraokeStudioActivity extends Activity {
         subtitleParams.bottomMargin = dp(14);
 
         root.addView(subtitle, subtitleParams);
+
+        // Shared status stays visible on both screens.
+        statusText = text(
+                "Enter a song title or artist to begin.",
+                14, MUTED, false
+        );
+
+        LinearLayout.LayoutParams statusParams =
+                matchWrap();
+
+        statusParams.bottomMargin = dp(10);
+
+        root.addView(statusText, statusParams);
+
+        // --------------------------------------------
+        // SEARCH SCREEN
+        // --------------------------------------------
+
+        searchPanel = new LinearLayout(this);
+        searchPanel.setOrientation(LinearLayout.VERTICAL);
+
+        root.addView(searchPanel, matchWrap());
+
+        activePanel = searchPanel;
 
         addSectionTitle("FIND MY SONG");
 
@@ -304,7 +338,7 @@ public class KaraokeStudioActivity extends Activity {
             searchInput.setBackgroundColor(PANEL);
         }
 
-        root.addView(searchInput, matchWrap());
+        searchPanel.addView(searchInput, matchWrap());
 
         Button searchButton = button("SEARCH SONGS");
 
@@ -313,13 +347,16 @@ public class KaraokeStudioActivity extends Activity {
 
         searchParams.topMargin = dp(8);
 
-        root.addView(searchButton, searchParams);
+        searchPanel.addView(searchButton, searchParams);
 
         searchButton.setOnClickListener(v -> searchSongs());
 
         if (tvMode) {
+
             addTvPhoneKeyboardPanel();
+
         } else {
+
             Button phoneRemoteButton =
                     button("USE PHONE AS KEYBOARD");
 
@@ -328,7 +365,7 @@ public class KaraokeStudioActivity extends Activity {
 
             remoteParams.topMargin = dp(8);
 
-            root.addView(
+            searchPanel.addView(
                     phoneRemoteButton,
                     remoteParams
             );
@@ -360,19 +397,12 @@ public class KaraokeStudioActivity extends Activity {
         progressBar = new ProgressBar(this);
         progressBar.setVisibility(View.GONE);
 
-        root.addView(progressBar, matchWrap());
-
-        statusText = text(
-                "Enter a song title or artist to begin.",
-                14, MUTED, false
-        );
-
-        LinearLayout.LayoutParams statusParams =
+        LinearLayout.LayoutParams progressParams =
                 matchWrap();
 
-        statusParams.topMargin = dp(8);
+        progressParams.topMargin = dp(8);
 
-        root.addView(statusText, statusParams);
+        searchPanel.addView(progressBar, progressParams);
 
         addSectionTitle("ONLINE SONG RESULTS");
 
@@ -381,7 +411,37 @@ public class KaraokeStudioActivity extends Activity {
                 LinearLayout.VERTICAL
         );
 
-        root.addView(resultsContainer, matchWrap());
+        searchPanel.addView(resultsContainer, matchWrap());
+
+        // --------------------------------------------
+        // PLAYER SCREEN
+        // --------------------------------------------
+
+        playerPanel = new LinearLayout(this);
+        playerPanel.setOrientation(LinearLayout.VERTICAL);
+        playerPanel.setVisibility(View.GONE);
+
+        root.addView(playerPanel, matchWrap());
+
+        activePanel = playerPanel;
+
+        Button backToSearchButton =
+                button("BACK TO SEARCH RESULTS");
+
+        LinearLayout.LayoutParams returnParams =
+                matchWrap();
+
+        returnParams.topMargin = dp(8);
+        returnParams.bottomMargin = dp(8);
+
+        playerPanel.addView(
+                backToSearchButton,
+                returnParams
+        );
+
+        backToSearchButton.setOnClickListener(
+                v -> showSearchScreen()
+        );
 
         addSectionTitle("KARAOKE PLAYER");
 
@@ -389,7 +449,7 @@ public class KaraokeStudioActivity extends Activity {
                 "No song selected", 16, WHITE, true
         );
 
-        root.addView(nowPlayingText, matchWrap());
+        playerPanel.addView(nowPlayingText, matchWrap());
 
         videoWebView = new WebView(this);
         videoWebView.setBackgroundColor(Color.BLACK);
@@ -509,7 +569,7 @@ public class KaraokeStudioActivity extends Activity {
 
         videoParams.topMargin = dp(8);
 
-        root.addView(videoWebView, videoParams);
+        playerPanel.addView(videoWebView, videoParams);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(
@@ -533,7 +593,7 @@ public class KaraokeStudioActivity extends Activity {
                 stopButton, weightedWrap()
         );
 
-        root.addView(controls, matchWrap());
+        playerPanel.addView(controls, matchWrap());
 
         playButton.setOnClickListener(v -> {
 
@@ -590,11 +650,11 @@ public class KaraokeStudioActivity extends Activity {
                 15, MUTED, false
         );
 
-        root.addView(donationText, matchWrap());
+        playerPanel.addView(donationText, matchWrap());
 
         Button donateButton = button("DONATE");
 
-        root.addView(donateButton, matchWrap());
+        playerPanel.addView(donateButton, matchWrap());
 
         donateButton.setOnClickListener(
                 v -> showDonationQr()
@@ -603,7 +663,7 @@ public class KaraokeStudioActivity extends Activity {
         Button questionButton =
                 button("QUESTION AND ANSWER");
 
-        root.addView(questionButton, matchWrap());
+        playerPanel.addView(questionButton, matchWrap());
 
         questionButton.setOnClickListener(
                 v -> openQuestionsFacebook()
@@ -611,13 +671,13 @@ public class KaraokeStudioActivity extends Activity {
 
         Button backButton = button("BACK TO STAGE");
 
-        root.addView(backButton, matchWrap());
+        playerPanel.addView(backButton, matchWrap());
 
         backButton.setOnClickListener(v -> finish());
 
         Button logoutButton = button("LOG OUT");
 
-        root.addView(logoutButton, matchWrap());
+        playerPanel.addView(logoutButton, matchWrap());
 
         logoutButton.setOnClickListener(v -> {
 
@@ -655,7 +715,7 @@ public class KaraokeStudioActivity extends Activity {
 
         adLabelParams.topMargin = dp(16);
 
-        root.addView(adLabel, adLabelParams);
+        playerPanel.addView(adLabel, adLabelParams);
 
         adStatusText = text(
                 "Loading advertisement...",
@@ -664,7 +724,7 @@ public class KaraokeStudioActivity extends Activity {
 
         adStatusText.setGravity(Gravity.CENTER);
 
-        root.addView(adStatusText, matchWrap());
+        playerPanel.addView(adStatusText, matchWrap());
 
         adView = new AdView(this);
 
@@ -726,7 +786,67 @@ public class KaraokeStudioActivity extends Activity {
 
         adParams.topMargin = dp(6);
 
-        root.addView(adView, adParams);
+        playerPanel.addView(adView, adParams);
+
+        // Start on the search screen.
+        showSearchScreen();
+    }
+
+    // ------------------------------------------------
+    // SCREEN NAVIGATION
+    // ------------------------------------------------
+
+    private void showSearchScreen() {
+
+        if (activityDestroyed
+                || searchPanel == null
+                || playerPanel == null) {
+            return;
+        }
+
+        searchPanel.setVisibility(View.VISIBLE);
+        playerPanel.setVisibility(View.GONE);
+
+        if (mainScroll != null) {
+            mainScroll.post(() -> {
+                if (!activityDestroyed && mainScroll != null) {
+                    mainScroll.scrollTo(0, 0);
+                }
+            });
+        }
+    }
+
+    private void showPlayerScreen() {
+
+        if (activityDestroyed
+                || searchPanel == null
+                || playerPanel == null) {
+            return;
+        }
+
+        searchPanel.setVisibility(View.GONE);
+        playerPanel.setVisibility(View.VISIBLE);
+
+        if (mainScroll != null) {
+            mainScroll.post(() -> {
+                if (!activityDestroyed && mainScroll != null) {
+                    mainScroll.scrollTo(0, 0);
+                }
+            });
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+
+        if (playerPanel != null
+                && playerPanel.getVisibility() == View.VISIBLE) {
+
+            showSearchScreen();
+            return;
+        }
+
+        super.onBackPressed();
     }
 
     // ------------------------------------------------
@@ -819,7 +939,7 @@ public class KaraokeStudioActivity extends Activity {
 
         panelParams.topMargin = dp(8);
 
-        root.addView(panel, panelParams);
+        activePanel.addView(panel, panelParams);
 
         TextView instruction = text(
                 "Connect your phone and TV to the same Wi-Fi "
@@ -909,6 +1029,8 @@ public class KaraokeStudioActivity extends Activity {
                     return;
                 }
 
+                showSearchScreen();
+
                 searchInput.setText(songTitle);
                 searchInput.setSelection(
                         searchInput.getText().length()
@@ -989,7 +1111,7 @@ public class KaraokeStudioActivity extends Activity {
 
         panelParams.topMargin = dp(4);
 
-        root.addView(panel, panelParams);
+        activePanel.addView(panel, panelParams);
 
         microphoneButton =
                 new Button(this);
@@ -1699,7 +1821,7 @@ public class KaraokeStudioActivity extends Activity {
         params.topMargin = dp(18);
         params.bottomMargin = dp(8);
 
-        root.addView(heading, params);
+        activePanel.addView(heading, params);
     }
 
     private void searchSongs() {
@@ -2010,6 +2132,9 @@ public class KaraokeStudioActivity extends Activity {
                         ? ""
                         : "\n" + currentArtist)
         );
+
+        // Move to the dedicated player screen.
+        showPlayerScreen();
 
         setStatus("Opening YouTube player...");
 
