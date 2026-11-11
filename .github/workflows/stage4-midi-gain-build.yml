@@ -1,0 +1,288 @@
+
+name: Stage 4 - MIDI Gain 0.4 Build and Verify
+
+on:
+  push:
+    branches:
+      - stage4-tv-isolated
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    name: Build Gain 0.4 FluidSynth and Donut4U
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Donut4U
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 for FluidSynth
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-35
+            build-tools;35.0.0
+            platform-tools
+            ndk;30.0.16248370
+
+      - name: Download pinned FluidSynth source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone https://github.com/Virtover/fluidsynth-kmp.git fluidsynth-source
+
+          cd fluidsynth-source
+
+          git checkout 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
+
+      - name: Apply Stage 3 MIDI gain adjustment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="fluidsynth-source/fluidsynth-kmp/src/androidMain/kotlin/dev/kotlinds/fluidsynthkmp/MidiFilePlayer.kt"
+
+          test -s "$FILE"
+
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          source = path.read_text()
+
+          old = """    init {
+              FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
+
+          new = """    init {
+              // Donut4U Stage 3: moderate MIDI/KAR output boost.
+              // FluidSynth's documented default master gain is 0.2.
+              // 0.4 doubles the default signal amplitude.
+              FluidSynthJni.setGain(context.synthPtr, 0.4f)
+
+              FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
+
+          if source.count(old) != 1:
+              raise SystemExit("FAIL: Expected MIDI player initialization was not found exactly once.")
+
+          path.write_text(source.replace(old, new))
+
+          print("PASS: Gain 0.4 applied to MidiFilePlayer only.")
+          PY
+
+          grep -n -A8 'init {' "$FILE"
+
+      - name: Build FluidSynth release AAR
+        working-directory: fluidsynth-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle :fluidsynth-kmp:assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+          AAR="fluidsynth-kmp/build/outputs/aar/fluidsynth-kmp-release.aar"
+
+          test -s "$AAR"
+
+          mkdir -p ../app/libs
+          cp "$AAR" ../app/libs/fluidsynth-kmp-release.aar
+
+          echo "PASS: Gain-adjusted AAR built."
+          ls -lh ../app/libs/fluidsynth-kmp-release.aar
+
+      - name: Verify FluidSynth 16 KB native alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          mkdir -p aar-check
+          unzip -q app/libs/fluidsynth-kmp-release.aar -d aar-check
+
+          for ABI in arm64-v8a x86_64; do
+            DIR="aar-check/jni/$ABI"
+
+            test -d "$DIR"
+
+            mapfile -t LIBS < <(
+              find "$DIR" -type f -name '*.so' | sort
+            )
+
+            test "${#LIBS[@]}" -gt 0
+
+            for LIB in "${LIBS[@]}"; do
+              FOUND=0
+
+              while IFS= read -r LINE; do
+                [[ "$LINE" == *" LOAD "* || "$LINE" == LOAD* ]] || continue
+
+                FOUND=1
+                ALIGN="${LINE##* }"
+
+                [[ "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]
+
+                VALUE=$((16#${ALIGN#0x}))
+
+                if (( VALUE < 16384 )); then
+                  echo "FAIL: $LIB has insufficient alignment: $ALIGN"
+                  exit 1
+                fi
+
+              done < <("$READELF" -lW "$LIB")
+
+              test "$FOUND" -eq 1
+              echo "PASS: $ABI $(basename "$LIB")"
+            done
+          done
+
+          echo "PASS: FluidSynth 16 KB alignment."
+
+      - name: Set up Java 17 for Donut4U
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Assemble and verify SoundFont
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p app/src/main/assets
+
+          cat \
+            soundfont-parts/GeneralUser-GS.sf2.part01 \
+            soundfont-parts/GeneralUser-GS.sf2.part02 \
+            > app/src/main/assets/GeneralUser-GS.sf2
+
+          test "$(stat -c '%s' app/src/main/assets/GeneralUser-GS.sf2)" -eq 32319396
+
+          test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 count=4 2>/dev/null)" = "RIFF"
+
+          test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
+
+          echo "PASS: SoundFont verified."
+
+      - name: Build Donut4U debug APK
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DONUT4U_KEYSTORE_PATH: unused
+          DONUT4U_KEYSTORE_PASSWORD: unused
+          DONUT4U_KEY_ALIAS: unused
+          DONUT4U_KEY_PASSWORD: unused
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "${YOUTUBE_API_KEY:-}"
+          test -s app/libs/fluidsynth-kmp-release.aar
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+          test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Verify APK package and version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          AAPT="$(find "$ANDROID_HOME/build-tools" \
+            -type f -name aapt | sort -V | tail -n 1)"
+
+          BADGING="$("$AAPT" dump badging "$APK")"
+
+          echo "$BADGING" | grep -F "package: name='com.donut4u.karaoke'"
+          echo "$BADGING" | grep -F "versionCode='26'"
+          echo "$BADGING" | grep -F "versionName='1.0.26'"
+
+          unzip -t "$APK"
+
+          echo "PASS: APK package, version and ZIP integrity."
+
+      - name: Verify APK 16 KB alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+
+          mkdir -p apk-check
+          unzip -q "$APK" 'lib/*' -d apk-check
+
+          for ABI in arm64-v8a x86_64; do
+            DIR="apk-check/lib/$ABI"
+            test -d "$DIR"
+
+            while IFS= read -r LIB; do
+              FOUND=0
+
+              while IFS= read -r LINE; do
+                [[ "$LINE" == *" LOAD "* || "$LINE" == LOAD* ]] || continue
+
+                FOUND=1
+                ALIGN="${LINE##* }"
+                [[ "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]
+
+                VALUE=$((16#${ALIGN#0x}))
+
+                if (( VALUE < 16384 )); then
+                  echo "FAIL: $LIB alignment $ALIGN"
+                  exit 1
+                fi
+              done < <("$READELF" -lW "$LIB")
+
+              test "$FOUND" -eq 1
+              echo "PASS: $ABI $(basename "$LIB")"
+            done < <(find "$DIR" -type f -name '*.so' | sort)
+          done
+
+          "$ZIPALIGN" -v -c -P 16 4 "$APK"
+
+          echo "PASS: APK 16 KB verification."
+
+      - name: Upload verified Gain 0.4 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-midi-gain-04-verified-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload rebuilt FluidSynth AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-midi-gain-04-verified-aar
+          path: app/libs/fluidsynth-kmp-release.aar
+          if-no-files-found: error
+          retention-days: 14
