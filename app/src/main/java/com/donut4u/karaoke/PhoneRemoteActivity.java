@@ -41,6 +41,14 @@ public class PhoneRemoteActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
+    /*
+     * The TV activity must route this target to its
+     * currently focused input field.
+     *
+     * No manual target ID is required on the phone.
+     */
+    private static final String ACTIVE_TARGET = "active";
+
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
 
@@ -60,12 +68,11 @@ public class PhoneRemoteActivity extends Activity {
     private volatile boolean discovering = false;
     private volatile boolean connected = false;
 
-    private boolean closing = false;
-    private boolean resolving = false;
+    private volatile boolean closing = false;
+    private volatile boolean resolving = false;
 
     private EditText pairingCodeInput;
     private EditText songInput;
-    private EditText targetInput;
     private EditText textInput;
 
     private TextView statusText;
@@ -114,8 +121,8 @@ public class PhoneRemoteActivity extends Activity {
 
         TextView subtitle = new TextView(this);
         subtitle.setText(
-                "Use your phone to control text input and search "
-                        + "songs on your TV."
+                "Your phone is the keyboard and controller. "
+                        + "The TV displays and plays karaoke."
         );
         subtitle.setTextColor(MUTED);
         subtitle.setTextSize(14);
@@ -126,15 +133,15 @@ public class PhoneRemoteActivity extends Activity {
 
         TextView instruction = new TextView(this);
         instruction.setText(
-                "1. Connect your phone and TV to the same Wi-Fi "
-                        + "or phone hotspot.\n\n"
-                        + "2. Open Donut4U on the TV. The TV must "
-                        + "start its pairing service.\n\n"
-                        + "3. Wait for Donut4U TV to appear below.\n\n"
-                        + "4. Enter the six-digit code shown on "
-                        + "the TV and tap CONNECT TO TV.\n\n"
-                        + "5. Use the song search or text controls "
-                        + "below."
+                "1. Open Donut4U on your TV.\n\n"
+                        + "2. The TV displays a six-digit pairing code.\n\n"
+                        + "3. Keep both devices on the same Wi-Fi "
+                        + "network or phone hotspot.\n\n"
+                        + "4. Enter the TV code below and connect.\n\n"
+                        + "5. Focus the desired input field on the TV. "
+                        + "Type on your phone and send the text.\n\n"
+                        + "6. Use SUBMIT when you want the TV to "
+                        + "finish the current input."
         );
         instruction.setTextColor(WHITE);
         instruction.setTextSize(14);
@@ -162,6 +169,7 @@ public class PhoneRemoteActivity extends Activity {
         pairingCodeInput.setGravity(Gravity.CENTER);
         pairingCodeInput.setTextSize(19);
         pairingCodeInput.setLetterSpacing(0.20f);
+        pairingCodeInput.setMaxEms(6);
 
         root.addView(
                 pairingCodeInput,
@@ -204,15 +212,17 @@ public class PhoneRemoteActivity extends Activity {
         addSeparator(root);
 
         TextView keyboardHeading =
-                makeHeading("TV TEXT KEYBOARD");
+                makeHeading("PHONE KEYBOARD FOR TV");
 
         root.addView(keyboardHeading, fullWidthWrap());
 
         TextView keyboardInstructions = new TextView(this);
         keyboardInstructions.setText(
-                "Enter the target ID used by the TV screen, "
-                        + "then type your text. The TV activity "
-                        + "must support that target ID."
+                "Select the input field on the TV first. "
+                        + "Then type here using your phone keyboard. "
+                        + "You do not need to enter a target ID. "
+                        + "The phone sends text to the TV's active "
+                        + "input field."
         );
         keyboardInstructions.setTextColor(MUTED);
         keyboardInstructions.setTextSize(13);
@@ -222,16 +232,8 @@ public class PhoneRemoteActivity extends Activity {
 
         root.addView(keyboardInstructions, fullWidthWrap());
 
-        targetInput = createInput(
-                "TV input target ID, e.g. song_search",
-                InputType.TYPE_CLASS_TEXT
-                        | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        );
-
-        root.addView(targetInput, fullWidth(dp(54)));
-
         textInput = createInput(
-                "Type text for the TV",
+                "Type text for the active TV field",
                 InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         );
@@ -617,12 +619,14 @@ public class PhoneRemoteActivity extends Activity {
                     newSocket.close();
 
                     mainHandler.post(() -> {
-                        connectButton.setEnabled(true);
+                        if (!closing) {
+                            connectButton.setEnabled(true);
 
-                        setStatus(
-                                "Incorrect or expired code. "
-                                        + "Check the TV screen."
-                        );
+                            setStatus(
+                                    "Incorrect or expired code. "
+                                            + "Check the TV screen."
+                            );
+                        }
                     });
 
                     return;
@@ -648,12 +652,11 @@ public class PhoneRemoteActivity extends Activity {
                     setConnectedControls(true);
 
                     setStatus(
-                            "CONNECTED. Your phone can send text "
-                                    + "to supported TV input fields."
+                            "CONNECTED. Select a TV input field, "
+                                    + "then type on your phone."
                     );
 
-                    songInput.requestFocus();
-                    showPhoneKeyboard(songInput);
+                    showPhoneKeyboard(textInput);
                 });
 
             } catch (Exception e) {
@@ -734,23 +737,14 @@ public class PhoneRemoteActivity extends Activity {
     }
 
     /**
-     * Sends general text or a keyboard action to a TV input target.
+     * Sends text to the active TV input.
      *
-     * The target must be implemented by the active TV activity.
+     * The phone does not need to know the ID of the
+     * current TV input field.
      */
     private void sendText(String action) {
         if (!connected) {
             setStatus("Connect to the TV first.");
-            return;
-        }
-
-        String target = targetInput.getText()
-                .toString().trim();
-
-        if (target.isEmpty()) {
-            targetInput.setError(
-                    "Enter the target ID used by the TV screen."
-            );
             return;
         }
 
@@ -777,8 +771,9 @@ public class PhoneRemoteActivity extends Activity {
                 JSONObject request = new JSONObject();
 
                 request.put("type", "input");
-                request.put("target", target);
+                request.put("target", ACTIVE_TARGET);
                 request.put("action", action);
+
                 request.put(
                         "text",
                         "backspace".equals(action)
@@ -822,8 +817,9 @@ public class PhoneRemoteActivity extends Activity {
     }
 
     /**
-     * All socket request/response operations run on the single
-     * network executor to prevent overlapping reads and writes.
+     * All socket request/response operations run on the
+     * single network executor to prevent overlapping reads
+     * and writes.
      */
     private JSONObject sendRequestAndRead(
             JSONObject request
