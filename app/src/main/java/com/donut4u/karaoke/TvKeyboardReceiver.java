@@ -22,11 +22,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Local-network receiver for the Donut4U phone keyboard.
+ * Shared phone-to-TV keyboard connection.
  *
- * The active TV stage starts this receiver.
- * A phone discovers the service, enters the six-digit pairing code,
- * and sends song searches over the local network.
+ * One receiver and one pairing code are kept for the
+ * lifetime of the TV application session.
+ *
+ * Stage activities can replace the active listener without
+ * stopping the network connection.
  */
 public final class TvKeyboardReceiver {
 
@@ -36,21 +38,22 @@ public final class TvKeyboardReceiver {
     private static final String SERVICE_NAME =
             "Donut4U-TV-Keyboard";
 
-    private static final long PAIRING_VALIDITY_MS =
-            5 * 60 * 1000L;
-
     public interface Listener {
         void onPairingCodeReady(String code);
-
         void onSearchRequested(String songTitle);
-
         void onStatusChanged(String message);
-
         void onError(String message);
     }
 
+    private static final Object LOCK = new Object();
+
+    private static TvKeyboardReceiver sharedReceiver;
+
+    private static volatile Listener activeListener;
+
+    private static volatile boolean sessionEnabled = false;
+
     private final Context appContext;
-    private final Listener listener;
 
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
@@ -70,32 +73,131 @@ public final class TvKeyboardReceiver {
 
     private String pairingCode = "";
 
-    private long pairingExpiresAt = 0L;
-
+    /**
+     * Stage activities use this constructor.
+     * Creating another stage receiver changes the active listener,
+     * but does not create another network service.
+     */
     public TvKeyboardReceiver(
             Context context,
             Listener listener
     ) {
-        this.appContext = context.getApplicationContext();
-        this.listener = listener;
+        synchronized (LOCK) {
+            activeListener = listener;
+
+            if (sharedReceiver == null) {
+                sharedReceiver =
+                        new TvKeyboardReceiver(
+                                context.getApplicationContext()
+                        );
+            }
+        }
     }
 
     /**
-     * Starts the receiver and advertises it on the local network.
-     * This method can safely be called again after stop().
+     * Private constructor for the one shared receiver.
      */
-    public synchronized void start() {
+    private TvKeyboardReceiver(Context context) {
+        appContext = context.getApplicationContext();
+    }
+
+    /**
+     * Called by the TV menu when CONNECT PHONE is selected.
+     */
+    public static void enableSession(
+            Context context,
+            Listener listener
+    ) {
+        TvKeyboardReceiver receiver;
+
+        synchronized (LOCK) {
+            sessionEnabled = true;
+            activeListener = listener;
+
+            if (sharedReceiver == null) {
+                sharedReceiver =
+                        new TvKeyboardReceiver(
+                                context.getApplicationContext()
+                        );
+            }
+
+            receiver = sharedReceiver;
+        }
+
+        receiver.startInternal();
+    }
+
+    /**
+     * Called when the user chooses TV ONLY or ends the session.
+     */
+    public static void disableSession() {
+        TvKeyboardReceiver receiver;
+
+        synchronized (LOCK) {
+            sessionEnabled = false;
+            activeListener = null;
+            receiver = sharedReceiver;
+        }
+
+        if (receiver != null) {
+            receiver.stopInternal();
+        }
+    }
+
+    public static boolean isSessionEnabled() {
+        return sessionEnabled;
+    }
+
+    public static String getCurrentPairingCode() {
+        synchronized (LOCK) {
+            return sharedReceiver == null
+                    ? ""
+                    : sharedReceiver.pairingCode;
+        }
+    }
+
+    /**
+     * Existing Stage 1, 2 and 3 activities call start().
+     * They now reuse the shared receiver.
+     */
+    public void start() {
+        if (!sessionEnabled) {
+            return;
+        }
+
+        TvKeyboardReceiver receiver;
+
+        synchronized (LOCK) {
+            receiver = sharedReceiver;
+        }
+
+        if (receiver != null) {
+            receiver.startInternal();
+        }
+    }
+
+    /**
+     * Intentionally does not stop the shared receiver.
+     * Activities call stop() when changing screens.
+     *
+     * The session remains alive while the user changes stages.
+     */
+    public void stop() {
+        // Do not stop the application-wide TV session here.
+    }
+
+    public synchronized String getPairingCode() {
+        return pairingCode;
+    }
+
+    private synchronized void startInternal() {
         if (running) {
+            notifyPairingCode(pairingCode);
             return;
         }
 
         running = true;
-
         pairingCode = createPairingCode();
-
-        pairingExpiresAt =
-                System.currentTimeMillis()
-                        + PAIRING_VALIDITY_MS;
 
         networkExecutor =
                 Executors.newSingleThreadExecutor();
@@ -103,7 +205,7 @@ public final class TvKeyboardReceiver {
         notifyPairingCode(pairingCode);
 
         notifyStatus(
-                "Starting phone keyboard connection..."
+                "Starting phone connection..."
         );
 
         try {
@@ -127,16 +229,16 @@ public final class TvKeyboardReceiver {
                         serverSocket = newServerSocket;
                     }
 
-                    int port = newServerSocket.getLocalPort();
-
-                    registerNetworkService(port);
+                    registerNetworkService(
+                            newServerSocket.getLocalPort()
+                    );
 
                     if (!running) {
                         return;
                     }
 
                     notifyStatus(
-                            "Ready. Connect your phone using the code shown."
+                            "Ready. Enter the code on your phone."
                     );
 
                     acceptConnections();
@@ -144,7 +246,7 @@ public final class TvKeyboardReceiver {
                 } catch (Exception e) {
                     if (running) {
                         notifyError(
-                                "Unable to start phone keyboard: "
+                                "Unable to start phone connection: "
                                         + safeMessage(e)
                         );
                     }
@@ -155,16 +257,13 @@ public final class TvKeyboardReceiver {
             running = false;
 
             notifyError(
-                    "Unable to start phone keyboard: "
+                    "Unable to start phone connection: "
                             + safeMessage(e)
             );
         }
     }
 
-    /**
-     * Stops the receiver and removes its network advertisement.
-     */
-    public synchronized void stop() {
+    private synchronized void stopInternal() {
         if (!running
                 && networkExecutor == null
                 && serverSocket == null) {
@@ -189,11 +288,9 @@ public final class TvKeyboardReceiver {
             networkExecutor = null;
         }
 
-        notifyStatus("Phone keyboard disconnected.");
-    }
+        pairingCode = "";
 
-    public synchronized String getPairingCode() {
-        return pairingCode;
+        notifyStatus("Phone connection ended.");
     }
 
     private String createPairingCode() {
@@ -218,7 +315,7 @@ public final class TvKeyboardReceiver {
 
         if (nsdManager == null) {
             notifyError(
-                    "Network discovery is not available on this TV."
+                    "Network discovery is unavailable on this TV."
             );
             return;
         }
@@ -262,7 +359,7 @@ public final class TvKeyboardReceiver {
                     ) {
                         if (running) {
                             notifyStatus(
-                                    "TV found on local network. Enter the pairing code on your phone."
+                                    "TV found on the local network."
                             );
                         }
                     }
@@ -272,7 +369,7 @@ public final class TvKeyboardReceiver {
                             NsdServiceInfo info
                     ) {
                         notifyStatus(
-                                "TV keyboard service stopped."
+                                "TV network service stopped."
                         );
                     }
                 };
@@ -342,7 +439,7 @@ public final class TvKeyboardReceiver {
             } catch (Exception e) {
                 if (running) {
                     notifyStatus(
-                            "Phone disconnected. Waiting for another connection."
+                            "Phone disconnected. Waiting for reconnection."
                     );
                 }
 
@@ -389,8 +486,6 @@ public final class TvKeyboardReceiver {
 
             boolean codeValid =
                     running
-                            && System.currentTimeMillis()
-                            <= pairingExpiresAt
                             && pairingCode.equals(suppliedCode)
                             && !pairingCode.isEmpty();
 
@@ -403,7 +498,7 @@ public final class TvKeyboardReceiver {
                     "message",
                     codeValid
                             ? "Connected"
-                            : "Invalid or expired code"
+                            : "Invalid code"
             );
 
             writer.write(pairingResponse.toString());
@@ -416,6 +511,9 @@ public final class TvKeyboardReceiver {
                 );
                 return;
             }
+
+            // Do not disconnect just because the phone is idle.
+            socket.setSoTimeout(0);
 
             notifyStatus("Phone keyboard connected.");
 
@@ -441,7 +539,11 @@ public final class TvKeyboardReceiver {
                             && songTitle.length() <= 200) {
 
                         mainHandler.post(() -> {
-                            if (running && listener != null) {
+                            Listener listener = activeListener;
+
+                            if (running
+                                    && sessionEnabled
+                                    && listener != null) {
                                 listener.onSearchRequested(
                                         songTitle
                                 );
@@ -478,7 +580,7 @@ public final class TvKeyboardReceiver {
 
                 } else if ("disconnect".equals(type)) {
                     notifyStatus(
-                            "Phone keyboard disconnected."
+                            "Phone disconnected. TV is ready to reconnect."
                     );
                     return;
                 }
@@ -495,7 +597,11 @@ public final class TvKeyboardReceiver {
 
     private void notifyPairingCode(String code) {
         mainHandler.post(() -> {
-            if (running && listener != null) {
+            Listener listener = activeListener;
+
+            if (running
+                    && sessionEnabled
+                    && listener != null) {
                 listener.onPairingCodeReady(code);
             }
         });
@@ -503,7 +609,9 @@ public final class TvKeyboardReceiver {
 
     private void notifyStatus(String message) {
         mainHandler.post(() -> {
-            if (running && listener != null) {
+            Listener listener = activeListener;
+
+            if (listener != null) {
                 listener.onStatusChanged(message);
             }
         });
@@ -511,7 +619,9 @@ public final class TvKeyboardReceiver {
 
     private void notifyError(String message) {
         mainHandler.post(() -> {
-            if (running && listener != null) {
+            Listener listener = activeListener;
+
+            if (listener != null) {
                 listener.onError(message);
             }
         });
