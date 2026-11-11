@@ -6,6 +6,7 @@ import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Handler;
 import android.os.Looper;
+import android.security.KeyPairGeneratorSpec;
 
 import org.json.JSONObject;
 
@@ -13,13 +14,28 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.math.BigInteger;
 import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.PrivateKey;
 import java.security.SecureRandom;
+import java.security.cert.Certificate;
+import java.security.MessageDigest;
+import java.util.Calendar;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
+import javax.security.auth.x500.X500Principal;
 
 /**
  * Shared phone-to-TV keyboard connection.
@@ -27,8 +43,12 @@ import java.util.concurrent.Executors;
  * One receiver and one pairing code are kept for the
  * lifetime of the TV application session.
  *
- * Stage activities can replace the active listener without
- * stopping the network connection.
+ * The network connection uses TLS. The TV creates a
+ * temporary Android Keystore certificate and derives
+ * the six-digit pairing code from its public key.
+ *
+ * Stage activities can replace the active listener
+ * without stopping the network connection.
  */
 public final class TvKeyboardReceiver {
 
@@ -37,6 +57,13 @@ public final class TvKeyboardReceiver {
 
     private static final String SERVICE_NAME =
             "Donut4U-TV-Keyboard";
+
+    private static final String KEY_ALIAS =
+            "donut4u_tv_pairing_session";
+
+    private static final int MAX_TEXT_LENGTH = 2000;
+
+    private static final int CALLBACK_TIMEOUT_SECONDS = 3;
 
     public interface Listener {
 
@@ -48,25 +75,12 @@ public final class TvKeyboardReceiver {
 
         void onError(String message);
 
-        /**
-         * General phone keyboard input.
-         *
-         * target:
-         * Identifies the TV input field, such as "email",
-         * "password", "song_search", or another field ID.
-         *
-         * text:
-         * Text supplied by the phone.
-         *
-         * action:
-         * "replace", "append", "backspace", "clear", or "submit".
-         */
         default void onTextInput(
                 String target,
                 String text,
                 String action
         ) {
-            // Optional callback for activities that support text input.
+            // Optional callback for activities supporting text input.
         }
     }
 
@@ -90,19 +104,14 @@ public final class TvKeyboardReceiver {
 
     private ExecutorService networkExecutor;
 
-    private ServerSocket serverSocket;
+    private SSLServerSocket serverSocket;
 
     private NsdManager nsdManager;
 
     private NsdManager.RegistrationListener registrationListener;
 
-    private String pairingCode = "";
+    private volatile String pairingCode = "";
 
-    /**
-     * Stage activities use this constructor.
-     * Creating another stage receiver changes the active listener,
-     * but does not create another network service.
-     */
     public TvKeyboardReceiver(
             Context context,
             Listener listener
@@ -121,16 +130,10 @@ public final class TvKeyboardReceiver {
         }
     }
 
-    /**
-     * Private constructor for the one shared receiver.
-     */
     private TvKeyboardReceiver(Context context) {
         appContext = context.getApplicationContext();
     }
 
-    /**
-     * Enables the application-wide phone connection.
-     */
     public static void enableSession(
             Context context,
             Listener listener
@@ -154,9 +157,6 @@ public final class TvKeyboardReceiver {
         receiver.startInternal();
     }
 
-    /**
-     * Ends the application-wide phone connection.
-     */
     public static void disableSession() {
         TvKeyboardReceiver receiver;
 
@@ -183,9 +183,6 @@ public final class TvKeyboardReceiver {
         }
     }
 
-    /**
-     * Existing Stage activities reuse the shared receiver.
-     */
     public void start() {
         if (!sessionEnabled) {
             return;
@@ -203,10 +200,10 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * Does not stop the application-wide TV session.
+     * Stage changes must not terminate the shared connection.
      */
     public void stop() {
-        // Keep the shared connection alive while changing stages.
+        // Intentionally keep the application-wide session alive.
     }
 
     public synchronized String getPairingCode() {
@@ -220,14 +217,11 @@ public final class TvKeyboardReceiver {
         }
 
         running = true;
-        pairingCode = createPairingCode();
+        pairingCode = "";
 
-        networkExecutor =
-                Executors.newSingleThreadExecutor();
+        networkExecutor = Executors.newSingleThreadExecutor();
 
-        notifyPairingCode(pairingCode);
-
-        notifyStatus("Starting phone connection...");
+        notifyStatus("Preparing encrypted phone connection...");
 
         try {
             networkExecutor.execute(() -> {
@@ -236,10 +230,16 @@ public final class TvKeyboardReceiver {
                         return;
                     }
 
-                    ServerSocket newServerSocket =
-                            new ServerSocket(0);
+                    SSLServerSocket newServerSocket =
+                            createEncryptedServer();
 
-                    newServerSocket.setReuseAddress(true);
+                    if (!running) {
+                        newServerSocket.close();
+                        return;
+                    }
+
+                    String newPairingCode =
+                            getCertificatePairingCode();
 
                     synchronized (TvKeyboardReceiver.this) {
                         if (!running) {
@@ -248,7 +248,10 @@ public final class TvKeyboardReceiver {
                         }
 
                         serverSocket = newServerSocket;
+                        pairingCode = newPairingCode;
                     }
+
+                    notifyPairingCode(newPairingCode);
 
                     registerNetworkService(
                             newServerSocket.getLocalPort()
@@ -259,7 +262,8 @@ public final class TvKeyboardReceiver {
                     }
 
                     notifyStatus(
-                            "Ready. Enter the code on your phone."
+                            "Encrypted connection ready. "
+                                    + "Enter the code on your phone."
                     );
 
                     acceptConnections();
@@ -267,9 +271,11 @@ public final class TvKeyboardReceiver {
                 } catch (Exception e) {
                     if (running) {
                         notifyError(
-                                "Unable to start phone connection: "
+                                "Unable to start encrypted connection: "
                                         + safeMessage(e)
                         );
+
+                        stopInternal();
                     }
                 }
             });
@@ -278,10 +284,178 @@ public final class TvKeyboardReceiver {
             running = false;
 
             notifyError(
-                    "Unable to start phone connection: "
+                    "Unable to prepare phone connection: "
                             + safeMessage(e)
             );
         }
+    }
+
+    /**
+     * Creates a new temporary certificate for this TV session.
+     *
+     * The Android Keystore protects the private key.
+     * The certificate is used by TLS to encrypt the connection.
+     */
+    private SSLServerSocket createEncryptedServer()
+            throws Exception {
+
+        KeyStore androidKeyStore =
+                KeyStore.getInstance("AndroidKeyStore");
+
+        androidKeyStore.load(null);
+
+        if (androidKeyStore.containsAlias(KEY_ALIAS)) {
+            androidKeyStore.deleteEntry(KEY_ALIAS);
+        }
+
+        Calendar start = Calendar.getInstance();
+
+        Calendar end = Calendar.getInstance();
+        end.add(Calendar.YEAR, 10);
+
+        KeyPairGenerator generator =
+                KeyPairGenerator.getInstance(
+                        "RSA",
+                        "AndroidKeyStore"
+                );
+
+        KeyPairGeneratorSpec specification =
+                new KeyPairGeneratorSpec.Builder(appContext)
+                        .setAlias(KEY_ALIAS)
+                        .setSubject(
+                                new X500Principal("CN=Donut4U TV")
+                        )
+                        .setSerialNumber(BigInteger.ONE)
+                        .setStartDate(start.getTime())
+                        .setEndDate(end.getTime())
+                        .setKeySize(2048)
+                        .build();
+
+        generator.initialize(specification);
+        generator.generateKeyPair();
+
+        PrivateKey privateKey =
+                (PrivateKey) androidKeyStore.getKey(
+                        KEY_ALIAS,
+                        null
+                );
+
+        Certificate certificate =
+                androidKeyStore.getCertificate(KEY_ALIAS);
+
+        if (privateKey == null || certificate == null) {
+            throw new IllegalStateException(
+                    "TV pairing certificate could not be created."
+            );
+        }
+
+        char[] temporaryPassword =
+                ("Donut4U-" + secureRandom.nextLong())
+                        .toCharArray();
+
+        KeyStore identityStore =
+                KeyStore.getInstance("PKCS12");
+
+        identityStore.load(null, null);
+
+        identityStore.setKeyEntry(
+                "tv",
+                privateKey,
+                temporaryPassword,
+                new Certificate[]{certificate}
+        );
+
+        KeyManagerFactory keyManagerFactory =
+                KeyManagerFactory.getInstance(
+                        KeyManagerFactory.getDefaultAlgorithm()
+                );
+
+        keyManagerFactory.init(
+                identityStore,
+                temporaryPassword
+        );
+
+        SSLContext sslContext =
+                SSLContext.getInstance("TLS");
+
+        sslContext.init(
+                keyManagerFactory.getKeyManagers(),
+                null,
+                secureRandom
+        );
+
+        SSLServerSocket sslServerSocket =
+                (SSLServerSocket) sslContext
+                        .getServerSocketFactory()
+                        .createServerSocket(0);
+
+        sslServerSocket.setReuseAddress(true);
+        sslServerSocket.setNeedClientAuth(false);
+
+        enableSupportedTlsProtocols(sslServerSocket);
+
+        return sslServerSocket;
+    }
+
+    private void enableSupportedTlsProtocols(
+            SSLServerSocket socket
+    ) {
+        String[] supported = socket.getSupportedProtocols();
+
+        java.util.ArrayList<String> enabled =
+                new java.util.ArrayList<>();
+
+        for (String protocol : supported) {
+            if ("TLSv1.3".equals(protocol)
+                    || "TLSv1.2".equals(protocol)) {
+                enabled.add(protocol);
+            }
+        }
+
+        if (!enabled.isEmpty()) {
+            socket.setEnabledProtocols(
+                    enabled.toArray(new String[0])
+            );
+        }
+    }
+
+    /**
+     * The phone uses the same calculation to verify the TV certificate.
+     */
+    private String getCertificatePairingCode()
+            throws Exception {
+
+        KeyStore keyStore =
+                KeyStore.getInstance("AndroidKeyStore");
+
+        keyStore.load(null);
+
+        Certificate certificate =
+                keyStore.getCertificate(KEY_ALIAS);
+
+        if (certificate == null) {
+            throw new IllegalStateException(
+                    "TV certificate is missing."
+            );
+        }
+
+        byte[] digest =
+                MessageDigest.getInstance("SHA-256")
+                        .digest(
+                                certificate.getPublicKey().getEncoded()
+                        );
+
+        long number =
+                ((digest[0] & 0xffL) << 24)
+                        | ((digest[1] & 0xffL) << 16)
+                        | ((digest[2] & 0xffL) << 8)
+                        | (digest[3] & 0xffL);
+
+        return String.format(
+                Locale.US,
+                "%06d",
+                number % 1000000L
+        );
     }
 
     private synchronized void stopInternal() {
@@ -312,16 +486,6 @@ public final class TvKeyboardReceiver {
         pairingCode = "";
 
         notifyStatus("Phone connection ended.");
-    }
-
-    private String createPairingCode() {
-        int number = secureRandom.nextInt(1000000);
-
-        return String.format(
-                Locale.US,
-                "%06d",
-                number
-        );
     }
 
     private void registerNetworkService(int port) {
@@ -437,10 +601,10 @@ public final class TvKeyboardReceiver {
 
     private void acceptConnections() {
         while (running) {
-            Socket socket = null;
+            SSLSocket socket = null;
 
             try {
-                ServerSocket currentServer;
+                SSLServerSocket currentServer;
 
                 synchronized (this) {
                     currentServer = serverSocket;
@@ -451,16 +615,18 @@ public final class TvKeyboardReceiver {
                     return;
                 }
 
-                socket = currentServer.accept();
+                socket = (SSLSocket) currentServer.accept();
 
-                socket.setSoTimeout(120000);
+                socket.setSoTimeout(15000);
+                socket.startHandshake();
 
                 handlePhone(socket);
 
             } catch (Exception e) {
                 if (running) {
                     notifyStatus(
-                            "Phone disconnected. Waiting for reconnection."
+                            "Phone disconnected or TLS verification failed. "
+                                    + "Waiting for reconnection."
                     );
                 }
 
@@ -475,7 +641,7 @@ public final class TvKeyboardReceiver {
         }
     }
 
-    private void handlePhone(Socket socket) {
+    private void handlePhone(SSLSocket socket) {
         try {
             BufferedReader reader =
                     new BufferedReader(
@@ -518,7 +684,7 @@ public final class TvKeyboardReceiver {
             pairingResponse.put(
                     "message",
                     codeValid
-                            ? "Connected"
+                            ? "Encrypted connection established"
                             : "Invalid code"
             );
 
@@ -535,7 +701,7 @@ public final class TvKeyboardReceiver {
 
             socket.setSoTimeout(0);
 
-            notifyStatus("Phone keyboard connected.");
+            notifyStatus("Encrypted phone keyboard connected.");
 
             String line;
 
@@ -592,10 +758,7 @@ public final class TvKeyboardReceiver {
     ) throws Exception {
 
         String songTitle =
-                request.optString(
-                        "text",
-                        ""
-                ).trim();
+                request.optString("text", "").trim();
 
         if (songTitle.isEmpty()
                 || songTitle.length() > 200) {
@@ -608,20 +771,47 @@ public final class TvKeyboardReceiver {
             return;
         }
 
-        mainHandler.post(() -> {
-            Listener listener = activeListener;
+        Listener listener = activeListener;
 
-            if (running
-                    && sessionEnabled
-                    && listener != null) {
-                listener.onSearchRequested(songTitle);
+        if (!sessionEnabled || listener == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "No active TV screen is listening."
+            );
+            return;
+        }
+
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicBoolean delivered = new AtomicBoolean(false);
+
+        mainHandler.post(() -> {
+            try {
+                Listener current = activeListener;
+
+                if (running
+                        && sessionEnabled
+                        && current != null) {
+                    current.onSearchRequested(songTitle);
+                    delivered.set(true);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                completed.countDown();
             }
         });
 
+        boolean finished = completed.await(
+                CALLBACK_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS
+        );
+
         sendResponse(
                 writer,
-                true,
-                "Search sent"
+                finished && delivered.get(),
+                finished && delivered.get()
+                        ? "Search sent"
+                        : "No active TV screen accepted the search"
         );
     }
 
@@ -631,16 +821,10 @@ public final class TvKeyboardReceiver {
     ) throws Exception {
 
         String target =
-                request.optString(
-                        "target",
-                        ""
-                ).trim();
+                request.optString("target", "").trim();
 
         String text =
-                request.optString(
-                        "text",
-                        ""
-                );
+                request.optString("text", "");
 
         String action =
                 request.optString(
@@ -659,7 +843,7 @@ public final class TvKeyboardReceiver {
             return;
         }
 
-        if (text.length() > 2000) {
+        if (text.length() > MAX_TEXT_LENGTH) {
             sendResponse(
                     writer,
                     false,
@@ -684,25 +868,53 @@ public final class TvKeyboardReceiver {
             return;
         }
 
+        Listener listener = activeListener;
+
+        if (!sessionEnabled || listener == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "No active TV screen is listening."
+            );
+            return;
+        }
+
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicBoolean delivered = new AtomicBoolean(false);
+
         mainHandler.post(() -> {
-            Listener listener = activeListener;
+            try {
+                Listener current = activeListener;
 
-            if (running
-                    && sessionEnabled
-                    && listener != null) {
+                if (running
+                        && sessionEnabled
+                        && current != null) {
 
-                listener.onTextInput(
-                        target,
-                        text,
-                        action
-                );
+                    current.onTextInput(
+                            target,
+                            text,
+                            action
+                    );
+
+                    delivered.set(true);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                completed.countDown();
             }
         });
 
+        boolean finished = completed.await(
+                CALLBACK_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS
+        );
+
         sendResponse(
                 writer,
-                true,
-                "Text input sent"
+                finished && delivered.get(),
+                finished && delivered.get()
+                        ? "Text input delivered"
+                        : "No active TV screen accepted the input"
         );
     }
 
@@ -729,7 +941,8 @@ public final class TvKeyboardReceiver {
 
             if (running
                     && sessionEnabled
-                    && listener != null) {
+                    && listener != null
+                    && !code.isEmpty()) {
                 listener.onPairingCodeReady(code);
             }
         });
