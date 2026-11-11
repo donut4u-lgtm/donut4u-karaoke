@@ -65,6 +65,9 @@ public class AuthActivity extends Activity {
     private ProgressBar progressBar;
     private AdView adView;
 
+    private TextView tvPairingCodeText;
+    private TextView tvPairingStatusText;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -73,6 +76,10 @@ public class AuthActivity extends Activity {
         getWindow().setNavigationBarColor(DARK);
 
         auth = FirebaseAuth.getInstance();
+
+        if (isAndroidTv()) {
+            startTvPairing();
+        }
 
         buildScreen();
 
@@ -96,6 +103,53 @@ public class AuthActivity extends Activity {
                 }
             });
         }
+    }
+
+    private void startTvPairing() {
+        TvKeyboardReceiver.enableSession(
+                getApplicationContext(),
+                new TvKeyboardReceiver.Listener() {
+                    @Override
+                    public void onPairingCodeReady(String code) {
+                        runOnUiThread(() -> {
+                            if (tvPairingCodeText != null) {
+                                tvPairingCodeText.setText(code);
+                            }
+
+                            if (tvPairingStatusText != null) {
+                                tvPairingStatusText.setText(
+                                        "READY - CONNECT YOUR PHONE"
+                                );
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onSearchRequested(String songTitle) {
+                        // Search requests are handled by the active TV stage.
+                    }
+
+                    @Override
+                    public void onStatusChanged(String message) {
+                        runOnUiThread(() -> {
+                            if (tvPairingStatusText != null) {
+                                tvPairingStatusText.setText(message);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (tvPairingStatusText != null) {
+                                tvPairingStatusText.setText(
+                                        "PAIRING ERROR: " + message
+                                );
+                            }
+                        });
+                    }
+                }
+        );
     }
 
     private boolean isAndroidTv() {
@@ -150,6 +204,39 @@ public class AuthActivity extends Activity {
         subtitle.setGravity(Gravity.CENTER);
         subtitle.setPadding(0, dp(8), 0, dp(20));
         root.addView(subtitle, fullWidthWrap());
+
+        if (isAndroidTv()) {
+            TextView pairingLabel = new TextView(this);
+            pairingLabel.setText("PHONE KEYBOARD PAIRING CODE");
+            pairingLabel.setTextColor(MUTED);
+            pairingLabel.setTextSize(14);
+            pairingLabel.setTypeface(null, Typeface.BOLD);
+            pairingLabel.setGravity(Gravity.CENTER);
+            pairingLabel.setPadding(0, dp(4), 0, dp(4));
+            root.addView(pairingLabel, fullWidthWrap());
+
+            tvPairingCodeText = new TextView(this);
+            tvPairingCodeText.setText(
+                    TvKeyboardReceiver.getCurrentPairingCode().isEmpty()
+                            ? "------"
+                            : TvKeyboardReceiver.getCurrentPairingCode()
+            );
+            tvPairingCodeText.setTextColor(GREEN);
+            tvPairingCodeText.setTextSize(38);
+            tvPairingCodeText.setTypeface(null, Typeface.BOLD);
+            tvPairingCodeText.setGravity(Gravity.CENTER);
+            tvPairingCodeText.setLetterSpacing(0.16f);
+            tvPairingCodeText.setPadding(0, 0, 0, dp(2));
+            root.addView(tvPairingCodeText, fullWidthWrap());
+
+            tvPairingStatusText = new TextView(this);
+            tvPairingStatusText.setText("STARTING PHONE CONNECTION...");
+            tvPairingStatusText.setTextColor(MUTED);
+            tvPairingStatusText.setTextSize(12);
+            tvPairingStatusText.setGravity(Gravity.CENTER);
+            tvPairingStatusText.setPadding(0, 0, 0, dp(12));
+            root.addView(tvPairingStatusText, fullWidthWrap());
+        }
 
         TextView emailLabel = new TextView(this);
         emailLabel.setText("Email address");
@@ -606,7 +693,7 @@ public class AuthActivity extends Activity {
                     } else {
                         showError(
                                 task.getException(),
-                                "Could not send reset email."
+                                "Could not send password-reset email."
                         );
                     }
                 });
