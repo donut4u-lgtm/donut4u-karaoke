@@ -10,6 +10,7 @@ import android.net.nsd.NsdServiceInfo;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -27,11 +28,11 @@ import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import javax.net.ssl.SSLSocket;
 
 public class PhoneRemoteActivity extends Activity {
 
@@ -41,12 +42,6 @@ public class PhoneRemoteActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
-    /*
-     * The TV activity must route this target to its
-     * currently focused input field.
-     *
-     * No manual target ID is required on the phone.
-     */
     private static final String ACTIVE_TARGET = "active";
 
     private final Handler mainHandler =
@@ -61,15 +56,15 @@ public class PhoneRemoteActivity extends Activity {
     private InetAddress tvAddress;
     private int tvPort = -1;
 
-    private volatile Socket socket;
+    private volatile SSLSocket socket;
     private volatile BufferedReader reader;
     private volatile BufferedWriter writer;
 
     private volatile boolean discovering = false;
     private volatile boolean connected = false;
-
     private volatile boolean closing = false;
     private volatile boolean resolving = false;
+    private volatile boolean connecting = false;
 
     private EditText pairingCodeInput;
     private EditText songInput;
@@ -138,7 +133,7 @@ public class PhoneRemoteActivity extends Activity {
                         + "3. Keep both devices on the same Wi-Fi "
                         + "network or phone hotspot.\n\n"
                         + "4. Enter the TV code below and connect.\n\n"
-                        + "5. Focus the desired input field on the TV. "
+                        + "5. Select the desired input field on the TV. "
                         + "Type on your phone and send the text.\n\n"
                         + "6. Use SUBMIT when you want the TV to "
                         + "finish the current input."
@@ -169,7 +164,11 @@ public class PhoneRemoteActivity extends Activity {
         pairingCodeInput.setGravity(Gravity.CENTER);
         pairingCodeInput.setTextSize(19);
         pairingCodeInput.setLetterSpacing(0.20f);
-        pairingCodeInput.setMaxEms(6);
+        pairingCodeInput.setFilters(
+                new InputFilter[]{
+                        new InputFilter.LengthFilter(6)
+                }
+        );
 
         root.addView(
                 pairingCodeInput,
@@ -220,7 +219,6 @@ public class PhoneRemoteActivity extends Activity {
         keyboardInstructions.setText(
                 "Select the input field on the TV first. "
                         + "Then type here using your phone keyboard. "
-                        + "You do not need to enter a target ID. "
                         + "The phone sends text to the TV's active "
                         + "input field."
         );
@@ -293,10 +291,7 @@ public class PhoneRemoteActivity extends Activity {
 
         editActions.addView(submitButton, submitParams);
 
-        root.addView(
-                editActions,
-                fullWidthWrap()
-        );
+        root.addView(editActions, fullWidthWrap());
 
         backspaceButton.setEnabled(false);
         clearButton.setEnabled(false);
@@ -335,7 +330,6 @@ public class PhoneRemoteActivity extends Activity {
         root.addView(statusText, fullWidthWrap());
 
         setContentView(scrollView);
-
         setConnectedControls(false);
     }
 
@@ -396,13 +390,9 @@ public class PhoneRemoteActivity extends Activity {
                 new NsdManager.DiscoveryListener() {
 
                     @Override
-                    public void onDiscoveryStarted(
-                            String serviceType
-                    ) {
+                    public void onDiscoveryStarted(String serviceType) {
                         discovering = true;
-                        setStatus(
-                                "Searching for Donut4U TV..."
-                        );
+                        setStatus("Searching for Donut4U TV...");
                     }
 
                     @Override
@@ -415,7 +405,7 @@ public class PhoneRemoteActivity extends Activity {
                             return;
                         }
 
-                        if (resolving || connected) {
+                        if (resolving || connected || connecting) {
                             return;
                         }
 
@@ -435,8 +425,7 @@ public class PhoneRemoteActivity extends Activity {
                             tvPort = -1;
 
                             mainHandler.post(() -> {
-                                if (!closing
-                                        && tvFoundText != null) {
+                                if (!closing && tvFoundText != null) {
                                     tvFoundText.setText(
                                             "TV is not currently visible."
                                     );
@@ -446,9 +435,7 @@ public class PhoneRemoteActivity extends Activity {
                     }
 
                     @Override
-                    public void onDiscoveryStopped(
-                            String serviceType
-                    ) {
+                    public void onDiscoveryStopped(String serviceType) {
                         discovering = false;
                     }
 
@@ -458,7 +445,6 @@ public class PhoneRemoteActivity extends Activity {
                             int errorCode
                     ) {
                         discovering = false;
-
                         setStatus(
                                 "Could not search for TV. "
                                         + "Please reopen this screen."
@@ -494,9 +480,7 @@ public class PhoneRemoteActivity extends Activity {
     }
 
     @SuppressWarnings("deprecation")
-    private void resolveTvService(
-            NsdServiceInfo serviceInfo
-    ) {
+    private void resolveTvService(NsdServiceInfo serviceInfo) {
         nsdManager.resolveService(
                 serviceInfo,
                 new NsdManager.ResolveListener() {
@@ -507,7 +491,6 @@ public class PhoneRemoteActivity extends Activity {
                             int errorCode
                     ) {
                         resolving = false;
-
                         setStatus(
                                 "Found TV, but could not connect to it. "
                                         + "Check the Wi-Fi connection."
@@ -541,8 +524,8 @@ public class PhoneRemoteActivity extends Activity {
     }
 
     private void connectToTv() {
-        if (connected) {
-            setStatus("Already connected to TV.");
+        if (connected || connecting) {
+            setStatus("Already connected or connecting.");
             return;
         }
 
@@ -564,20 +547,25 @@ public class PhoneRemoteActivity extends Activity {
             return;
         }
 
+        connecting = true;
         connectButton.setEnabled(false);
-        setStatus("Connecting to TV...");
+        setStatus("Establishing encrypted connection...");
 
         final InetAddress address = tvAddress;
         final int port = tvPort;
 
         networkExecutor.execute(() -> {
-            Socket newSocket = null;
+            SSLSocket newSocket = null;
 
             try {
-                newSocket = new Socket();
-
-                newSocket.connect(
-                        new InetSocketAddress(address, port),
+                /*
+                 * TvPairingTls verifies the TV certificate against
+                 * the six-digit pairing code before returning.
+                 */
+                newSocket = TvPairingTls.connect(
+                        address,
+                        port,
+                        code,
                         8000
                 );
 
@@ -616,20 +604,12 @@ public class PhoneRemoteActivity extends Activity {
                         new JSONObject(responseLine);
 
                 if (!response.optBoolean("ok", false)) {
-                    newSocket.close();
-
-                    mainHandler.post(() -> {
-                        if (!closing) {
-                            connectButton.setEnabled(true);
-
-                            setStatus(
-                                    "Incorrect or expired code. "
-                                            + "Check the TV screen."
-                            );
-                        }
-                    });
-
-                    return;
+                    throw new Exception(
+                            response.optString(
+                                    "message",
+                                    "TV rejected the pairing code."
+                            )
+                    );
                 }
 
                 socket = newSocket;
@@ -640,6 +620,8 @@ public class PhoneRemoteActivity extends Activity {
                 socket.setSoTimeout(0);
 
                 mainHandler.post(() -> {
+                    connecting = false;
+
                     if (closing) {
                         disconnect();
                         return;
@@ -652,7 +634,8 @@ public class PhoneRemoteActivity extends Activity {
                     setConnectedControls(true);
 
                     setStatus(
-                            "CONNECTED. Select a TV input field, "
+                            "ENCRYPTED CONNECTION ESTABLISHED. "
+                                    + "Select a TV input field, "
                                     + "then type on your phone."
                     );
 
@@ -668,12 +651,14 @@ public class PhoneRemoteActivity extends Activity {
                 }
 
                 mainHandler.post(() -> {
+                    connecting = false;
+
                     if (!closing) {
                         connectButton.setEnabled(true);
 
                         setStatus(
-                                "Connection failed. Check Wi-Fi "
-                                        + "and the TV code."
+                                "Secure connection failed: "
+                                        + safeMessage(e)
                         );
                     }
                 });
@@ -736,12 +721,6 @@ public class PhoneRemoteActivity extends Activity {
         });
     }
 
-    /**
-     * Sends text to the active TV input.
-     *
-     * The phone does not need to know the ID of the
-     * current TV input field.
-     */
     private void sendText(String action) {
         if (!connected) {
             setStatus("Connect to the TV first.");
@@ -816,11 +795,6 @@ public class PhoneRemoteActivity extends Activity {
         });
     }
 
-    /**
-     * All socket request/response operations run on the
-     * single network executor to prevent overlapping reads
-     * and writes.
-     */
     private JSONObject sendRequestAndRead(
             JSONObject request
     ) throws Exception {
@@ -887,6 +861,7 @@ public class PhoneRemoteActivity extends Activity {
 
     private void disconnect() {
         connected = false;
+        connecting = false;
 
         try {
             networkExecutor.execute(() -> {
@@ -966,6 +941,14 @@ public class PhoneRemoteActivity extends Activity {
         });
     }
 
+    private String safeMessage(Exception exception) {
+        String message = exception.getMessage();
+
+        return message == null || message.trim().isEmpty()
+                ? exception.getClass().getSimpleName()
+                : message;
+    }
+
     private Button makeButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -1027,6 +1010,7 @@ public class PhoneRemoteActivity extends Activity {
     protected void onDestroy() {
         closing = true;
         connected = false;
+        connecting = false;
 
         if (discovering
                 && nsdManager != null
