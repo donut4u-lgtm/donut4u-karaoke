@@ -68,9 +68,7 @@ jobs:
           set -euo pipefail
 
           git clone https://github.com/Virtover/fluidsynth-kmp.git fluidsynth-source
-
           cd fluidsynth-source
-
           git checkout a364bb9cd17834a4c5eb290efaae0845785e3dfe
 
           echo "PASS: Pinned FluidSynth source checked out."
@@ -131,12 +129,58 @@ jobs:
               raise SystemExit("FAIL: Gain was not placed after MIDI player setup.")
 
           path.write_text(patched)
-
-          print("PASS: Stage 3 gain 0.8 applied after SoundFont and MIDI initialization.")
+          print("PASS: Stage 3 gain 0.8 applied after MIDI initialization.")
           PY
 
           grep -n -A9 'init {' "$FILE"
           grep -F 'FluidSynthJni.setGain(context.synthPtr, 0.8f)' "$FILE"
+
+      - name: Apply 16 KB linker alignment to FluidSynth JNI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="fluidsynth-source/fluidsynth-kmp/src/androidMain/cpp/CMakeLists.txt"
+
+          test -s "$FILE"
+
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          source = path.read_text()
+
+          old = "target_link_libraries(fluidsynth_jni fluidsynth ${log-lib})"
+
+          new = """target_link_options(fluidsynth_jni PRIVATE
+              "-Wl,-z,max-page-size=16384"
+              "-Wl,-z,common-page-size=16384"
+          )
+
+          target_link_libraries(fluidsynth_jni fluidsynth ${log-lib})"""
+
+          if source.count(old) != 1:
+              raise SystemExit(
+                  "FAIL: Expected CMake link target was not found exactly once."
+              )
+
+          if "max-page-size=16384" in source:
+              raise SystemExit("FAIL: 16 KB linker flags already exist; refusing duplicate patch.")
+
+          patched = source.replace(old, new, 1)
+
+          if patched.count('"-Wl,-z,max-page-size=16384"') != 1:
+              raise SystemExit("FAIL: Maximum page-size flag missing.")
+
+          if patched.count('"-Wl,-z,common-page-size=16384"') != 1:
+              raise SystemExit("FAIL: Common page-size flag missing.")
+
+          path.write_text(patched)
+          print("PASS: 16 KB linker flags applied to fluidsynth_jni.")
+          PY
+
+          cat "$FILE"
 
       - name: Build FluidSynth release AAR
         working-directory: fluidsynth-source
@@ -152,7 +196,6 @@ jobs:
             --console=plain
 
           AAR="fluidsynth-kmp/build/outputs/aar/fluidsynth-kmp-release.aar"
-
           test -s "$AAR"
 
           mkdir -p ../app/libs
@@ -190,7 +233,6 @@ jobs:
 
                 FOUND=1
                 ALIGN="${LINE##* }"
-
                 [[ "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]
 
                 VALUE=$((16#${ALIGN#0x}))
@@ -232,9 +274,7 @@ jobs:
             > app/src/main/assets/GeneralUser-GS.sf2
 
           test "$(stat -c '%s' app/src/main/assets/GeneralUser-GS.sf2)" -eq 32319396
-
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 count=4 2>/dev/null)" = "RIFF"
-
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
 
           echo "PASS: SoundFont assembled and verified."
@@ -291,7 +331,6 @@ jobs:
           echo "$BADGING" | grep -F "versionName='1.0.26'"
 
           unzip -t "$APK"
-
           echo "PASS: APK package, version and ZIP integrity."
 
       - name: Verify APK 16 KB alignment
@@ -308,7 +347,6 @@ jobs:
 
           rm -rf apk-check
           mkdir -p apk-check
-
           unzip -q "$APK" 'lib/*' -d apk-check
 
           for ABI in arm64-v8a x86_64; do
@@ -329,7 +367,6 @@ jobs:
 
                 FOUND=1
                 ALIGN="${LINE##* }"
-
                 [[ "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]
 
                 VALUE=$((16#${ALIGN#0x}))
@@ -346,7 +383,6 @@ jobs:
           done
 
           "$ZIPALIGN" -v -c -P 16 4 "$APK"
-
           echo "PASS: APK 16 KB verification."
 
       - name: Upload verified Gain 0.8 APK
