@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -64,6 +65,8 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
+        boolean androidTv = isAndroidTv();
+
         FirebaseUser user =
                 FirebaseAuth.getInstance().getCurrentUser();
 
@@ -74,15 +77,14 @@ public class MainActivity extends Activity {
             FirebaseAuth.getInstance().signOut();
         }
 
-        // Start the TV phone-keyboard pairing service immediately at app launch.
-        // The same shared session remains active while moving between TV screens.
-        if (isAndroidTv()) {
+        /*
+         * TV:
+         * Start the shared pairing server immediately.
+         * Keep it alive while the TV moves between screens.
+         */
+        if (androidTv) {
             startTvPairing();
-        }
 
-        // Android TV authenticates before opening the TV stage menu.
-        // TV does not use phone advertisements or phone active sessions.
-        if (isAndroidTv()) {
             AppUpdateChecker.checkForUpdates(this);
 
             if (verifiedUserAtLaunch) {
@@ -94,35 +96,51 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Existing phone behavior remains unchanged.
-        if (!verifiedUserAtLaunch) {
-            showWelcomeScreen();
-        }
-
+        /*
+         * PHONE:
+         * The phone is the controller and keyboard.
+         * Open the remote immediately instead of showing
+         * the normal phone welcome/song screen.
+         */
         AppUpdateChecker.checkForUpdates(this);
 
-        MobileAds.initialize(this, initializationStatus ->
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) {
-                        return;
-                    }
-
-                    loadBannerAd();
-                    loadAppOpenAd();
-                })
-        );
+        openPhoneRemote();
     }
 
+    /**
+     * Launches the phone keyboard/controller.
+     */
+    private void openPhoneRemote() {
+        Intent intent = new Intent(
+                MainActivity.this,
+                PhoneRemoteActivity.class
+        );
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+        );
+
+        startActivity(intent);
+        finish();
+    }
+
+    /**
+     * Starts one application-wide TV pairing session.
+     */
     private void startTvPairing() {
         TvKeyboardReceiver.enableSession(
                 getApplicationContext(),
                 new TvKeyboardReceiver.Listener() {
+
                     @Override
                     public void onPairingCodeReady(String code) {
                         runOnUiThread(() -> {
                             if (tvPairingCodeText != null) {
                                 tvPairingCodeText.setText(code);
                             }
+
                             if (tvPairingStatusText != null) {
                                 tvPairingStatusText.setText(
                                         "READY - CONNECT YOUR PHONE"
@@ -133,7 +151,7 @@ public class MainActivity extends Activity {
 
                     @Override
                     public void onSearchRequested(String songTitle) {
-                        // Search requests are handled by the active TV stage.
+                        // The active TV stage handles search requests.
                     }
 
                     @Override
@@ -240,8 +258,7 @@ public class MainActivity extends Activity {
                     }
 
                     @Override
-                    public void onAdFailedToLoad(
-                            LoadAdError error) {
+                    public void onAdFailedToLoad(LoadAdError error) {
                         appOpenAd = null;
                         continueAfterAd();
                     }
