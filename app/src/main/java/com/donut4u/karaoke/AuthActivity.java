@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -30,6 +31,8 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+
+import org.json.JSONObject;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -109,6 +112,7 @@ public class AuthActivity extends Activity {
         TvKeyboardReceiver.enableSession(
                 getApplicationContext(),
                 new TvKeyboardReceiver.Listener() {
+
                     @Override
                     public void onPairingCodeReady(String code) {
                         runOnUiThread(() -> {
@@ -127,6 +131,21 @@ public class AuthActivity extends Activity {
                     @Override
                     public void onSearchRequested(String songTitle) {
                         // Search requests are handled by the active TV stage.
+                    }
+
+                    @Override
+                    public void onTextInput(
+                            String target,
+                            String text,
+                            String action
+                    ) {
+                        runOnUiThread(() ->
+                                handleRemoteAuthInput(
+                                        target,
+                                        text,
+                                        action
+                                )
+                        );
                     }
 
                     @Override
@@ -150,6 +169,103 @@ public class AuthActivity extends Activity {
                     }
                 }
         );
+    }
+
+    /**
+     * Handles non-sensitive remote input on the TV login screen.
+     *
+     * Supported targets:
+     * email
+     * auth_email
+     * password_focus
+     * auth_password_focus
+     * sign_in
+     *
+     * Password characters are deliberately not accepted over
+     * the current unencrypted local-network connection.
+     */
+    private void handleRemoteAuthInput(
+            String target,
+            String text,
+            String action
+    ) {
+        if (!isAndroidTv() || isFinishing() || isDestroyed()) {
+            return;
+        }
+
+        if (emailInput == null || passwordInput == null) {
+            return;
+        }
+
+        String safeTarget = target == null
+                ? ""
+                : target.trim().toLowerCase(java.util.Locale.US);
+
+        String safeAction = action == null
+                ? "replace"
+                : action.trim().toLowerCase(java.util.Locale.US);
+
+        if ("password".equals(safeTarget)
+                || "auth_password".equals(safeTarget)) {
+
+            showMessage(
+                    "For account safety, enter your password "
+                            + "using the TV keyboard."
+            );
+            return;
+        }
+
+        if ("password_focus".equals(safeTarget)
+                || "auth_password_focus".equals(safeTarget)) {
+
+            passwordInput.requestFocus();
+
+            showMessage(
+                    "Password field selected. Enter your password "
+                            + "on the TV."
+            );
+            return;
+        }
+
+        if ("sign_in".equals(safeTarget)) {
+            if ("submit".equals(safeAction)) {
+                signIn();
+            }
+            return;
+        }
+
+        if (!"email".equals(safeTarget)
+                && !"auth_email".equals(safeTarget)) {
+            showMessage("Unknown login input target: " + safeTarget);
+            return;
+        }
+
+        if ("replace".equals(safeAction)) {
+            emailInput.setText(text == null ? "" : text);
+            emailInput.setSelection(emailInput.length());
+
+        } else if ("append".equals(safeAction)) {
+            String addition = text == null ? "" : text;
+
+            emailInput.append(addition);
+
+        } else if ("backspace".equals(safeAction)) {
+            int length = emailInput.length();
+
+            if (length > 0) {
+                emailInput.getText().delete(length - 1, length);
+            }
+
+        } else if ("clear".equals(safeAction)) {
+            emailInput.setText("");
+
+        } else if ("submit".equals(safeAction)) {
+            passwordInput.requestFocus();
+
+            showMessage(
+                    "Email entered. Enter your password on the TV."
+            );
+        }
     }
 
     private boolean isAndroidTv() {
@@ -347,7 +463,6 @@ public class AuthActivity extends Activity {
 
         setContentView(scrollView);
 
-        // Keep the sign-in button as the initial remote focus.
         signInButton.setFocusable(true);
         signInButton.setFocusableInTouchMode(true);
         signInButton.requestFocus();
