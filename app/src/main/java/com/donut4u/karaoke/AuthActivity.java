@@ -32,8 +32,6 @@ import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 
-import org.json.JSONObject;
-
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -172,17 +170,23 @@ public class AuthActivity extends Activity {
     }
 
     /**
-     * Handles non-sensitive remote input on the TV login screen.
+     * Receives keyboard input from the paired phone.
      *
      * Supported targets:
+     * active
      * email
      * auth_email
+     * password
+     * auth_password
+     * email_focus
+     * auth_email_focus
      * password_focus
      * auth_password_focus
      * sign_in
      *
-     * Password characters are deliberately not accepted over
-     * the current unencrypted local-network connection.
+     * Password input is accepted through the existing TLS-protected
+     * TvKeyboardReceiver connection. Do not replace that connection
+     * with unencrypted TCP.
      */
     private void handleRemoteAuthInput(
             String target,
@@ -198,20 +202,19 @@ public class AuthActivity extends Activity {
         }
 
         String safeTarget = target == null
-                ? ""
+                ? "active"
                 : target.trim().toLowerCase(java.util.Locale.US);
 
         String safeAction = action == null
                 ? "replace"
                 : action.trim().toLowerCase(java.util.Locale.US);
 
-        if ("password".equals(safeTarget)
-                || "auth_password".equals(safeTarget)) {
+        EditText destination = null;
 
-            showMessage(
-                    "For account safety, enter your password "
-                            + "using the TV keyboard."
-            );
+        if ("email_focus".equals(safeTarget)
+                || "auth_email_focus".equals(safeTarget)) {
+
+            emailInput.requestFocus();
             return;
         }
 
@@ -219,11 +222,6 @@ public class AuthActivity extends Activity {
                 || "auth_password_focus".equals(safeTarget)) {
 
             passwordInput.requestFocus();
-
-            showMessage(
-                    "Password field selected. Enter your password "
-                            + "on the TV."
-            );
             return;
         }
 
@@ -234,37 +232,96 @@ public class AuthActivity extends Activity {
             return;
         }
 
-        if (!"email".equals(safeTarget)
-                && !"auth_email".equals(safeTarget)) {
+        if ("email".equals(safeTarget)
+                || "auth_email".equals(safeTarget)) {
+
+            destination = emailInput;
+
+        } else if ("password".equals(safeTarget)
+                || "auth_password".equals(safeTarget)) {
+
+            destination = passwordInput;
+
+        } else if ("active".equals(safeTarget)
+                || safeTarget.isEmpty()) {
+
+            View focusedView = getCurrentFocus();
+
+            if (focusedView == passwordInput) {
+                destination = passwordInput;
+            } else if (focusedView == emailInput) {
+                destination = emailInput;
+            } else {
+                // If no input field currently has focus,
+                // start with the email field.
+                destination = emailInput;
+                destination.requestFocus();
+            }
+
+        } else {
             showMessage("Unknown login input target: " + safeTarget);
             return;
         }
 
+        if (destination == null || !destination.isEnabled()) {
+            return;
+        }
+
         if ("replace".equals(safeAction)) {
-            emailInput.setText(text == null ? "" : text);
-            emailInput.setSelection(emailInput.length());
+
+            String replacement = text == null ? "" : text;
+            destination.setText(replacement);
+            destination.setSelection(destination.length());
 
         } else if ("append".equals(safeAction)) {
-            String addition = text == null ? "" : text;
 
-            emailInput.append(addition);
+            String addition = text == null ? "" : text;
+            destination.append(addition);
 
         } else if ("backspace".equals(safeAction)) {
-            int length = emailInput.length();
 
-            if (length > 0) {
-                emailInput.getText().delete(length - 1, length);
-            }
+            deleteBeforeCursor(destination);
 
         } else if ("clear".equals(safeAction)) {
-            emailInput.setText("");
+
+            destination.setText("");
 
         } else if ("submit".equals(safeAction)) {
-            passwordInput.requestFocus();
 
-            showMessage(
-                    "Email entered. Enter your password on the TV."
-            );
+            if (destination == emailInput) {
+                passwordInput.requestFocus();
+
+                showMessage("Email entered. Enter your password.");
+
+            } else if (destination == passwordInput) {
+                signIn();
+            }
+        }
+    }
+
+    private void deleteBeforeCursor(EditText input) {
+        if (input == null || input.getText() == null) {
+            return;
+        }
+
+        int start = input.getSelectionStart();
+        int end = input.getSelectionEnd();
+
+        if (start < 0 || end < 0) {
+            start = input.length();
+            end = start;
+        }
+
+        if (start != end) {
+            int selectionStart = Math.min(start, end);
+            int selectionEnd = Math.max(start, end);
+
+            input.getText().delete(selectionStart, selectionEnd);
+            return;
+        }
+
+        if (start > 0) {
+            input.getText().delete(start - 1, start);
         }
     }
 
