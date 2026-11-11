@@ -50,6 +50,9 @@ public class MainActivity extends Activity {
     private AdView adView;
     private AppOpenAd appOpenAd;
 
+    private TextView tvPairingCodeText;
+    private TextView tvPairingStatusText;
+
     private boolean verifiedUserAtLaunch;
     private boolean continuedAfterAd;
     private boolean appOpenAdShowing;
@@ -69,6 +72,12 @@ public class MainActivity extends Activity {
 
         if (user != null && !user.isEmailVerified()) {
             FirebaseAuth.getInstance().signOut();
+        }
+
+        // Start the TV phone-keyboard pairing service immediately at app launch.
+        // The same shared session remains active while moving between TV screens.
+        if (isAndroidTv()) {
+            startTvPairing();
         }
 
         // Android TV authenticates before opening the TV stage menu.
@@ -101,6 +110,52 @@ public class MainActivity extends Activity {
                     loadBannerAd();
                     loadAppOpenAd();
                 })
+        );
+    }
+
+    private void startTvPairing() {
+        TvKeyboardReceiver.enableSession(
+                getApplicationContext(),
+                new TvKeyboardReceiver.Listener() {
+                    @Override
+                    public void onPairingCodeReady(String code) {
+                        runOnUiThread(() -> {
+                            if (tvPairingCodeText != null) {
+                                tvPairingCodeText.setText(code);
+                            }
+                            if (tvPairingStatusText != null) {
+                                tvPairingStatusText.setText(
+                                        "READY - CONNECT YOUR PHONE"
+                                );
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onSearchRequested(String songTitle) {
+                        // Search requests are handled by the active TV stage.
+                    }
+
+                    @Override
+                    public void onStatusChanged(String message) {
+                        runOnUiThread(() -> {
+                            if (tvPairingStatusText != null) {
+                                tvPairingStatusText.setText(message);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (tvPairingStatusText != null) {
+                                tvPairingStatusText.setText(
+                                        "PAIRING ERROR: " + message
+                                );
+                            }
+                        });
+                    }
+                }
         );
     }
 
@@ -311,6 +366,39 @@ public class MainActivity extends Activity {
         subtitle.setGravity(Gravity.CENTER);
         subtitle.setPadding(0, dp(10), 0, dp(24));
         root.addView(subtitle, fullWidthWrap());
+
+        if (isAndroidTv()) {
+            TextView pairingLabel = new TextView(this);
+            pairingLabel.setText("PHONE KEYBOARD PAIRING CODE");
+            pairingLabel.setTextColor(MUTED);
+            pairingLabel.setTextSize(15);
+            pairingLabel.setTypeface(null, Typeface.BOLD);
+            pairingLabel.setGravity(Gravity.CENTER);
+            pairingLabel.setPadding(0, dp(8), 0, dp(4));
+            root.addView(pairingLabel, fullWidthWrap());
+
+            tvPairingCodeText = new TextView(this);
+            tvPairingCodeText.setText(
+                    TvKeyboardReceiver.getCurrentPairingCode().isEmpty()
+                            ? "------"
+                            : TvKeyboardReceiver.getCurrentPairingCode()
+            );
+            tvPairingCodeText.setTextColor(GREEN);
+            tvPairingCodeText.setTextSize(42);
+            tvPairingCodeText.setTypeface(null, Typeface.BOLD);
+            tvPairingCodeText.setGravity(Gravity.CENTER);
+            tvPairingCodeText.setLetterSpacing(0.18f);
+            tvPairingCodeText.setPadding(0, dp(2), 0, dp(2));
+            root.addView(tvPairingCodeText, fullWidthWrap());
+
+            tvPairingStatusText = new TextView(this);
+            tvPairingStatusText.setText("STARTING PHONE CONNECTION...");
+            tvPairingStatusText.setTextColor(MUTED);
+            tvPairingStatusText.setTextSize(13);
+            tvPairingStatusText.setGravity(Gravity.CENTER);
+            tvPairingStatusText.setPadding(0, 0, 0, dp(18));
+            root.addView(tvPairingStatusText, fullWidthWrap());
+        }
 
         Button createButton = makeButton("Create account");
         addButton(root, createButton, 10);
