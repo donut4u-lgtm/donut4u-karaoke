@@ -15,14 +15,13 @@ import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.math.BigInteger;
-import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
-import java.security.PrivateKey;
-import java.security.SecureRandom;
-import java.security.cert.Certificate;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
@@ -37,19 +36,6 @@ import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.security.auth.x500.X500Principal;
 
-/**
- * Shared phone-to-TV keyboard connection.
- *
- * One receiver and one pairing code are kept for the
- * lifetime of the TV application session.
- *
- * The network connection uses TLS. The TV creates a
- * temporary Android Keystore certificate and derives
- * the six-digit pairing code from its public key.
- *
- * Stage activities can replace the active listener
- * without stopping the network connection.
- */
 public final class TvKeyboardReceiver {
 
     public static final String SERVICE_TYPE =
@@ -80,7 +66,6 @@ public final class TvKeyboardReceiver {
                 String text,
                 String action
         ) {
-            // Optional callback for activities supporting text input.
         }
     }
 
@@ -203,7 +188,7 @@ public final class TvKeyboardReceiver {
      * Stage changes must not terminate the shared connection.
      */
     public void stop() {
-        // Intentionally keep the application-wide session alive.
+        // Keep the application-wide session alive.
     }
 
     public synchronized String getPairingCode() {
@@ -291,10 +276,10 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * Creates a new temporary certificate for this TV session.
+     * Creates a temporary TV certificate in Android Keystore.
      *
-     * The Android Keystore protects the private key.
-     * The certificate is used by TLS to encrypt the connection.
+     * The private key remains in Android Keystore.
+     * It is not exported into a PKCS12 file.
      */
     private SSLServerSocket createEncryptedServer()
             throws Exception {
@@ -334,46 +319,24 @@ public final class TvKeyboardReceiver {
         generator.initialize(specification);
         generator.generateKeyPair();
 
-        PrivateKey privateKey =
-                (PrivateKey) androidKeyStore.getKey(
-                        KEY_ALIAS,
-                        null
-                );
-
-        Certificate certificate =
-                androidKeyStore.getCertificate(KEY_ALIAS);
-
-        if (privateKey == null || certificate == null) {
+        if (androidKeyStore.getKey(KEY_ALIAS, null) == null
+                || androidKeyStore.getCertificate(KEY_ALIAS) == null) {
             throw new IllegalStateException(
                     "TV pairing certificate could not be created."
             );
         }
 
-        char[] temporaryPassword =
-                ("Donut4U-" + secureRandom.nextLong())
-                        .toCharArray();
-
-        KeyStore identityStore =
-                KeyStore.getInstance("PKCS12");
-
-        identityStore.load(null, null);
-
-        identityStore.setKeyEntry(
-                "tv",
-                privateKey,
-                temporaryPassword,
-                new Certificate[]{certificate}
-        );
-
+        /*
+         * Important:
+         * Initialize the key manager directly with Android Keystore.
+         * Do not copy the private key into a temporary PKCS12 store.
+         */
         KeyManagerFactory keyManagerFactory =
                 KeyManagerFactory.getInstance(
                         KeyManagerFactory.getDefaultAlgorithm()
                 );
 
-        keyManagerFactory.init(
-                identityStore,
-                temporaryPassword
-        );
+        keyManagerFactory.init(androidKeyStore, null);
 
         SSLContext sslContext =
                 SSLContext.getInstance("TLS");
@@ -402,8 +365,7 @@ public final class TvKeyboardReceiver {
     ) {
         String[] supported = socket.getSupportedProtocols();
 
-        java.util.ArrayList<String> enabled =
-                new java.util.ArrayList<>();
+        ArrayList<String> enabled = new ArrayList<>();
 
         for (String protocol : supported) {
             if ("TLSv1.3".equals(protocol)
@@ -420,7 +382,7 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * The phone uses the same calculation to verify the TV certificate.
+     * Pairing code calculation must match the phone TLS helper.
      */
     private String getCertificatePairingCode()
             throws Exception {
@@ -430,7 +392,7 @@ public final class TvKeyboardReceiver {
 
         keyStore.load(null);
 
-        Certificate certificate =
+        java.security.cert.Certificate certificate =
                 keyStore.getCertificate(KEY_ALIAS);
 
         if (certificate == null) {
@@ -617,6 +579,8 @@ public final class TvKeyboardReceiver {
 
                 socket = (SSLSocket) currentServer.accept();
 
+                enableSupportedTlsProtocols(socket);
+
                 socket.setSoTimeout(15000);
                 socket.startHandshake();
 
@@ -638,6 +602,25 @@ public final class TvKeyboardReceiver {
                     }
                 }
             }
+        }
+    }
+
+    private void enableSupportedTlsProtocols(SSLSocket socket) {
+        String[] supported = socket.getSupportedProtocols();
+
+        ArrayList<String> enabled = new ArrayList<>();
+
+        for (String protocol : supported) {
+            if ("TLSv1.3".equals(protocol)
+                    || "TLSv1.2".equals(protocol)) {
+                enabled.add(protocol);
+            }
+        }
+
+        if (!enabled.isEmpty()) {
+            socket.setEnabledProtocols(
+                    enabled.toArray(new String[0])
+            );
         }
     }
 
