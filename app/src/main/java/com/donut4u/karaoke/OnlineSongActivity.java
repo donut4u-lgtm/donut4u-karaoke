@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -15,6 +16,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -59,6 +61,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -71,7 +74,6 @@ public class OnlineSongActivity extends Activity {
     private static final int WHITE = Color.WHITE;
     private static final int MUTED = Color.LTGRAY;
 
-    // FIXED: Must match TvStageMenuActivity and MainActivity.
     private static final String EXTRA_TV_MODE =
             "com.donut4u.karaoke.EXTRA_TV_MODE";
 
@@ -127,7 +129,6 @@ public class OnlineSongActivity extends Activity {
     private TextView status;
     private LinearLayout resultsContainer;
 
-    // Phone-to-TV keyboard connection.
     private TvKeyboardReceiver tvKeyboardReceiver;
     private TextView tvPairingCodeText;
     private TextView tvKeyboardStatusText;
@@ -893,7 +894,6 @@ public class OnlineSongActivity extends Activity {
         }
     }
 
-    // Only one declaration of createTvSearchBackground() is retained.
     private StateListDrawable createTvSearchBackground() {
         GradientDrawable focused = new GradientDrawable();
         focused.setColor(Color.rgb(0, 0, 0));
@@ -991,7 +991,101 @@ public class OnlineSongActivity extends Activity {
                         }
 
                         searchBox.setText(songTitle);
+                        searchBox.setSelection(searchBox.length());
                         searchVideos();
+                    }
+
+                    @Override
+                    public void onTextInput(
+                            String target,
+                            String text,
+                            String action) {
+
+                        if (closing
+                                || !isTvStage1()
+                                || searchBox == null
+                                || target == null
+                                || action == null) {
+                            return;
+                        }
+
+                        String requestedTarget = target.trim();
+
+                        if (!requestedTarget.isEmpty()
+                                && !"active".equalsIgnoreCase(requestedTarget)
+                                && !"search".equalsIgnoreCase(requestedTarget)) {
+                            return;
+                        }
+
+                        String requestedAction =
+                                action.trim().toLowerCase(Locale.US);
+
+                        String input = text == null ? "" : text;
+
+                        Editable editable = searchBox.getText();
+
+                        int length = editable.length();
+
+                        int selectionStart = searchBox.getSelectionStart();
+                        int selectionEnd = searchBox.getSelectionEnd();
+
+                        if (selectionStart < 0 || selectionEnd < 0) {
+                            selectionStart = length;
+                            selectionEnd = length;
+                        }
+
+                        selectionStart = Math.max(
+                                0, Math.min(selectionStart, length));
+
+                        selectionEnd = Math.max(
+                                0, Math.min(selectionEnd, length));
+
+                        int start = Math.min(selectionStart, selectionEnd);
+                        int end = Math.max(selectionStart, selectionEnd);
+
+                        switch (requestedAction) {
+
+                            case "replace":
+                                searchBox.setText(input);
+                                searchBox.setSelection(searchBox.length());
+                                break;
+
+                            case "append":
+                                editable.replace(start, end, input);
+                                searchBox.setSelection(
+                                        Math.min(start + input.length(),
+                                                searchBox.length()));
+                                break;
+
+                            case "backspace":
+                                if (start != end) {
+                                    editable.delete(start, end);
+                                    searchBox.setSelection(start);
+
+                                } else if (start > 0) {
+                                    int deleteStart =
+                                            Character.offsetByCodePoints(
+                                                    editable,
+                                                    start,
+                                                    -1);
+
+                                    editable.delete(deleteStart, start);
+                                    searchBox.setSelection(deleteStart);
+                                }
+                                break;
+
+                            case "clear":
+                                searchBox.setText("");
+                                searchBox.setSelection(0);
+                                break;
+
+                            case "submit":
+                                searchVideos();
+                                break;
+
+                            default:
+                                break;
+                        }
                     }
 
                     @Override
