@@ -1,5 +1,5 @@
 
-name: Stage 4 - MIDI Gain 0.4 Build and Verify
+name: Stage 4 - MIDI Gain 0.6 Build and Verify
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Gain 0.4 FluidSynth and Donut4U
+    name: Build Gain 0.6 FluidSynth and Donut4U
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -73,7 +73,7 @@ jobs:
 
           git checkout 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
 
-      - name: Apply Stage 3 MIDI gain 0.4
+      - name: Apply Stage 3 MIDI gain 0.6
         shell: bash
         run: |
           set -euo pipefail
@@ -94,7 +94,7 @@ jobs:
 
           new = """    init {
                   // Donut4U Stage 3 MIDI/KAR volume adjustment.
-                  FluidSynthJni.setGain(context.synthPtr, 0.4f)
+                  FluidSynthJni.setGain(context.synthPtr, 0.6f)
                   FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
 
           if source.count(old) != 1:
@@ -104,7 +104,7 @@ jobs:
 
           path.write_text(source.replace(old, new))
 
-          print("PASS: Gain 0.4 applied to MIDI player only.")
+          print("PASS: Gain 0.6 applied to MIDI player only.")
           PY
 
           grep -n -A5 'init {' "$FILE"
@@ -320,10 +320,10 @@ jobs:
 
           echo "PASS: APK 16 KB verification."
 
-      - name: Upload verified Gain 0.4 APK
+      - name: Upload verified Gain 0.6 APK
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-midi-gain-04-verified-apk
+          name: stage4-midi-gain-06-verified-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
@@ -331,7 +331,7 @@ jobs:
       - name: Upload rebuilt FluidSynth AAR
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-midi-gain-04-verified-aar
+          name: stage4-midi-gain-06-verified-aar
           path: app/libs/fluidsynth-kmp-release.aar
           if-no-files-found: error
           retention-days: 14
