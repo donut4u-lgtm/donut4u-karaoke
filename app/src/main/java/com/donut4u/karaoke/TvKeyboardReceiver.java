@@ -82,6 +82,9 @@ public final class TvKeyboardReceiver {
             Context context,
             Listener listener
     ) {
+        // FIX: initialize appContext in this constructor too.
+        appContext = context.getApplicationContext();
+
         synchronized (LOCK) {
             activeListener = listener;
 
