@@ -27,14 +27,40 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK and NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platforms;android-35
-            build-tools;35.0.0
-            platform-tools
-            ndk;30.0.16248370
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
+              -type f -name sdkmanager -perm -u+x 2>/dev/null \
+              | sort -V | tail -n 1)"
+          fi
+
+          if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
+            echo "FAIL: Android sdkmanager not found."
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
+
+          "$SDKMANAGER" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools" \
+            "ndk;30.0.16248370"
+
+          echo "PASS: Android SDK and NDK installed."
 
       - name: Download pinned FluidSynth source
         shell: bash
@@ -47,7 +73,7 @@ jobs:
 
           git checkout 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
 
-      - name: Apply Stage 3 MIDI gain adjustment
+      - name: Apply Stage 3 MIDI gain 0.4
         shell: bash
         run: |
           set -euo pipefail
@@ -64,25 +90,24 @@ jobs:
           source = path.read_text()
 
           old = """    init {
-              FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
+                  FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
 
           new = """    init {
-              // Donut4U Stage 3: moderate MIDI/KAR output boost.
-              // FluidSynth's documented default master gain is 0.2.
-              // 0.4 doubles the default signal amplitude.
-              FluidSynthJni.setGain(context.synthPtr, 0.4f)
-
-              FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
+                  // Donut4U Stage 3 MIDI/KAR volume adjustment.
+                  FluidSynthJni.setGain(context.synthPtr, 0.4f)
+                  FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)"""
 
           if source.count(old) != 1:
-              raise SystemExit("FAIL: Expected MIDI player initialization was not found exactly once.")
+              raise SystemExit(
+                  "FAIL: MIDI player initialization did not match the expected source."
+              )
 
           path.write_text(source.replace(old, new))
 
-          print("PASS: Gain 0.4 applied to MidiFilePlayer only.")
+          print("PASS: Gain 0.4 applied to MIDI player only.")
           PY
 
-          grep -n -A8 'init {' "$FILE"
+          grep -n -A5 'init {' "$FILE"
 
       - name: Build FluidSynth release AAR
         working-directory: fluidsynth-source
@@ -90,7 +115,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          gradle :fluidsynth-kmp:assembleRelease \
+          chmod +x ./gradlew
+
+          ./gradlew :fluidsynth-kmp:assembleRelease \
             --no-daemon \
             --stacktrace \
             --console=plain
@@ -102,7 +129,7 @@ jobs:
           mkdir -p ../app/libs
           cp "$AAR" ../app/libs/fluidsynth-kmp-release.aar
 
-          echo "PASS: Gain-adjusted AAR built."
+          echo "PASS: Gain-adjusted FluidSynth AAR built."
           ls -lh ../app/libs/fluidsynth-kmp-release.aar
 
       - name: Verify FluidSynth 16 KB native alignment
@@ -118,7 +145,6 @@ jobs:
 
           for ABI in arm64-v8a x86_64; do
             DIR="aar-check/jni/$ABI"
-
             test -d "$DIR"
 
             mapfile -t LIBS < <(
@@ -141,10 +167,9 @@ jobs:
                 VALUE=$((16#${ALIGN#0x}))
 
                 if (( VALUE < 16384 )); then
-                  echo "FAIL: $LIB has insufficient alignment: $ALIGN"
+                  echo "FAIL: $LIB alignment is $ALIGN"
                   exit 1
                 fi
-
               done < <("$READELF" -lW "$LIB")
 
               test "$FOUND" -eq 1
@@ -183,12 +208,12 @@ jobs:
 
           test "$(dd if=app/src/main/assets/GeneralUser-GS.sf2 bs=1 skip=8 count=4 2>/dev/null)" = "sfbk"
 
-          echo "PASS: SoundFont verified."
+          echo "PASS: SoundFont assembled and verified."
 
       - name: Build Donut4U debug APK
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          DONUT4U_KEYSTORE_PATH: unused
+          DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/unused.jks
           DONUT4U_KEYSTORE_PASSWORD: unused
           DONUT4U_KEY_ALIAS: unused
           DONUT4U_KEY_PASSWORD: unused
@@ -197,15 +222,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "${YOUTUBE_API_KEY:-}"
+          if [[ -z "${YOUTUBE_API_KEY:-}" ]]; then
+            echo "FAIL: YOUTUBE_API_KEY secret is missing."
+            exit 1
+          fi
+
           test -s app/libs/fluidsynth-kmp-release.aar
 
-          gradle assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --console=plain
+          for ATTEMPT in 1 2 3 4; do
+            echo "Donut4U build attempt $ATTEMPT/4"
 
-          test -s app/build/outputs/apk/debug/app-debug.apk
+            if gradle assembleDebug --no-daemon --stacktrace --console=plain; then
+              echo "PASS: Donut4U APK assembled."
+              exit 0
+            fi
+
+            if [[ "$ATTEMPT" -lt 4 ]]; then
+              sleep 45
+            fi
+          done
+
+          echo "FAIL: Donut4U APK build failed."
+          exit 1
 
       - name: Verify APK package and version
         shell: bash
@@ -213,9 +251,9 @@ jobs:
           set -euo pipefail
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
 
-          AAPT="$(find "$ANDROID_HOME/build-tools" \
-            -type f -name aapt | sort -V | tail -n 1)"
+          test -s "$APK"
 
           BADGING="$("$AAPT" dump badging "$APK")"
 
@@ -237,14 +275,24 @@ jobs:
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
+          test -s "$APK"
+
+          rm -rf apk-check
           mkdir -p apk-check
+
           unzip -q "$APK" 'lib/*' -d apk-check
 
           for ABI in arm64-v8a x86_64; do
             DIR="apk-check/lib/$ABI"
             test -d "$DIR"
 
-            while IFS= read -r LIB; do
+            mapfile -t LIBS < <(
+              find "$DIR" -type f -name '*.so' | sort
+            )
+
+            test "${#LIBS[@]}" -gt 0
+
+            for LIB in "${LIBS[@]}"; do
               FOUND=0
 
               while IFS= read -r LINE; do
@@ -252,19 +300,20 @@ jobs:
 
                 FOUND=1
                 ALIGN="${LINE##* }"
+
                 [[ "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]
 
                 VALUE=$((16#${ALIGN#0x}))
 
                 if (( VALUE < 16384 )); then
-                  echo "FAIL: $LIB alignment $ALIGN"
+                  echo "FAIL: $LIB alignment is $ALIGN"
                   exit 1
                 fi
               done < <("$READELF" -lW "$LIB")
 
               test "$FOUND" -eq 1
               echo "PASS: $ABI $(basename "$LIB")"
-            done < <(find "$DIR" -type f -name '*.so' | sort)
+            done
           done
 
           "$ZIPALIGN" -v -c -P 16 4 "$APK"
