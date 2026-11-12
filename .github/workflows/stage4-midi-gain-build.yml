@@ -1,5 +1,5 @@
 
-name: Stage 4 - MIDI Gain 0.8 Build and Verify
+name: Stage 4 - MIDI Gain 1.0 Build and Verify
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Gain 0.8 FluidSynth and Donut4U
+    name: Build Gain 1.0 FluidSynth and Donut4U
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -124,7 +124,7 @@ jobs:
           echo "----- Updated settings.gradle.kts -----"
           cat settings.gradle.kts
 
-      - name: Apply Stage 3 MIDI gain 0.8
+      - name: Apply Stage 3 MIDI gain 1.0
         shell: bash
         run: |
           set -euo pipefail
@@ -152,7 +152,7 @@ jobs:
                   FluidSynthJni.playerAdd(playerPtr, midiPath)
 
                   // Donut4U Stage 3 MIDI/KAR volume adjustment.
-                  FluidSynthJni.setGain(context.synthPtr, 0.8f)
+                  FluidSynthJni.setGain(context.synthPtr, 1.0f)
               }"""
 
           if source.count(old) != 1:
@@ -160,30 +160,30 @@ jobs:
                   "FAIL: Expected MIDI player initialization was not found exactly once."
               )
 
-          if "FluidSynthJni.setGain(context.synthPtr, 0.8f)" in source:
+          if "FluidSynthJni.setGain(context.synthPtr, 1.0f)" in source:
               raise SystemExit("FAIL: Gain patch already exists; refusing duplicate patch.")
 
           patched = source.replace(old, new, 1)
 
-          if patched.count("FluidSynthJni.setGain(context.synthPtr, 0.8f)") != 1:
+          if patched.count("FluidSynthJni.setGain(context.synthPtr, 1.0f)") != 1:
               raise SystemExit("FAIL: Gain patch verification failed.")
 
           if patched.index("FluidSynthJni.sfLoad") > patched.index(
-              "FluidSynthJni.setGain(context.synthPtr, 0.8f)"
+              "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
           ):
               raise SystemExit("FAIL: Gain was not placed after SoundFont loading.")
 
           if patched.index("FluidSynthJni.playerAdd") > patched.index(
-              "FluidSynthJni.setGain(context.synthPtr, 0.8f)"
+              "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
           ):
               raise SystemExit("FAIL: Gain was not placed after MIDI player setup.")
 
           path.write_text(patched)
-          print("PASS: Stage 3 gain 0.8 applied after MIDI initialization.")
+          print("PASS: Stage 3 gain 1.0 applied after MIDI initialization.")
           PY
 
           grep -n -A9 'init {' "$FILE"
-          grep -F 'FluidSynthJni.setGain(context.synthPtr, 0.8f)' "$FILE"
+          grep -F 'FluidSynthJni.setGain(context.synthPtr, 1.0f)' "$FILE"
 
       - name: Apply 16 KB linker alignment to FluidSynth JNI
         shell: bash
@@ -252,7 +252,7 @@ jobs:
           mkdir -p ../app/libs
           cp "$AAR" ../app/libs/fluidsynth-kmp-release.aar
 
-          echo "PASS: Gain 0.8 FluidSynth AAR built."
+          echo "PASS: Gain 1.0 FluidSynth AAR built."
           ls -lh ../app/libs/fluidsynth-kmp-release.aar
 
       - name: Verify FluidSynth 16 KB native alignment
@@ -436,18 +436,18 @@ jobs:
           "$ZIPALIGN" -v -c -P 16 4 "$APK"
           echo "PASS: APK 16 KB verification."
 
-      - name: Upload verified Gain 0.8 APK
+      - name: Upload verified Gain 1.0 APK
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-midi-gain-08-verified-apk
+          name: stage4-midi-gain-10-verified-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload rebuilt Gain 0.8 FluidSynth AAR
+      - name: Upload rebuilt Gain 1.0 FluidSynth AAR
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-midi-gain-08-verified-aar
+          name: stage4-midi-gain-10-verified-aar
           path: app/libs/fluidsynth-kmp-release.aar
           if-no-files-found: error
           retention-days: 14
