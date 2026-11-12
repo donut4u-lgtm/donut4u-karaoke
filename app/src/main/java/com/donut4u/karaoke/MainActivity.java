@@ -65,8 +65,26 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        boolean androidTv = isAndroidTv();
+        /*
+         * ANDROID TV:
+         * Start the TV pairing server and open the TV menu.
+         *
+         * TV startup does not require a separate Firebase sign-in.
+         * The TV menu is responsible for the standalone TV experience.
+         */
+        if (isAndroidTv()) {
+            startTvPairing();
 
+            AppUpdateChecker.checkForUpdates(this);
+
+            openSongSearch();
+            return;
+        }
+
+        /*
+         * ANDROID PHONE:
+         * Preserve the existing phone authentication flow.
+         */
         FirebaseUser user =
                 FirebaseAuth.getInstance().getCurrentUser();
 
@@ -77,37 +95,6 @@ public class MainActivity extends Activity {
             FirebaseAuth.getInstance().signOut();
         }
 
-        /*
-         * ANDROID TV:
-         * Start the shared TV pairing server.
-         * Keep the TV experience separate from the phone.
-         */
-        if (androidTv) {
-            startTvPairing();
-
-            AppUpdateChecker.checkForUpdates(this);
-
-            if (verifiedUserAtLaunch) {
-                openSongSearch();
-            } else {
-                showWelcomeScreen();
-            }
-
-            return;
-        }
-
-        /*
-         * ANDROID PHONE:
-         * Restore the normal Donut4U Karaoke experience.
-         *
-         * Unauthenticated users:
-         * Show the normal welcome/login screen.
-         *
-         * Verified users:
-         * Continue to the normal karaoke song screen.
-         *
-         * PhoneRemoteActivity must NOT launch automatically.
-         */
         AppUpdateChecker.checkForUpdates(this);
 
         if (!verifiedUserAtLaunch) {
