@@ -66,8 +66,17 @@ public class AuthActivity extends Activity {
     private ProgressBar progressBar;
     private AdView adView;
 
+    private Button signInButton;
+    private Button createButton;
+    private Button verifyButton;
+    private Button resetButton;
+
     private TextView tvPairingCodeText;
     private TextView tvPairingStatusText;
+
+    // Prevents startup checks and user-triggered authentication
+    // operations from running at the same time.
+    private boolean authOperationInProgress = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,7 +95,7 @@ public class AuthActivity extends Activity {
 
         FirebaseUser user = auth.getCurrentUser();
 
-        if (user != null && user.isEmailVerified()) {
+        if (user != null) {
             setLoading(true, "Checking your account...");
 
             user.reload().addOnCompleteListener(this, task -> {
@@ -94,10 +103,19 @@ public class AuthActivity extends Activity {
                     return;
                 }
 
+                if (!task.isSuccessful()) {
+                    setLoading(false, "");
+                    showError(
+                            task.getException(),
+                            "Could not refresh your account. "
+                                    + "Check your internet connection and sign in again."
+                    );
+                    return;
+                }
+
                 FirebaseUser refreshed = auth.getCurrentUser();
 
-                if (refreshed != null
-                        && refreshed.isEmailVerified()) {
+                if (refreshed != null && refreshed.isEmailVerified()) {
                     createActiveSession(refreshed);
                 } else {
                     setLoading(false, "");
@@ -138,11 +156,7 @@ public class AuthActivity extends Activity {
                             String action
                     ) {
                         runOnUiThread(() ->
-                                handleRemoteAuthInput(
-                                        target,
-                                        text,
-                                        action
-                                )
+                                handleRemoteAuthInput(target, text, action)
                         );
                     }
 
@@ -169,25 +183,6 @@ public class AuthActivity extends Activity {
         );
     }
 
-    /**
-     * Receives keyboard input from the paired phone.
-     *
-     * Supported targets:
-     * active
-     * email
-     * auth_email
-     * password
-     * auth_password
-     * email_focus
-     * auth_email_focus
-     * password_focus
-     * auth_password_focus
-     * sign_in
-     *
-     * Password input is accepted through the existing TLS-protected
-     * TvKeyboardReceiver connection. Do not replace that connection
-     * with unencrypted TCP.
-     */
     private void handleRemoteAuthInput(
             String target,
             String text,
@@ -213,14 +208,12 @@ public class AuthActivity extends Activity {
 
         if ("email_focus".equals(safeTarget)
                 || "auth_email_focus".equals(safeTarget)) {
-
             emailInput.requestFocus();
             return;
         }
 
         if ("password_focus".equals(safeTarget)
                 || "auth_password_focus".equals(safeTarget)) {
-
             passwordInput.requestFocus();
             return;
         }
@@ -234,14 +227,10 @@ public class AuthActivity extends Activity {
 
         if ("email".equals(safeTarget)
                 || "auth_email".equals(safeTarget)) {
-
             destination = emailInput;
-
         } else if ("password".equals(safeTarget)
                 || "auth_password".equals(safeTarget)) {
-
             destination = passwordInput;
-
         } else if ("active".equals(safeTarget)
                 || safeTarget.isEmpty()) {
 
@@ -252,12 +241,9 @@ public class AuthActivity extends Activity {
             } else if (focusedView == emailInput) {
                 destination = emailInput;
             } else {
-                // If no input field currently has focus,
-                // start with the email field.
                 destination = emailInput;
                 destination.requestFocus();
             }
-
         } else {
             showMessage("Unknown login input target: " + safeTarget);
             return;
@@ -268,31 +254,24 @@ public class AuthActivity extends Activity {
         }
 
         if ("replace".equals(safeAction)) {
-
             String replacement = text == null ? "" : text;
             destination.setText(replacement);
             destination.setSelection(destination.length());
 
         } else if ("append".equals(safeAction)) {
-
             String addition = text == null ? "" : text;
             destination.append(addition);
 
         } else if ("backspace".equals(safeAction)) {
-
             deleteBeforeCursor(destination);
 
         } else if ("clear".equals(safeAction)) {
-
             destination.setText("");
 
         } else if ("submit".equals(safeAction)) {
-
             if (destination == emailInput) {
                 passwordInput.requestFocus();
-
                 showMessage("Email entered. Enter your password.");
-
             } else if (destination == passwordInput) {
                 signIn();
             }
@@ -315,7 +294,6 @@ public class AuthActivity extends Activity {
         if (start != end) {
             int selectionStart = Math.min(start, end);
             int selectionEnd = Math.max(start, end);
-
             input.getText().delete(selectionStart, selectionEnd);
             return;
         }
@@ -459,19 +437,19 @@ public class AuthActivity extends Activity {
         passwordParams.bottomMargin = dp(16);
         root.addView(passwordInput, passwordParams);
 
-        Button signInButton = makeButton("Sign in");
+        signInButton = makeButton("Sign in");
         signInButton.setOnClickListener(v -> signIn());
         root.addView(signInButton, buttonParams());
 
-        Button createButton = makeButton("Create new account");
+        createButton = makeButton("Create new account");
         createButton.setOnClickListener(v -> createAccount());
         root.addView(createButton, buttonParams());
 
-        Button verifyButton = makeButton("Resend verification email");
+        verifyButton = makeButton("Resend verification email");
         verifyButton.setOnClickListener(v -> resendVerification());
         root.addView(verifyButton, buttonParams());
 
-        Button resetButton = makeButton("Forgot password");
+        resetButton = makeButton("Forgot password");
         resetButton.setOnClickListener(v -> resetPassword());
         root.addView(resetButton, buttonParams());
 
@@ -526,9 +504,7 @@ public class AuthActivity extends Activity {
     }
 
     private void loadBannerAd(LinearLayout container) {
-        if (isAndroidTv()
-                || isFinishing()
-                || isDestroyed()) {
+        if (isAndroidTv() || isFinishing() || isDestroyed()) {
             return;
         }
 
@@ -586,6 +562,10 @@ public class AuthActivity extends Activity {
     }
 
     private void signIn() {
+        if (authOperationInProgress) {
+            return;
+        }
+
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
@@ -617,6 +597,16 @@ public class AuthActivity extends Activity {
 
                     user.reload().addOnCompleteListener(this, reloadTask -> {
                         if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
+
+                        if (!reloadTask.isSuccessful()) {
+                            setLoading(false, "");
+                            showError(
+                                    reloadTask.getException(),
+                                    "Could not refresh your account. "
+                                            + "Check your internet connection and try again."
+                            );
                             return;
                         }
 
@@ -702,6 +692,10 @@ public class AuthActivity extends Activity {
     }
 
     private void createAccount() {
+        if (authOperationInProgress) {
+            return;
+        }
+
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
@@ -758,6 +752,10 @@ public class AuthActivity extends Activity {
     }
 
     private void resendVerification() {
+        if (authOperationInProgress) {
+            return;
+        }
+
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
 
@@ -792,6 +790,16 @@ public class AuthActivity extends Activity {
 
                     user.reload().addOnCompleteListener(this, reloadTask -> {
                         if (isFinishing() || isDestroyed()) {
+                            return;
+                        }
+
+                        if (!reloadTask.isSuccessful()) {
+                            setLoading(false, "");
+                            showError(
+                                    reloadTask.getException(),
+                                    "Could not refresh your account. "
+                                            + "Try again when your connection is stable."
+                            );
                             return;
                         }
 
@@ -833,6 +841,10 @@ public class AuthActivity extends Activity {
     }
 
     private void resetPassword() {
+        if (authOperationInProgress) {
+            return;
+        }
+
         String email = emailInput.getText().toString().trim();
 
         if (email.isEmpty()) {
@@ -906,6 +918,8 @@ public class AuthActivity extends Activity {
     }
 
     private void setLoading(boolean loading, String message) {
+        authOperationInProgress = loading;
+
         if (progressBar != null) {
             progressBar.setVisibility(
                     loading ? View.VISIBLE : View.GONE
@@ -922,6 +936,22 @@ public class AuthActivity extends Activity {
 
         if (passwordInput != null) {
             passwordInput.setEnabled(!loading);
+        }
+
+        if (signInButton != null) {
+            signInButton.setEnabled(!loading);
+        }
+
+        if (createButton != null) {
+            createButton.setEnabled(!loading);
+        }
+
+        if (verifyButton != null) {
+            verifyButton.setEnabled(!loading);
+        }
+
+        if (resetButton != null) {
+            resetButton.setEnabled(!loading);
         }
     }
 
