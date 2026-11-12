@@ -41,6 +41,8 @@ public final class TvKeyboardReceiver {
     public static final String SERVICE_TYPE =
             "_donut4ukeyboard._tcp.";
 
+    public static final int STATE_PROTOCOL_VERSION = 1;
+
     private static final String SERVICE_NAME =
             "Donut4U-TV-Keyboard";
 
@@ -48,6 +50,10 @@ public final class TvKeyboardReceiver {
             "donut4u_tv_pairing_session";
 
     private static final int MAX_TEXT_LENGTH = 2000;
+
+    private static final int MAX_STATE_LENGTH = 65536;
+
+    private static final int MAX_MESSAGE_LENGTH = 100000;
 
     private static final int CALLBACK_TIMEOUT_SECONDS = 3;
 
@@ -65,6 +71,21 @@ public final class TvKeyboardReceiver {
                 String target,
                 String text,
                 String action
+        ) {
+        }
+
+        /**
+         * Receives a complete phone-controlled TV state snapshot.
+         *
+         * This callback runs on the Android main thread.
+         *
+         * The receiver passes a separate JSONObject copy so that
+         * changes made by the TV screen cannot modify the received
+         * network message.
+         */
+        default void onStateReceived(
+                JSONObject state,
+                long sequence
         ) {
         }
     }
@@ -327,7 +348,6 @@ public final class TvKeyboardReceiver {
         }
 
         /*
-         * Important:
          * Initialize the key manager directly with Android Keystore.
          * Do not copy the private key into a temporary PKCS12 store.
          */
@@ -648,6 +668,15 @@ public final class TvKeyboardReceiver {
                 return;
             }
 
+            if (firstMessage.length() > MAX_MESSAGE_LENGTH) {
+                sendResponse(
+                        writer,
+                        false,
+                        "Pairing message is too large"
+                );
+                return;
+            }
+
             JSONObject pairingRequest =
                     new JSONObject(firstMessage);
 
@@ -684,12 +713,22 @@ public final class TvKeyboardReceiver {
 
             socket.setSoTimeout(0);
 
-            notifyStatus("Encrypted phone keyboard connected.");
+            notifyStatus("Encrypted phone controller connected.");
 
             String line;
+            long lastStateSequence = 0L;
 
             while (running
                     && (line = reader.readLine()) != null) {
+
+                if (line.length() > MAX_MESSAGE_LENGTH) {
+                    sendResponse(
+                            writer,
+                            false,
+                            "Message is too large"
+                    );
+                    continue;
+                }
 
                 JSONObject request =
                         new JSONObject(line);
@@ -710,6 +749,15 @@ public final class TvKeyboardReceiver {
                             request,
                             writer
                     );
+
+                } else if ("state".equals(type)) {
+
+                    lastStateSequence =
+                            handleStateRequest(
+                                    request,
+                                    writer,
+                                    lastStateSequence
+                            );
 
                 } else if ("disconnect".equals(type)) {
 
@@ -767,12 +815,14 @@ public final class TvKeyboardReceiver {
 
         CountDownLatch completed = new CountDownLatch(1);
         AtomicBoolean delivered = new AtomicBoolean(false);
+        AtomicBoolean expired = new AtomicBoolean(false);
 
         mainHandler.post(() -> {
             try {
                 Listener current = activeListener;
 
-                if (running
+                if (!expired.get()
+                        && running
                         && sessionEnabled
                         && current != null) {
                     current.onSearchRequested(songTitle);
@@ -788,6 +838,10 @@ public final class TvKeyboardReceiver {
                 CALLBACK_TIMEOUT_SECONDS,
                 TimeUnit.SECONDS
         );
+
+        if (!finished) {
+            expired.set(true);
+        }
 
         sendResponse(
                 writer,
@@ -864,12 +918,14 @@ public final class TvKeyboardReceiver {
 
         CountDownLatch completed = new CountDownLatch(1);
         AtomicBoolean delivered = new AtomicBoolean(false);
+        AtomicBoolean expired = new AtomicBoolean(false);
 
         mainHandler.post(() -> {
             try {
                 Listener current = activeListener;
 
-                if (running
+                if (!expired.get()
+                        && running
                         && sessionEnabled
                         && current != null) {
 
@@ -892,6 +948,10 @@ public final class TvKeyboardReceiver {
                 TimeUnit.SECONDS
         );
 
+        if (!finished) {
+            expired.set(true);
+        }
+
         sendResponse(
                 writer,
                 finished && delivered.get(),
@@ -899,6 +959,151 @@ public final class TvKeyboardReceiver {
                         ? "Text input delivered"
                         : "No active TV screen accepted the input"
         );
+    }
+
+    /**
+     * Accepts a phone-controlled TV state snapshot.
+     *
+     * Message format:
+     *
+     * {
+     *   "type": "state",
+     *   "version": 1,
+     *   "sequence": 1,
+     *   "state": {
+     *     "mode": "paired",
+     *     "stage": 1,
+     *     "screen": "karaoke"
+     *   }
+     * }
+     *
+     * Sequence numbers must increase during one connection.
+     */
+    private long handleStateRequest(
+            JSONObject request,
+            BufferedWriter writer,
+            long lastAcceptedSequence
+    ) throws Exception {
+
+        int version =
+                request.optInt("version", -1);
+
+        if (version != STATE_PROTOCOL_VERSION) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unsupported state protocol version"
+            );
+            return lastAcceptedSequence;
+        }
+
+        long sequence =
+                request.optLong("sequence", -1L);
+
+        if (sequence <= 0L) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Invalid state sequence"
+            );
+            return lastAcceptedSequence;
+        }
+
+        if (sequence <= lastAcceptedSequence) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Outdated state update"
+            );
+            return lastAcceptedSequence;
+        }
+
+        JSONObject suppliedState =
+                request.optJSONObject("state");
+
+        if (suppliedState == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Missing state object"
+            );
+            return lastAcceptedSequence;
+        }
+
+        String stateText = suppliedState.toString();
+
+        if (stateText.length() > MAX_STATE_LENGTH) {
+            sendResponse(
+                    writer,
+                    false,
+                    "TV state is too large"
+            );
+            return lastAcceptedSequence;
+        }
+
+        Listener listener = activeListener;
+
+        if (!sessionEnabled || listener == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "No active TV screen is listening."
+            );
+            return lastAcceptedSequence;
+        }
+
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicBoolean delivered = new AtomicBoolean(false);
+        AtomicBoolean expired = new AtomicBoolean(false);
+
+        mainHandler.post(() -> {
+            try {
+                Listener current = activeListener;
+
+                if (!expired.get()
+                        && running
+                        && sessionEnabled
+                        && current != null) {
+
+                    JSONObject stateCopy =
+                            new JSONObject(stateText);
+
+                    current.onStateReceived(
+                            stateCopy,
+                            sequence
+                    );
+
+                    delivered.set(true);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                completed.countDown();
+            }
+        });
+
+        boolean finished = completed.await(
+                CALLBACK_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS
+        );
+
+        if (!finished) {
+            expired.set(true);
+        }
+
+        boolean accepted =
+                finished && delivered.get();
+
+        sendResponse(
+                writer,
+                accepted,
+                accepted
+                        ? "TV state accepted"
+                        : "No active TV screen accepted the state"
+        );
+
+        return accepted
+                ? sequence
+                : lastAcceptedSequence;
     }
 
     private void sendResponse(
