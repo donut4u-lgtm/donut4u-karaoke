@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -365,6 +364,19 @@ public class Stage3SongbookActivity extends Activity {
                     }
 
                     @Override
+                    public void onTextInput(
+                            String target,
+                            String text,
+                            String action
+                    ) {
+                        if (activityDestroyed) {
+                            return;
+                        }
+
+                        applyTvTextInput(target, text, action);
+                    }
+
+                    @Override
                     public void onStatusChanged(String message) {
                         if (activityDestroyed
                                 || tvKeyboardStatusText == null) {
@@ -400,6 +412,114 @@ public class Stage3SongbookActivity extends Activity {
             tvKeyboardStatusText.setText(
                     "Could not start phone keyboard connection.");
             tvKeyboardReceiver = null;
+        }
+    }
+
+    /**
+     * Receives generic phone keyboard actions for the Stage 3
+     * songbook search field.
+     */
+    private void applyTvTextInput(
+            String target,
+            String text,
+            String action
+    ) {
+        if (activityDestroyed || !tvMode || searchInput == null) {
+            return;
+        }
+
+        String inputTarget = target == null
+                ? "" : target.trim().toLowerCase(Locale.ROOT);
+
+        if (!inputTarget.isEmpty()
+                && !"active".equals(inputTarget)
+                && !"search".equals(inputTarget)
+                && !"searchinput".equals(inputTarget)) {
+            return;
+        }
+
+        String inputAction = action == null
+                ? "" : action.trim().toLowerCase(Locale.ROOT);
+
+        String value = text == null ? "" : text;
+
+        searchInput.requestFocus();
+
+        android.text.Editable editable = searchInput.getText();
+
+        int start = searchInput.getSelectionStart();
+        int end = searchInput.getSelectionEnd();
+
+        if (start < 0) {
+            start = editable.length();
+        }
+
+        if (end < 0) {
+            end = start;
+        }
+
+        start = Math.min(start, editable.length());
+        end = Math.min(end, editable.length());
+
+        if (start > end) {
+            int temporary = start;
+            start = end;
+            end = temporary;
+        }
+
+        switch (inputAction) {
+            case "replace":
+                searchInput.setText(value);
+                searchInput.setSelection(
+                        searchInput.getText().length());
+                break;
+
+            case "append":
+                editable.replace(start, end, value);
+                searchInput.setSelection(start + value.length());
+                break;
+
+            case "backspace":
+                if (start != end) {
+                    editable.delete(start, end);
+                    searchInput.setSelection(start);
+                } else if (start > 0) {
+                    int deleteStart = start - 1;
+
+                    // Avoid deleting only half of a Unicode
+                    // surrogate pair, such as some emoji.
+                    if (deleteStart > 0
+                            && Character.isLowSurrogate(
+                                    editable.charAt(deleteStart))
+                            && Character.isHighSurrogate(
+                                    editable.charAt(deleteStart - 1))) {
+                        deleteStart--;
+                    }
+
+                    editable.delete(deleteStart, start);
+                    searchInput.setSelection(deleteStart);
+                }
+                break;
+
+            case "clear":
+                searchInput.setText("");
+                searchInput.setSelection(0);
+                break;
+
+            case "submit":
+                // The TextWatcher already filters the songbook.
+                // Refresh the current results using the final text.
+                renderSongs(searchInput.getText().toString());
+                searchInput.setSelection(
+                        searchInput.getText().length());
+                break;
+
+            default:
+                android.util.Log.w(
+                        "Stage3Songbook",
+                        "Ignored unknown phone keyboard action: "
+                                + inputAction);
+                return;
         }
     }
 
