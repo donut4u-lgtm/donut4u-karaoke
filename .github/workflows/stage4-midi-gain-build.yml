@@ -74,6 +74,80 @@ jobs:
           echo "PASS: Pinned FluidSynth source checked out."
           git rev-parse HEAD
 
+      - name: Add reliable Maven Central mirror
+        working-directory: fluidsynth-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          settings = Path("settings.gradle.kts")
+          source = settings.read_text()
+
+          old = """pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }"""
+
+          new = """pluginManagement {
+              repositories {
+                  maven {
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }"""
+
+          if source.count(old) != 1:
+              raise SystemExit(
+                  "FAIL: Expected pluginManagement repositories block "
+                  "was not found exactly once."
+              )
+
+          settings.write_text(source.replace(old, new, 1))
+
+          build_file = Path("build.gradle.kts")
+          build_source = build_file.read_text()
+
+          old_repositories = """    repositories {
+              google()
+              mavenCentral()
+          }"""
+
+          new_repositories = """    repositories {
+              maven {
+                  url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+              }
+              google()
+              mavenCentral()
+          }"""
+
+          if build_source.count(old_repositories) != 1:
+              raise SystemExit(
+                  "FAIL: Expected allprojects repositories block "
+                  "was not found exactly once."
+              )
+
+          build_file.write_text(
+              build_source.replace(old_repositories, new_repositories, 1)
+          )
+
+          print("PASS: Maven Central mirror added to plugin and project repositories.")
+          PY
+
+          echo "----- Updated settings.gradle.kts -----"
+          cat settings.gradle.kts
+
+          echo "----- Updated build.gradle.kts -----"
+          grep -n -A8 "allprojects" build.gradle.kts
+
       - name: Apply Stage 3 MIDI gain 0.8
         shell: bash
         run: |
@@ -192,6 +266,7 @@ jobs:
 
           ./gradlew :fluidsynth-kmp:assembleRelease \
             --no-daemon \
+            --refresh-dependencies \
             --stacktrace \
             --console=plain
 
