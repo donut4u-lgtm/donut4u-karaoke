@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -7,10 +8,13 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+
+import org.json.JSONObject;
 
 public class TvStageMenuActivity extends Activity {
 
@@ -28,6 +32,13 @@ public class TvStageMenuActivity extends Activity {
     private TextView tvPairingCodeText;
     private TextView tvPairingStatusText;
 
+    private LinearLayout stageButtonsContainer;
+
+    private boolean phonePaired = false;
+    private boolean openingStage = false;
+
+    private int lastOpenedStage = -1;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -35,14 +46,15 @@ public class TvStageMenuActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        startTvPairing();
         buildMenu();
+        startTvPairing();
     }
 
     private void startTvPairing() {
         TvKeyboardReceiver.enableSession(
                 getApplicationContext(),
                 new TvKeyboardReceiver.Listener() {
+
                     @Override
                     public void onPairingCodeReady(String code) {
                         runOnUiThread(() -> {
@@ -50,7 +62,8 @@ public class TvStageMenuActivity extends Activity {
                                 tvPairingCodeText.setText(code);
                             }
 
-                            if (tvPairingStatusText != null) {
+                            if (!phonePaired
+                                    && tvPairingStatusText != null) {
                                 tvPairingStatusText.setText(
                                         "READY - CONNECT YOUR PHONE"
                                 );
@@ -60,16 +73,24 @@ public class TvStageMenuActivity extends Activity {
 
                     @Override
                     public void onSearchRequested(String songTitle) {
-                        // The active TV stage handles its own search requests.
+                        // The active TV stage handles search requests.
+                    }
+
+                    @Override
+                    public void onStateReceived(
+                            JSONObject state,
+                            long sequence
+                    ) {
+                        runOnUiThread(() ->
+                                handlePhoneState(state)
+                        );
                     }
 
                     @Override
                     public void onStatusChanged(String message) {
-                        runOnUiThread(() -> {
-                            if (tvPairingStatusText != null) {
-                                tvPairingStatusText.setText(message);
-                            }
-                        });
+                        runOnUiThread(() ->
+                                handleConnectionStatus(message)
+                        );
                     }
 
                     @Override
@@ -84,6 +105,77 @@ public class TvStageMenuActivity extends Activity {
                     }
                 }
         );
+
+        String currentCode =
+                TvKeyboardReceiver.getCurrentPairingCode();
+
+        if (currentCode != null && !currentCode.isEmpty()
+                && tvPairingCodeText != null) {
+            tvPairingCodeText.setText(currentCode);
+        }
+    }
+
+    private void handleConnectionStatus(String message) {
+        if (tvPairingStatusText != null) {
+            tvPairingStatusText.setText(message);
+        }
+
+        if (message == null) {
+            return;
+        }
+
+        if (message.contains("Encrypted phone controller connected.")) {
+            phonePaired = true;
+            openingStage = false;
+            lastOpenedStage = -1;
+            updateStageMenuVisibility();
+            return;
+        }
+
+        if (message.contains("Phone disconnected.")
+                || message.contains("Phone connection ended.")
+                || message.contains("Phone disconnected or TLS")) {
+
+            phonePaired = false;
+            openingStage = false;
+            lastOpenedStage = -1;
+            updateStageMenuVisibility();
+        }
+    }
+
+    private void handlePhoneState(JSONObject state) {
+        if (state == null || !phonePaired) {
+            return;
+        }
+
+        int stage = state.optInt("stage", -1);
+
+        if (stage < 1 || stage > 4) {
+            return;
+        }
+
+        if (openingStage || lastOpenedStage == stage) {
+            return;
+        }
+
+        lastOpenedStage = stage;
+        openingStage = true;
+
+        openStage(stage);
+    }
+
+    private void updateStageMenuVisibility() {
+        if (stageButtonsContainer != null) {
+            stageButtonsContainer.setVisibility(
+                    phonePaired ? View.GONE : View.VISIBLE
+            );
+        }
+
+        if (tvPairingStatusText != null && !phonePaired) {
+            tvPairingStatusText.setText(
+                    "STANDALONE TV MODE - USE YOUR TV REMOTE"
+            );
+        }
     }
 
     private void buildMenu() {
@@ -106,7 +198,7 @@ public class TvStageMenuActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("CHOOSE YOUR KARAOKE STAGE");
+        subtitle.setText("PHONE CONTROLLED KARAOKE");
         subtitle.setTextColor(WHITE);
         subtitle.setTextSize(18);
         subtitle.setGravity(Gravity.CENTER);
@@ -114,7 +206,7 @@ public class TvStageMenuActivity extends Activity {
         root.addView(subtitle, matchWrap());
 
         TextView pairingLabel = new TextView(this);
-        pairingLabel.setText("PHONE KEYBOARD PAIRING CODE");
+        pairingLabel.setText("PHONE PAIRING CODE");
         pairingLabel.setTextColor(WHITE);
         pairingLabel.setTextSize(15);
         pairingLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -123,16 +215,7 @@ public class TvStageMenuActivity extends Activity {
         root.addView(pairingLabel, matchWrap());
 
         tvPairingCodeText = new TextView(this);
-
-        String currentCode =
-                TvKeyboardReceiver.getCurrentPairingCode();
-
-        tvPairingCodeText.setText(
-                currentCode == null || currentCode.isEmpty()
-                        ? "------"
-                        : currentCode
-        );
-
+        tvPairingCodeText.setText("------");
         tvPairingCodeText.setTextColor(GREEN);
         tvPairingCodeText.setTextSize(40);
         tvPairingCodeText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -149,19 +232,48 @@ public class TvStageMenuActivity extends Activity {
         tvPairingStatusText.setPadding(0, 0, 0, dp(12));
         root.addView(tvPairingStatusText, matchWrap());
 
-        addStageButton(root, "STAGE 1  -  YOUTUBE KARAOKE", 1);
-        addStageButton(root, "STAGE 2  -  KARAOKE STUDIO", 2);
-        addStageButton(root, "STAGE 3  -  MIDI / KAR SONGBOOK", 3);
-        addStageButton(root, "STAGE 4  -  TV SONGBOOK", 4);
+        stageButtonsContainer = new LinearLayout(this);
+        stageButtonsContainer.setOrientation(LinearLayout.VERTICAL);
+        stageButtonsContainer.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        addStageButton(
+                stageButtonsContainer,
+                "STAGE 1  -  YOUTUBE KARAOKE",
+                1
+        );
+
+        addStageButton(
+                stageButtonsContainer,
+                "STAGE 2  -  KARAOKE STUDIO",
+                2
+        );
+
+        addStageButton(
+                stageButtonsContainer,
+                "STAGE 3  -  MIDI / KAR SONGBOOK",
+                3
+        );
+
+        addStageButton(
+                stageButtonsContainer,
+                "STAGE 4  -  TV SONGBOOK",
+                4
+        );
+
+        root.addView(
+                stageButtonsContainer,
+                matchWrap()
+        );
 
         setContentView(scroll);
+        updateStageMenuVisibility();
     }
 
     private void addStageButton(
             LinearLayout root,
             String label,
-            int stage) {
-
+            int stage
+    ) {
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(WHITE);
@@ -172,7 +284,11 @@ public class TvStageMenuActivity extends Activity {
         button.setPadding(dp(18), dp(18), dp(18), dp(18));
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
-        button.setOnClickListener(v -> openStage(stage));
+        button.setOnClickListener(v -> {
+            if (!phonePaired) {
+                openStage(stage);
+            }
+        });
 
         LinearLayout.LayoutParams lp =
                 new LinearLayout.LayoutParams(
@@ -200,6 +316,7 @@ public class TvStageMenuActivity extends Activity {
                 target = Stage3SongbookActivity.class;
                 break;
 
+            case 4:
             default:
                 target = Stage4TvActivity.class;
                 break;
@@ -234,5 +351,14 @@ public class TvStageMenuActivity extends Activity {
         return Math.round(
                 value * getResources().getDisplayMetrics().density
         );
+    }
+
+    @Override
+    protected void onDestroy() {
+        /*
+         * Do not disable the shared receiver here.
+         * TV stage activities use the same application-wide session.
+         */
+        super.onDestroy();
     }
 }
