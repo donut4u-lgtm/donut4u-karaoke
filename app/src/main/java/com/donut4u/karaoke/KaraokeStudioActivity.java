@@ -16,6 +16,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -1040,6 +1041,25 @@ public class KaraokeStudioActivity extends Activity {
             }
 
             @Override
+            public void onTextInput(
+                    String target,
+                    String text,
+                    String action
+            ) {
+
+                if (activityDestroyed
+                        || searchInput == null) {
+                    return;
+                }
+
+                applyTvTextInput(
+                        target,
+                        text,
+                        action
+                );
+            }
+
+            @Override
             public void onStatusChanged(String message) {
 
                 if (activityDestroyed
@@ -1065,6 +1085,205 @@ public class KaraokeStudioActivity extends Activity {
         });
 
         tvKeyboardReceiver.start();
+    }
+
+    /**
+     * Applies phone keyboard commands to the Stage 2 TV search field.
+     *
+     * Supported targets:
+     * active, search, searchInput
+     *
+     * Supported actions:
+     * replace, append, backspace, clear, submit
+     */
+    private void applyTvTextInput(
+            String target,
+            String incomingText,
+            String action
+    ) {
+
+        if (!tvMode
+                || activityDestroyed
+                || searchInput == null) {
+            return;
+        }
+
+        String safeTarget =
+                target == null
+                        ? ""
+                        : target.trim();
+
+        if (!"active".equalsIgnoreCase(safeTarget)
+                && !"search".equalsIgnoreCase(safeTarget)
+                && !"searchInput".equalsIgnoreCase(safeTarget)) {
+
+            Log.w(
+                    TAG,
+                    "Ignoring unsupported Stage 2 keyboard target: "
+                            + safeTarget
+            );
+
+            return;
+        }
+
+        String safeAction =
+                action == null
+                        ? "replace"
+                        : action.trim().toLowerCase(Locale.ROOT);
+
+        String safeText =
+                incomingText == null
+                        ? ""
+                        : incomingText;
+
+        if (safeText.length() > 2000) {
+            safeText = safeText.substring(0, 2000);
+        }
+
+        searchInput.requestFocus();
+
+        switch (safeAction) {
+
+            case "replace":
+
+                searchInput.setText(safeText);
+
+                searchInput.setSelection(
+                        searchInput.getText().length()
+                );
+
+                break;
+
+            case "append": {
+
+                Editable editable =
+                        searchInput.getText();
+
+                int start =
+                        searchInput.getSelectionStart();
+
+                int end =
+                        searchInput.getSelectionEnd();
+
+                if (start < 0 || end < 0) {
+                    start = editable.length();
+                    end = editable.length();
+                }
+
+                int lower =
+                        Math.min(start, end);
+
+                int upper =
+                        Math.max(start, end);
+
+                editable.replace(
+                        lower,
+                        upper,
+                        safeText
+                );
+
+                int cursor =
+                        lower + safeText.length();
+
+                searchInput.setSelection(
+                        Math.min(cursor, editable.length())
+                );
+
+                break;
+            }
+
+            case "backspace": {
+
+                Editable editable =
+                        searchInput.getText();
+
+                int start =
+                        searchInput.getSelectionStart();
+
+                int end =
+                        searchInput.getSelectionEnd();
+
+                if (start < 0 || end < 0) {
+                    start = editable.length();
+                    end = editable.length();
+                }
+
+                int lower =
+                        Math.min(start, end);
+
+                int upper =
+                        Math.max(start, end);
+
+                if (lower != upper) {
+
+                    editable.delete(lower, upper);
+
+                    searchInput.setSelection(lower);
+
+                } else if (lower > 0) {
+
+                    int deleteStart =
+                            lower - 1;
+
+                    // Keep a Unicode surrogate pair together.
+                    if (deleteStart > 0
+                            && Character.isLowSurrogate(
+                                    editable.charAt(deleteStart)
+                            )
+                            && Character.isHighSurrogate(
+                                    editable.charAt(deleteStart - 1)
+                            )) {
+
+                        deleteStart--;
+                    }
+
+                    editable.delete(
+                            deleteStart,
+                            lower
+                    );
+
+                    searchInput.setSelection(deleteStart);
+                }
+
+                break;
+            }
+
+            case "clear":
+
+                searchInput.setText("");
+
+                searchInput.setSelection(0);
+
+                break;
+
+            case "submit":
+
+                showSearchScreen();
+
+                searchInput.setSelection(
+                        searchInput.getText().length()
+                );
+
+                searchSongs();
+
+                return;
+
+            default:
+
+                Log.w(
+                        TAG,
+                        "Unsupported Stage 2 keyboard action: "
+                                + safeAction
+                );
+
+                return;
+        }
+
+        if (tvKeyboardStatusText != null) {
+            tvKeyboardStatusText.setText(
+                    "Phone keyboard connected. Text received."
+            );
+        }
     }
 
     private void stopTvPhoneKeyboardReceiver() {
