@@ -78,9 +78,9 @@ public class MainActivity extends Activity {
         }
 
         /*
-         * TV:
-         * Start the shared pairing server immediately.
-         * Keep it alive while the TV moves between screens.
+         * ANDROID TV:
+         * Start the shared TV pairing server.
+         * Keep the TV experience separate from the phone.
          */
         if (androidTv) {
             startTvPairing();
@@ -97,33 +97,39 @@ public class MainActivity extends Activity {
         }
 
         /*
-         * PHONE:
-         * The phone is the controller and keyboard.
-         * Open the remote immediately instead of showing
-         * the normal phone welcome/song screen.
+         * ANDROID PHONE:
+         * Restore the normal Donut4U Karaoke experience.
+         *
+         * Unauthenticated users:
+         * Show the normal welcome/login screen.
+         *
+         * Verified users:
+         * Continue to the normal karaoke song screen.
+         *
+         * PhoneRemoteActivity must NOT launch automatically.
          */
         AppUpdateChecker.checkForUpdates(this);
 
-        openPhoneRemote();
-    }
+        if (!verifiedUserAtLaunch) {
+            showWelcomeScreen();
 
-    /**
-     * Launches the phone keyboard/controller.
-     */
-    private void openPhoneRemote() {
-        Intent intent = new Intent(
-                MainActivity.this,
-                PhoneRemoteActivity.class
-        );
+            MobileAds.initialize(this, initializationStatus ->
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) {
+                            loadBannerAd();
+                        }
+                    })
+            );
 
-        intent.addFlags(
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        | Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
-        );
-
-        startActivity(intent);
-        finish();
+        } else {
+            MobileAds.initialize(this, initializationStatus ->
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) {
+                            loadAppOpenAd();
+                        }
+                    })
+            );
+        }
     }
 
     /**
