@@ -2,10 +2,13 @@
 name: Stage 4 TV Build and 16 KB APK Verification
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - Stage 4 - MIDI Gain 1.0 Build and Verify
+    types:
+      - completed
     branches:
       - stage4-tv-isolated
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,24 +16,27 @@ permissions:
 
 jobs:
   build-and-verify:
-    name: Build Donut4U and Verify 16 KB APK
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    name: Build Donut4U with MIDI Gain 1.0 and Verify 16 KB APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
-      - name: Checkout Donut4U
+      - name: Checkout exact MIDI Gain workflow commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Download previously verified FluidSynth AAR
+      - name: Download MIDI Gain 1.0 FluidSynth AAR
         uses: actions/download-artifact@v4
         with:
-          name: fluidsynth-16kb-verified-aar
-          repository: donut4u-lgtm/donut4u-karaoke
-          run-id: 42462751189
+          name: stage4-midi-gain-10-verified-aar
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: verified-aar
 
-      - name: Install verified FluidSynth AAR
+      - name: Install and verify MIDI Gain 1.0 FluidSynth AAR
         shell: bash
         run: |
           set -euo pipefail
@@ -38,7 +44,7 @@ jobs:
           AAR="$(find verified-aar -type f -name '*.aar' -print -quit)"
 
           if [[ -z "$AAR" || ! -s "$AAR" ]]; then
-            echo "FAIL: FluidSynth AAR was not downloaded."
+            echo "FAIL: MIDI Gain 1.0 FluidSynth AAR was not downloaded."
             exit 1
           fi
 
@@ -46,9 +52,9 @@ jobs:
           cp "$AAR" app/libs/fluidsynth-kmp-release.aar
 
           test -s app/libs/fluidsynth-kmp-release.aar
-          ls -lh app/libs/fluidsynth-kmp-release.aar
 
-          echo "PASS: FluidSynth AAR installed."
+          echo "PASS: MIDI Gain 1.0 FluidSynth AAR installed."
+          ls -lh app/libs/fluidsynth-kmp-release.aar
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -232,10 +238,10 @@ jobs:
           echo "PASS: Final APK passed ELF and ZIP alignment checks."
           echo "Verified 64-bit native libraries: $TOTAL"
 
-      - name: Upload verified APK
+      - name: Upload verified MIDI Gain 1.0 TV APK
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-tv-16kb-verified-apk
+          name: stage4-tv-midi-gain-10-16kb-verified-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
