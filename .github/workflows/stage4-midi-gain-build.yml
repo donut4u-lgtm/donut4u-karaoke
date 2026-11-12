@@ -1,5 +1,5 @@
 
-name: Stage 4 - MIDI Gain 1.0 Build and Verify
+name: Stage 4 - MIDI Gain 1.0 Signed Release Build and Verify
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Gain 1.0 FluidSynth and Donut4U
+    name: Build Gain 1.0 FluidSynth and Signed Donut4U APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -117,12 +117,8 @@ jobs:
               raise SystemExit("FAIL: Maven Central mirror was not added.")
 
           settings.write_text(patched)
-
-          print("PASS: Maven Central mirror added to plugin repositories.")
+          print("PASS: Maven Central mirror added.")
           PY
-
-          echo "----- Updated settings.gradle.kts -----"
-          cat settings.gradle.kts
 
       - name: Apply Stage 3 MIDI gain 1.0
         shell: bash
@@ -157,11 +153,12 @@ jobs:
 
           if source.count(old) != 1:
               raise SystemExit(
-                  "FAIL: Expected MIDI player initialization was not found exactly once."
+                  "FAIL: Expected MIDI player initialization "
+                  "was not found exactly once."
               )
 
           if "FluidSynthJni.setGain(context.synthPtr, 1.0f)" in source:
-              raise SystemExit("FAIL: Gain patch already exists; refusing duplicate patch.")
+              raise SystemExit("FAIL: Gain patch already exists.")
 
           patched = source.replace(old, new, 1)
 
@@ -171,18 +168,17 @@ jobs:
           if patched.index("FluidSynthJni.sfLoad") > patched.index(
               "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
           ):
-              raise SystemExit("FAIL: Gain was not placed after SoundFont loading.")
+              raise SystemExit("FAIL: Gain must follow SoundFont loading.")
 
           if patched.index("FluidSynthJni.playerAdd") > patched.index(
               "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
           ):
-              raise SystemExit("FAIL: Gain was not placed after MIDI player setup.")
+              raise SystemExit("FAIL: Gain must follow MIDI player setup.")
 
           path.write_text(patched)
-          print("PASS: Stage 3 gain 1.0 applied after MIDI initialization.")
+          print("PASS: Stage 3 MIDI gain 1.0 applied.")
           PY
 
-          grep -n -A9 'init {' "$FILE"
           grep -F 'FluidSynthJni.setGain(context.synthPtr, 1.0f)' "$FILE"
 
       - name: Apply 16 KB linker alignment to FluidSynth JNI
@@ -191,7 +187,6 @@ jobs:
           set -euo pipefail
 
           FILE="fluidsynth-source/fluidsynth-kmp/src/androidMain/cpp/CMakeLists.txt"
-
           test -s "$FILE"
 
           python3 - "$FILE" <<'PY'
@@ -212,11 +207,11 @@ jobs:
 
           if source.count(old) != 1:
               raise SystemExit(
-                  "FAIL: Expected CMake link target was not found exactly once."
+                  "FAIL: Expected CMake link target not found exactly once."
               )
 
           if "max-page-size=16384" in source:
-              raise SystemExit("FAIL: 16 KB linker flags already exist; refusing duplicate patch.")
+              raise SystemExit("FAIL: 16 KB linker flags already exist.")
 
           patched = source.replace(old, new, 1)
 
@@ -227,10 +222,8 @@ jobs:
               raise SystemExit("FAIL: Common page-size flag missing.")
 
           path.write_text(patched)
-          print("PASS: 16 KB linker flags applied to fluidsynth_jni.")
+          print("PASS: 16 KB linker flags applied.")
           PY
-
-          cat "$FILE"
 
       - name: Build FluidSynth release AAR
         working-directory: fluidsynth-source
@@ -270,10 +263,7 @@ jobs:
             DIR="aar-check/jni/$ABI"
             test -d "$DIR"
 
-            mapfile -t LIBS < <(
-              find "$DIR" -type f -name '*.so' | sort
-            )
-
+            mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
             test "${#LIBS[@]}" -gt 0
 
             for LIB in "${LIBS[@]}"; do
@@ -330,30 +320,74 @@ jobs:
 
           echo "PASS: SoundFont assembled and verified."
 
-      - name: Build Donut4U debug APK
+      - name: Decrypt existing Donut4U release signing key
+        env:
+          ENC_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$ENC_PASSWORD" || {
+            echo "FAIL: DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD is missing."
+            exit 1
+          }
+
+          test -n "$STORE_PASSWORD" || {
+            echo "FAIL: DONUT4U_KEYSTORE_PASSWORD is missing."
+            exit 1
+          }
+
+          test -s signing/donut4u-release.jks.enc
+
+          openssl enc -d -aes-256-cbc \
+            -pbkdf2 -iter 200000 \
+            -pass env:ENC_PASSWORD \
+            -in signing/donut4u-release.jks.enc \
+            -out "$RUNNER_TEMP/donut4u-release.jks"
+
+          test -s "$RUNNER_TEMP/donut4u-release.jks"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/donut4u-release.jks" \
+            -storepass "$STORE_PASSWORD" \
+            -alias donut4u
+
+          echo "PASS: Existing Donut4U release key decrypted."
+
+      - name: Build Donut4U signed release APK
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/unused.jks
-          DONUT4U_KEYSTORE_PASSWORD: unused
-          DONUT4U_KEY_ALIAS: unused
-          DONUT4U_KEY_PASSWORD: unused
+          DONUT4U_KEYSTORE_PATH: ${{ runner.temp }}/donut4u-release.jks
+          DONUT4U_KEYSTORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+          DONUT4U_KEY_ALIAS: donut4u
+          DONUT4U_KEY_PASSWORD: ${{ secrets.DONUT4U_KEY_PASSWORD }}
           GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ -z "${YOUTUBE_API_KEY:-}" ]]; then
+          test -n "$YOUTUBE_API_KEY" || {
             echo "FAIL: YOUTUBE_API_KEY secret is missing."
             exit 1
-          fi
+          }
+
+          test -n "$DONUT4U_KEY_PASSWORD" || {
+            echo "FAIL: DONUT4U_KEY_PASSWORD secret is missing."
+            exit 1
+          }
 
           test -s app/libs/fluidsynth-kmp-release.aar
+          test -s "$DONUT4U_KEYSTORE_PATH"
 
           for ATTEMPT in 1 2 3 4; do
-            echo "Donut4U build attempt $ATTEMPT/4"
+            echo "Donut4U signed release build attempt $ATTEMPT/4"
 
-            if gradle assembleDebug --no-daemon --stacktrace --console=plain; then
-              echo "PASS: Donut4U APK assembled."
+            if gradle assembleRelease \
+              --no-daemon \
+              --stacktrace \
+              --console=plain; then
+              echo "PASS: Donut4U signed release APK assembled."
               exit 0
             fi
 
@@ -362,34 +396,38 @@ jobs:
             fi
           done
 
-          echo "FAIL: Donut4U APK build failed."
+          echo "FAIL: Donut4U signed release build failed."
           exit 1
 
-      - name: Verify APK package and version
+      - name: Verify APK package, version and integrity
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="app/build/outputs/apk/release/app-release.apk"
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
 
           test -s "$APK"
+          test -x "$AAPT"
 
           BADGING="$("$AAPT" dump badging "$APK")"
 
           echo "$BADGING" | grep -F "package: name='com.donut4u.karaoke'"
           echo "$BADGING" | grep -F "versionCode='26'"
           echo "$BADGING" | grep -F "versionName='1.0.26'"
+          echo "$BADGING" | grep -F "sdkVersion:'24'"
 
           unzip -t "$APK"
-          echo "PASS: APK package, version and ZIP integrity."
+          sha256sum "$APK"
+
+          echo "PASS: Package, version and APK integrity verified."
 
       - name: Verify APK 16 KB alignment
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="app/build/outputs/apk/release/app-release.apk"
           NDK="$ANDROID_HOME/ndk/30.0.16248370"
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
@@ -404,10 +442,7 @@ jobs:
             DIR="apk-check/lib/$ABI"
             test -d "$DIR"
 
-            mapfile -t LIBS < <(
-              find "$DIR" -type f -name '*.so' | sort
-            )
-
+            mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
             test "${#LIBS[@]}" -gt 0
 
             for LIB in "${LIBS[@]}"; do
@@ -436,11 +471,61 @@ jobs:
           "$ZIPALIGN" -v -c -P 16 4 "$APK"
           echo "PASS: APK 16 KB verification."
 
-      - name: Upload verified Gain 1.0 APK
+      - name: Verify APK signature and existing release certificate
+        shell: bash
+        env:
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+          KEYSTORE="$RUNNER_TEMP/donut4u-release.jks"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+
+          test -s "$APK"
+          test -s "$KEYSTORE"
+          test -x "$APKSIGNER"
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          EXPECTED_CERT_SHA="$(
+            keytool -exportcert \
+              -keystore "$KEYSTORE" \
+              -storepass "$STORE_PASSWORD" \
+              -alias donut4u \
+              | sha256sum | awk '{print tolower($1)}'
+          )"
+
+          ACTUAL_CERT_SHA="$(
+            "$APKSIGNER" verify --print-certs "$APK" \
+              | awk -F': ' \
+                '/Signer #1 certificate SHA-256 digest:/ {
+                  gsub(/:/, "", $2)
+                  print tolower($2)
+                  exit
+                }'
+          )"
+
+          if [[ -z "$EXPECTED_CERT_SHA" || -z "$ACTUAL_CERT_SHA" ]]; then
+            echo "FAIL: Could not read signing certificate fingerprints."
+            exit 1
+          fi
+
+          echo "Expected release certificate: $EXPECTED_CERT_SHA"
+          echo "APK certificate:              $ACTUAL_CERT_SHA"
+
+          if [[ "$EXPECTED_CERT_SHA" != "$ACTUAL_CERT_SHA" ]]; then
+            echo "FAIL: APK certificate does not match the existing release key."
+            exit 1
+          fi
+
+          echo "PASS: APK uses the existing Donut4U release signing certificate."
+
+      - name: Upload signed Gain 1.0 release APK
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-midi-gain-10-verified-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: stage4-midi-gain-10-signed-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -451,3 +536,9 @@ jobs:
           path: app/libs/fluidsynth-kmp-release.aar
           if-no-files-found: error
           retention-days: 14
+
+      - name: Remove temporary signing key
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/donut4u-release.jks"
