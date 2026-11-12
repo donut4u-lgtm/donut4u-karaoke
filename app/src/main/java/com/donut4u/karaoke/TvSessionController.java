@@ -3,16 +3,14 @@ package com.donut4u.karaoke;
 
 import android.content.Context;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
  * Central coordinator for the Donut4U TV session.
  *
- * TvSessionController owns the application-wide listener for
- * TvKeyboardReceiver and forwards incoming phone commands to
- * the currently active TV stage.
- *
- * Stage changes must not stop the encrypted connection.
+ * Owns the application-wide TvKeyboardReceiver listener and
+ * forwards incoming phone commands to the active TV stage.
  */
 public final class TvSessionController
         implements TvKeyboardReceiver.Listener {
@@ -22,21 +20,13 @@ public final class TvSessionController
     private final Context appContext;
 
     private volatile Observer observer;
-
     private volatile TvCommandHandler activeStageHandler;
 
     private volatile boolean sessionStarted = false;
-
     private volatile int activeStage = 0;
-
     private volatile long lastStateSequence = 0L;
-
     private volatile JSONObject lastPhoneState;
 
-    /**
-     * Receives session information and commands that are not
-     * currently handled by an active stage.
-     */
     public interface Observer {
 
         default void onPairingCodeReady(String code) {
@@ -65,12 +55,6 @@ public final class TvSessionController
         }
     }
 
-    /**
-     * Receives commands intended for the currently active stage.
-     *
-     * Stage activities can implement this interface without
-     * becoming the TvKeyboardReceiver listener themselves.
-     */
     public interface TvCommandHandler {
 
         default void onPhoneSearchRequested(String songTitle) {
@@ -94,12 +78,7 @@ public final class TvSessionController
         appContext = context.getApplicationContext();
     }
 
-    /**
-     * Returns the single application-wide controller instance.
-     */
-    public static TvSessionController getInstance(
-            Context context
-    ) {
+    public static TvSessionController getInstance(Context context) {
         if (context == null) {
             throw new IllegalArgumentException(
                     "Context cannot be null."
@@ -119,13 +98,8 @@ public final class TvSessionController
 
     /**
      * Starts the shared encrypted phone-TV session.
-     *
-     * Call this from the TV session/menu owner.
-     * Do not call it independently from individual stages.
      */
-    public synchronized void startSession(
-            Observer sessionObserver
-    ) {
+    public synchronized void startSession(Observer sessionObserver) {
         observer = sessionObserver;
 
         if (sessionStarted
@@ -134,7 +108,6 @@ public final class TvSessionController
         }
 
         sessionStarted = true;
-
         lastStateSequence = 0L;
         lastPhoneState = null;
         activeStage = 0;
@@ -146,87 +119,52 @@ public final class TvSessionController
     }
 
     /**
-     * Updates the screen observing session status.
-     *
-     * This does not restart the connection or replace the
-     * TvKeyboardReceiver listener.
+     * Changes the observer without restarting the connection.
      */
     public void setObserver(Observer sessionObserver) {
         observer = sessionObserver;
     }
 
     /**
-     * Registers the command handler for the currently visible stage.
-     *
-     * Only one stage handler is active at a time.
+     * Registers the currently active stage.
      */
-    public void registerStageHandler(
-            TvCommandHandler handler
-    ) {
+    public void registerStageHandler(TvCommandHandler handler) {
         activeStageHandler = handler;
     }
 
     /**
-     * Removes a stage handler only if it is still the active handler.
-     *
-     * A previous stage cannot accidentally unregister a newer stage.
+     * Unregisters a stage only if it is still active.
      */
-    public void unregisterStageHandler(
-            TvCommandHandler handler
-    ) {
-        if (handler != null
-                && activeStageHandler == handler) {
+    public void unregisterStageHandler(TvCommandHandler handler) {
+        if (handler != null && activeStageHandler == handler) {
             activeStageHandler = null;
         }
     }
 
-    /**
-     * Updates the active stage.
-     *
-     * Valid stage numbers are 1 through 4.
-     */
     public void setActiveStage(int stage) {
-        if (stage < 1 || stage > 4) {
-            return;
+        if (stage >= 1 && stage <= 4) {
+            activeStage = stage;
         }
-
-        activeStage = stage;
     }
 
     public int getActiveStage() {
         return activeStage;
     }
 
-    /**
-     * Returns whether the shared connection session is enabled.
-     */
     public boolean isSessionStarted() {
         return sessionStarted
                 && TvKeyboardReceiver.isSessionEnabled();
     }
 
-    /**
-     * Returns the current TV pairing code.
-     */
     public String getPairingCode() {
         return TvKeyboardReceiver.getCurrentPairingCode();
     }
 
     /**
-     * Returns a defensive copy of the last accepted phone state.
+     * Returns a defensive copy of the last accepted state.
      */
     public JSONObject getLastPhoneState() {
-        JSONObject state = lastPhoneState;
-
-        if (state == null) {
-            return null;
-        }
-
-        try {
-            return new JSONObject(state.toString());
-        } catch (Exception ignored) {
-            return null;
-        }
+        return copyJson(lastPhoneState);
     }
 
     public long getLastStateSequence() {
@@ -235,28 +173,18 @@ public final class TvSessionController
 
     /**
      * Ends the entire shared session.
-     *
      * Do not call this when changing stages.
      */
     public synchronized void endSession() {
         sessionStarted = false;
-
         activeStageHandler = null;
         observer = null;
-
         activeStage = 0;
         lastStateSequence = 0L;
         lastPhoneState = null;
 
         TvKeyboardReceiver.disableSession();
     }
-
-    /**
-     * TvKeyboardReceiver.Listener implementation.
-     *
-     * The receiver already dispatches these callbacks on the
-     * Android main thread.
-     */
 
     @Override
     public void onPairingCodeReady(String code) {
@@ -338,16 +266,14 @@ public final class TvSessionController
             return;
         }
 
-        JSONObject stateCopy;
+        JSONObject stateCopy = copyJson(state);
 
-        try {
-            stateCopy = new JSONObject(state.toString());
-        } catch (Exception ignored) {
+        if (stateCopy == null) {
             return;
         }
 
         lastStateSequence = sequence;
-        lastPhoneState = stateCopy;
+        lastPhoneState = copyJson(stateCopy);
 
         int requestedStage = stateCopy.optInt("stage", 0);
 
@@ -358,19 +284,43 @@ public final class TvSessionController
         TvCommandHandler handler = activeStageHandler;
 
         if (handler != null) {
-            handler.onPhoneStateReceived(
-                    new JSONObject(stateCopy.toString()),
-                    sequence
-            );
+            JSONObject handlerState = copyJson(stateCopy);
+
+            if (handlerState != null) {
+                handler.onPhoneStateReceived(
+                        handlerState,
+                        sequence
+                );
+            }
         }
 
         Observer current = observer;
 
         if (current != null) {
-            current.onPhoneStateReceived(
-                    new JSONObject(stateCopy.toString()),
-                    sequence
-            );
+            JSONObject observerState = copyJson(stateCopy);
+
+            if (observerState != null) {
+                current.onPhoneStateReceived(
+                        observerState,
+                        sequence
+                );
+            }
+        }
+    }
+
+    /**
+     * Creates a defensive JSON copy without exposing JSONException
+     * to callers.
+     */
+    private static JSONObject copyJson(JSONObject source) {
+        if (source == null) {
+            return null;
+        }
+
+        try {
+            return new JSONObject(source.toString());
+        } catch (JSONException ignored) {
+            return null;
         }
     }
 }
