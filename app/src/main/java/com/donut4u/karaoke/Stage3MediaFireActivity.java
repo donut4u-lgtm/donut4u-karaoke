@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -51,10 +52,12 @@ public class Stage3MediaFireActivity extends Activity {
 
     private static final String SONGS_KEY = "songs_json";
 
+    private static final String EXTRA_TV_MODE =
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
+
     private static final int CHUNK_SIZE = 100;
     private static final int MAX_CHUNKS = 100;
 
-    // Only this many song cards are created at one time.
     private static final int PAGE_SIZE = 50;
 
     private static final long MAX_DOWNLOAD_SIZE =
@@ -73,6 +76,13 @@ public class Stage3MediaFireActivity extends Activity {
     private ProgressBar progress;
     private Button loadButton;
     private Button loadMoreButton;
+
+    private boolean tvMode = false;
+    private volatile boolean activityDestroyed = false;
+
+    private TvKeyboardReceiver tvKeyboardReceiver;
+    private TextView tvKeyboardCodeText;
+    private TextView tvKeyboardStatusText;
 
     private volatile boolean loading = false;
     private volatile boolean downloading = false;
@@ -105,6 +115,10 @@ public class Stage3MediaFireActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+
+        tvMode = getIntent().getBooleanExtra(
+                EXTRA_TV_MODE, false);
+
         buildScreen();
         loadFolder();
     }
@@ -139,6 +153,10 @@ public class Stage3MediaFireActivity extends Activity {
 
         root.addView(subtitle,
                 new LinearLayout.LayoutParams(-1, dp(28)));
+
+        if (tvMode) {
+            buildTvPairingPanel(root);
+        }
 
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
@@ -237,6 +255,265 @@ public class Stage3MediaFireActivity extends Activity {
         renderSongs();
     }
 
+    private void buildTvPairingPanel(LinearLayout root) {
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        panel.setPadding(dp(10), dp(7), dp(10), dp(7));
+        panel.setBackgroundColor(Color.rgb(18, 55, 35));
+
+        TextView heading = new TextView(this);
+        heading.setText("PHONE KEYBOARD CONNECTION");
+        heading.setTextColor(Color.rgb(100, 255, 160));
+        heading.setTextSize(13);
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+
+        panel.addView(heading,
+                new LinearLayout.LayoutParams(-1, dp(25)));
+
+        TextView instruction = new TextView(this);
+        instruction.setText(
+                "Open Donut4U Phone Remote and enter this TV code:");
+        instruction.setTextColor(Color.WHITE);
+        instruction.setTextSize(11);
+        instruction.setGravity(Gravity.CENTER);
+
+        panel.addView(instruction);
+
+        tvKeyboardCodeText = new TextView(this);
+        tvKeyboardCodeText.setText("------");
+        tvKeyboardCodeText.setTextColor(Color.rgb(100, 255, 160));
+        tvKeyboardCodeText.setTextSize(28);
+        tvKeyboardCodeText.setTypeface(
+                Typeface.DEFAULT, Typeface.BOLD);
+        tvKeyboardCodeText.setGravity(Gravity.CENTER);
+        tvKeyboardCodeText.setPadding(0, dp(3), 0, dp(3));
+
+        panel.addView(tvKeyboardCodeText,
+                new LinearLayout.LayoutParams(-1, dp(42)));
+
+        tvKeyboardStatusText = new TextView(this);
+        tvKeyboardStatusText.setText(
+                "Preparing phone keyboard connection...");
+        tvKeyboardStatusText.setTextColor(Color.WHITE);
+        tvKeyboardStatusText.setTextSize(11);
+        tvKeyboardStatusText.setGravity(Gravity.CENTER);
+
+        panel.addView(tvKeyboardStatusText);
+
+        LinearLayout.LayoutParams panelParams =
+                new LinearLayout.LayoutParams(-1, -2);
+
+        panelParams.bottomMargin = dp(7);
+
+        root.addView(panel, panelParams);
+    }
+
+    private void startTvKeyboardReceiver() {
+
+        if (!tvMode || activityDestroyed
+                || tvKeyboardReceiver != null
+                || tvKeyboardCodeText == null
+                || tvKeyboardStatusText == null) {
+            return;
+        }
+
+        tvKeyboardStatusText.setText(
+                "Starting phone keyboard connection...");
+
+        tvKeyboardReceiver = new TvKeyboardReceiver(
+                this,
+                new TvKeyboardReceiver.Listener() {
+
+                    @Override
+                    public void onPairingCodeReady(String code) {
+                        if (activityDestroyed
+                                || tvKeyboardCodeText == null) {
+                            return;
+                        }
+
+                        tvKeyboardCodeText.setText(
+                                code == null || code.isEmpty()
+                                        ? "------" : code);
+                    }
+
+                    @Override
+                    public void onSearchRequested(String songTitle) {
+                        if (activityDestroyed || searchInput == null) {
+                            return;
+                        }
+
+                        String text = songTitle == null
+                                ? "" : songTitle.trim();
+
+                        searchInput.setText(text);
+                        searchInput.setSelection(
+                                searchInput.getText().length());
+                    }
+
+                    @Override
+                    public void onTextInput(
+                            String target,
+                            String text,
+                            String action
+                    ) {
+                        if (activityDestroyed) {
+                            return;
+                        }
+
+                        applyTvTextInput(target, text, action);
+                    }
+
+                    @Override
+                    public void onStatusChanged(String message) {
+                        if (activityDestroyed
+                                || tvKeyboardStatusText == null) {
+                            return;
+                        }
+
+                        tvKeyboardStatusText.setText(message);
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        if (activityDestroyed
+                                || tvKeyboardStatusText == null) {
+                            return;
+                        }
+
+                        tvKeyboardStatusText.setText(
+                                "Connection error: " + message);
+
+                        android.util.Log.e(
+                                "Stage3MediaFire",
+                                "Phone keyboard receiver: " + message);
+                    }
+                });
+
+        try {
+            tvKeyboardReceiver.start();
+
+            String currentCode =
+                    TvKeyboardReceiver.getCurrentPairingCode();
+
+            if (currentCode != null && !currentCode.isEmpty()) {
+                tvKeyboardCodeText.setText(currentCode);
+            }
+
+        } catch (Exception e) {
+            android.util.Log.e(
+                    "Stage3MediaFire",
+                    "Could not start phone keyboard receiver.", e);
+
+            tvKeyboardStatusText.setText(
+                    "Could not start phone keyboard connection.");
+
+            tvKeyboardReceiver = null;
+        }
+    }
+
+    private void applyTvTextInput(
+            String target,
+            String text,
+            String action
+    ) {
+        if (activityDestroyed || !tvMode || searchInput == null) {
+            return;
+        }
+
+        String inputTarget = target == null
+                ? "" : target.trim().toLowerCase(Locale.ROOT);
+
+        if (!inputTarget.isEmpty()
+                && !"active".equals(inputTarget)
+                && !"search".equals(inputTarget)
+                && !"searchinput".equals(inputTarget)) {
+            return;
+        }
+
+        String inputAction = action == null
+                ? "" : action.trim().toLowerCase(Locale.ROOT);
+
+        String value = text == null ? "" : text;
+
+        searchInput.requestFocus();
+
+        android.text.Editable editable = searchInput.getText();
+
+        int start = searchInput.getSelectionStart();
+        int end = searchInput.getSelectionEnd();
+
+        if (start < 0) {
+            start = editable.length();
+        }
+
+        if (end < 0) {
+            end = start;
+        }
+
+        start = Math.min(start, editable.length());
+        end = Math.min(end, editable.length());
+
+        if (start > end) {
+            int temporary = start;
+            start = end;
+            end = temporary;
+        }
+
+        switch (inputAction) {
+            case "replace":
+                searchInput.setText(value);
+                searchInput.setSelection(
+                        searchInput.getText().length());
+                break;
+
+            case "append":
+                editable.replace(start, end, value);
+                searchInput.setSelection(start + value.length());
+                break;
+
+            case "backspace":
+                if (start != end) {
+                    editable.delete(start, end);
+                    searchInput.setSelection(start);
+                } else if (start > 0) {
+                    int deleteStart = start - 1;
+
+                    if (deleteStart > 0
+                            && Character.isLowSurrogate(
+                                    editable.charAt(deleteStart))
+                            && Character.isHighSurrogate(
+                                    editable.charAt(deleteStart - 1))) {
+                        deleteStart--;
+                    }
+
+                    editable.delete(deleteStart, start);
+                    searchInput.setSelection(deleteStart);
+                }
+                break;
+
+            case "clear":
+                searchInput.setText("");
+                searchInput.setSelection(0);
+                break;
+
+            case "submit":
+                renderSongs();
+                searchInput.setSelection(
+                        searchInput.getText().length());
+                break;
+
+            default:
+                android.util.Log.w(
+                        "Stage3MediaFire",
+                        "Ignored unknown phone keyboard action: "
+                                + inputAction);
+                return;
+        }
+    }
+
     private Button makeButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -320,7 +597,7 @@ public class Stage3MediaFireActivity extends Activity {
 
                     runOnUiThread(() -> {
 
-                        if (isFinishing()) {
+                        if (isFinishing() || activityDestroyed) {
                             return;
                         }
 
@@ -355,6 +632,10 @@ public class Stage3MediaFireActivity extends Activity {
             runOnUiThread(() -> {
 
                 loading = false;
+
+                if (activityDestroyed) {
+                    return;
+                }
 
                 progress.setIndeterminate(false);
                 progress.setVisibility(View.GONE);
@@ -641,7 +922,7 @@ public class Stage3MediaFireActivity extends Activity {
 
     private void renderSongs() {
 
-        if (songList == null) {
+        if (songList == null || activityDestroyed) {
             return;
         }
 
@@ -783,6 +1064,10 @@ public class Stage3MediaFireActivity extends Activity {
 
                     downloading = false;
 
+                    if (activityDestroyed) {
+                        return;
+                    }
+
                     progress.setIndeterminate(false);
                     progress.setVisibility(View.GONE);
 
@@ -821,6 +1106,10 @@ public class Stage3MediaFireActivity extends Activity {
                 runOnUiThread(() -> {
 
                     downloading = false;
+
+                    if (activityDestroyed) {
+                        return;
+                    }
 
                     progress.setIndeterminate(false);
                     progress.setVisibility(View.GONE);
@@ -1429,6 +1718,26 @@ public class Stage3MediaFireActivity extends Activity {
                 .apply();
 
         return number;
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (tvMode) {
+            startTvKeyboardReceiver();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        activityDestroyed = true;
+
+        // TvKeyboardReceiver is application-wide.
+        // Do not disable the shared TV session when changing screens.
+        tvKeyboardReceiver = null;
+
+        super.onDestroy();
     }
 
     @Override
