@@ -24,6 +24,9 @@ public class TvStageMenuActivity extends Activity {
     public static final String EXTRA_TV_STAGE1 =
             "com.donut4u.karaoke.EXTRA_TV_STAGE1";
 
+    public static final String EXTRA_TV_PHONE_CONTROLLED =
+            "com.donut4u.karaoke.EXTRA_TV_PHONE_CONTROLLED";
+
     private static final int BG = Color.rgb(8, 18, 25);
     private static final int PANEL = Color.rgb(18, 42, 48);
     private static final int GREEN = Color.rgb(50, 220, 130);
@@ -34,10 +37,76 @@ public class TvStageMenuActivity extends Activity {
 
     private LinearLayout stageButtonsContainer;
 
+    private TvSessionController sessionController;
+
     private boolean phonePaired = false;
     private boolean openingStage = false;
+    private boolean waitingForStageReturn = false;
 
     private int lastOpenedStage = -1;
+
+    private final TvSessionController.Observer sessionObserver =
+            new TvSessionController.Observer() {
+
+        @Override
+        public void onPairingCodeReady(String code) {
+            runOnUiThread(() -> {
+                if (tvPairingCodeText != null) {
+                    tvPairingCodeText.setText(
+                            code == null ? "------" : code
+                    );
+                }
+
+                if (!phonePaired && tvPairingStatusText != null) {
+                    tvPairingStatusText.setText(
+                            "READY - CONNECT YOUR PHONE"
+                    );
+                }
+            });
+        }
+
+        @Override
+        public void onStatusChanged(String message) {
+            runOnUiThread(() ->
+                    handleConnectionStatus(message)
+            );
+        }
+
+        @Override
+        public void onError(String message) {
+            runOnUiThread(() -> {
+                if (tvPairingStatusText != null) {
+                    tvPairingStatusText.setText(
+                            "PAIRING ERROR: " + message
+                    );
+                }
+            });
+        }
+
+        @Override
+        public void onPhoneSearchRequested(String songTitle) {
+            // The active stage handles phone search commands.
+        }
+
+        @Override
+        public void onPhoneTextInput(
+                String target,
+                String text,
+                String action
+        ) {
+            // The active stage handles phone keyboard commands.
+        }
+
+        @Override
+        public void onPhoneStateReceived(
+                JSONObject state,
+                long sequence
+        ) {
+            runOnUiThread(() ->
+                    handlePhoneState(state)
+            );
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -47,76 +116,37 @@ public class TvStageMenuActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
 
         buildMenu();
-        startTvPairing();
+        startTvSession();
     }
 
-    private void startTvPairing() {
-        TvKeyboardReceiver.enableSession(
-                getApplicationContext(),
-                new TvKeyboardReceiver.Listener() {
+    private void startTvSession() {
+        sessionController =
+                TvSessionController.getInstance(
+                        getApplicationContext()
+                );
 
-                    @Override
-                    public void onPairingCodeReady(String code) {
-                        runOnUiThread(() -> {
-                            if (tvPairingCodeText != null) {
-                                tvPairingCodeText.setText(code);
-                            }
-
-                            if (!phonePaired
-                                    && tvPairingStatusText != null) {
-                                tvPairingStatusText.setText(
-                                        "READY - CONNECT YOUR PHONE"
-                                );
-                            }
-                        });
-                    }
-
-                    @Override
-                    public void onSearchRequested(String songTitle) {
-                        // The active TV stage handles search requests.
-                    }
-
-                    @Override
-                    public void onStateReceived(
-                            JSONObject state,
-                            long sequence
-                    ) {
-                        runOnUiThread(() ->
-                                handlePhoneState(state)
-                        );
-                    }
-
-                    @Override
-                    public void onStatusChanged(String message) {
-                        runOnUiThread(() ->
-                                handleConnectionStatus(message)
-                        );
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        runOnUiThread(() -> {
-                            if (tvPairingStatusText != null) {
-                                tvPairingStatusText.setText(
-                                        "PAIRING ERROR: " + message
-                                );
-                            }
-                        });
-                    }
-                }
-        );
+        /*
+         * The menu owns the application-wide TV session.
+         * Stage activities must use this controller instead
+         * of creating or replacing TvKeyboardReceiver listeners.
+         */
+        sessionController.startSession(sessionObserver);
 
         String currentCode =
-                TvKeyboardReceiver.getCurrentPairingCode();
+                sessionController.getPairingCode();
 
-        if (currentCode != null && !currentCode.isEmpty()
+        if (currentCode != null
+                && !currentCode.isEmpty()
                 && tvPairingCodeText != null) {
+
             tvPairingCodeText.setText(currentCode);
         }
+
+        updateStageMenuVisibility();
     }
 
     private void handleConnectionStatus(String message) {
-        if (tvPairingStatusText != null) {
+        if (tvPairingStatusText != null && message != null) {
             tvPairingStatusText.setText(message);
         }
 
@@ -124,10 +154,13 @@ public class TvStageMenuActivity extends Activity {
             return;
         }
 
-        if (message.contains("Encrypted phone controller connected.")) {
+        if (message.contains(
+                "Encrypted phone controller connected."
+        )) {
             phonePaired = true;
             openingStage = false;
             lastOpenedStage = -1;
+
             updateStageMenuVisibility();
             return;
         }
@@ -139,6 +172,7 @@ public class TvStageMenuActivity extends Activity {
             phonePaired = false;
             openingStage = false;
             lastOpenedStage = -1;
+
             updateStageMenuVisibility();
         }
     }
@@ -161,7 +195,7 @@ public class TvStageMenuActivity extends Activity {
         lastOpenedStage = stage;
         openingStage = true;
 
-        openStage(stage);
+        openStage(stage, true);
     }
 
     private void updateStageMenuVisibility() {
@@ -173,7 +207,7 @@ public class TvStageMenuActivity extends Activity {
 
         if (tvPairingStatusText != null && !phonePaired) {
             tvPairingStatusText.setText(
-                    "STANDALONE TV MODE - USE YOUR TV REMOTE"
+                    "TV ONLY MODE - USE YOUR TV REMOTE"
             );
         }
     }
@@ -186,55 +220,103 @@ public class TvStageMenuActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(36), dp(28), dp(36), dp(28));
+        root.setPadding(
+                dp(36),
+                dp(28),
+                dp(36),
+                dp(28)
+        );
+
         scroll.addView(root);
 
         TextView title = new TextView(this);
         title.setText("DONUT4U KARAOKE");
         title.setTextColor(GREEN);
         title.setTextSize(30);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         title.setGravity(Gravity.CENTER);
+
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("PHONE CONTROLLED KARAOKE");
+        subtitle.setText(
+                "TV ONLY OR PHONE-CONTROLLED KARAOKE"
+        );
         subtitle.setTextColor(WHITE);
         subtitle.setTextSize(18);
         subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(10), 0, dp(24));
+        subtitle.setPadding(
+                0,
+                dp(10),
+                0,
+                dp(24)
+        );
+
         root.addView(subtitle, matchWrap());
 
         TextView pairingLabel = new TextView(this);
         pairingLabel.setText("PHONE PAIRING CODE");
         pairingLabel.setTextColor(WHITE);
         pairingLabel.setTextSize(15);
-        pairingLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        pairingLabel.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         pairingLabel.setGravity(Gravity.CENTER);
-        pairingLabel.setPadding(0, dp(2), 0, dp(4));
+        pairingLabel.setPadding(
+                0,
+                dp(2),
+                0,
+                dp(4)
+        );
+
         root.addView(pairingLabel, matchWrap());
 
         tvPairingCodeText = new TextView(this);
         tvPairingCodeText.setText("------");
         tvPairingCodeText.setTextColor(GREEN);
         tvPairingCodeText.setTextSize(40);
-        tvPairingCodeText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        tvPairingCodeText.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         tvPairingCodeText.setGravity(Gravity.CENTER);
         tvPairingCodeText.setLetterSpacing(0.18f);
-        tvPairingCodeText.setPadding(0, 0, 0, dp(2));
+        tvPairingCodeText.setPadding(
+                0,
+                0,
+                0,
+                dp(2)
+        );
+
         root.addView(tvPairingCodeText, matchWrap());
 
         tvPairingStatusText = new TextView(this);
-        tvPairingStatusText.setText("STARTING PHONE CONNECTION...");
+        tvPairingStatusText.setText(
+                "STARTING PHONE CONNECTION..."
+        );
         tvPairingStatusText.setTextColor(WHITE);
         tvPairingStatusText.setTextSize(13);
         tvPairingStatusText.setGravity(Gravity.CENTER);
-        tvPairingStatusText.setPadding(0, 0, 0, dp(12));
+        tvPairingStatusText.setPadding(
+                0,
+                0,
+                0,
+                dp(12)
+        );
+
         root.addView(tvPairingStatusText, matchWrap());
 
         stageButtonsContainer = new LinearLayout(this);
-        stageButtonsContainer.setOrientation(LinearLayout.VERTICAL);
-        stageButtonsContainer.setGravity(Gravity.CENTER_HORIZONTAL);
+        stageButtonsContainer.setOrientation(
+                LinearLayout.VERTICAL
+        );
+        stageButtonsContainer.setGravity(
+                Gravity.CENTER_HORIZONTAL
+        );
 
         addStageButton(
                 stageButtonsContainer,
@@ -266,6 +348,7 @@ public class TvStageMenuActivity extends Activity {
         );
 
         setContentView(scroll);
+
         updateStageMenuVisibility();
     }
 
@@ -279,14 +362,23 @@ public class TvStageMenuActivity extends Activity {
         button.setTextColor(WHITE);
         button.setTextSize(17);
         button.setAllCaps(false);
-        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        button.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         button.setBackground(background(PANEL));
-        button.setPadding(dp(18), dp(18), dp(18), dp(18));
+        button.setPadding(
+                dp(18),
+                dp(18),
+                dp(18),
+                dp(18)
+        );
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
+
         button.setOnClickListener(v -> {
             if (!phonePaired) {
-                openStage(stage);
+                openStage(stage, false);
             }
         });
 
@@ -297,10 +389,14 @@ public class TvStageMenuActivity extends Activity {
                 );
 
         lp.bottomMargin = dp(14);
+
         root.addView(button, lp);
     }
 
-    private void openStage(int stage) {
+    private void openStage(
+            int stage,
+            boolean phoneControlled
+    ) {
         Class<?> target;
 
         switch (stage) {
@@ -322,21 +418,35 @@ public class TvStageMenuActivity extends Activity {
                 break;
         }
 
+        if (sessionController != null) {
+            sessionController.setActiveStage(stage);
+        }
+
         Intent intent = new Intent(this, target);
+
         intent.putExtra(EXTRA_TV_MODE, true);
+        intent.putExtra(
+                EXTRA_TV_PHONE_CONTROLLED,
+                phoneControlled
+        );
 
         if (stage == 1) {
             intent.putExtra(EXTRA_TV_STAGE1, true);
         }
 
+        waitingForStageReturn = true;
+
         startActivity(intent);
     }
 
     private GradientDrawable background(int color) {
-        GradientDrawable drawable = new GradientDrawable();
+        GradientDrawable drawable =
+                new GradientDrawable();
+
         drawable.setColor(color);
         drawable.setCornerRadius(dp(14));
         drawable.setStroke(dp(2), GREEN);
+
         return drawable;
     }
 
@@ -349,16 +459,39 @@ public class TvStageMenuActivity extends Activity {
 
     private int dp(int value) {
         return Math.round(
-                value * getResources().getDisplayMetrics().density
+                value * getResources()
+                        .getDisplayMetrics()
+                        .density
         );
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (sessionController != null) {
+            sessionController.setObserver(sessionObserver);
+        }
+
+        if (waitingForStageReturn) {
+            waitingForStageReturn = false;
+            openingStage = false;
+            lastOpenedStage = -1;
+        }
+
+        updateStageMenuVisibility();
     }
 
     @Override
     protected void onDestroy() {
         /*
-         * Do not disable the shared receiver here.
-         * TV stage activities use the same application-wide session.
+         * Do not end the shared TV session here.
+         * The pairing session must survive stage changes.
          */
+        if (sessionController != null) {
+            sessionController.setObserver(null);
+        }
+
         super.onDestroy();
     }
 }
