@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -16,8 +17,6 @@ import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
-import android.view.inputmethod.InputMethodManager;
-import android.content.Context;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -127,9 +126,11 @@ public class Stage3SongbookActivity extends Activity {
 
         postFileButton.setOnClickListener(v -> {
             try {
-                startActivity(new Intent(
+                Intent intent = new Intent(
                         Stage3SongbookActivity.this,
-                        Stage3PostFileUploadActivity.class));
+                        Stage3PostFileUploadActivity.class);
+                intent.putExtra(EXTRA_TV_MODE, tvMode);
+                startActivity(intent);
             } catch (Exception e) {
                 android.util.Log.e("Stage3Songbook",
                         "Could not open PostFile uploader.", e);
@@ -148,9 +149,11 @@ public class Stage3SongbookActivity extends Activity {
 
         mediaFireButton.setOnClickListener(v -> {
             try {
-                startActivity(new Intent(
+                Intent intent = new Intent(
                         Stage3SongbookActivity.this,
-                        Stage3MediaFireActivity.class));
+                        Stage3MediaFireActivity.class);
+                intent.putExtra(EXTRA_TV_MODE, tvMode);
+                startActivity(intent);
             } catch (Exception e) {
                 android.util.Log.e("Stage3Songbook",
                         "Could not open MediaFire search.", e);
@@ -358,9 +361,6 @@ public class Stage3SongbookActivity extends Activity {
                         searchInput.setText(text);
                         searchInput.setSelection(
                                 searchInput.getText().length());
-
-                        // The existing TextWatcher automatically
-                        // filters the Stage 3 songbook.
                     }
 
                     @Override
@@ -486,8 +486,6 @@ public class Stage3SongbookActivity extends Activity {
                 } else if (start > 0) {
                     int deleteStart = start - 1;
 
-                    // Avoid deleting only half of a Unicode
-                    // surrogate pair, such as some emoji.
                     if (deleteStart > 0
                             && Character.isLowSurrogate(
                                     editable.charAt(deleteStart))
@@ -507,8 +505,6 @@ public class Stage3SongbookActivity extends Activity {
                 break;
 
             case "submit":
-                // The TextWatcher already filters the songbook.
-                // Refresh the current results using the final text.
                 renderSongs(searchInput.getText().toString());
                 searchInput.setSelection(
                         searchInput.getText().length());
