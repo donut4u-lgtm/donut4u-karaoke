@@ -11,6 +11,12 @@ import org.json.JSONObject;
  *
  * Owns the application-wide TvKeyboardReceiver listener and
  * forwards incoming phone commands to the active TV stage.
+ *
+ * IMPORTANT:
+ * - The shared receiver belongs to this controller.
+ * - Individual stages must never stop or disable the receiver.
+ * - Stage changes only register or unregister stage handlers.
+ * - Only the session owner should call endSession().
  */
 public final class TvSessionController
         implements TvKeyboardReceiver.Listener {
@@ -20,11 +26,15 @@ public final class TvSessionController
     private final Context appContext;
 
     private volatile Observer observer;
+
     private volatile TvCommandHandler activeStageHandler;
 
     private volatile boolean sessionStarted = false;
+
     private volatile int activeStage = 0;
+
     private volatile long lastStateSequence = 0L;
+
     private volatile JSONObject lastPhoneState;
 
     public interface Observer {
@@ -75,20 +85,27 @@ public final class TvSessionController
     }
 
     private TvSessionController(Context context) {
+
         appContext = context.getApplicationContext();
     }
 
     public static TvSessionController getInstance(Context context) {
+
         if (context == null) {
+
             throw new IllegalArgumentException(
                     "Context cannot be null."
             );
         }
 
         if (instance == null) {
+
             synchronized (TvSessionController.class) {
+
                 if (instance == null) {
-                    instance = new TvSessionController(context);
+
+                    instance =
+                            new TvSessionController(context);
                 }
             }
         }
@@ -98,19 +115,31 @@ public final class TvSessionController
 
     /**
      * Starts the shared phone-TV session.
+     *
+     * Calling this again while the shared receiver is already
+     * enabled updates the observer without restarting the receiver.
      */
-    public synchronized void startSession(Observer sessionObserver) {
+    public synchronized void startSession(
+            Observer sessionObserver
+    ) {
+
         observer = sessionObserver;
 
         if (sessionStarted
                 && TvKeyboardReceiver.isSessionEnabled()) {
+
             return;
         }
 
         sessionStarted = true;
-        lastStateSequence = 0L;
-        lastPhoneState = null;
+
+        activeStageHandler = null;
+
         activeStage = 0;
+
+        lastStateSequence = 0L;
+
+        lastPhoneState = null;
 
         TvKeyboardReceiver.enableSession(
                 appContext,
@@ -119,78 +148,145 @@ public final class TvSessionController
     }
 
     /**
-     * Changes the observer without restarting the connection.
+     * Changes the session observer without restarting
+     * or disabling the shared receiver.
+     *
+     * This observer belongs to the session owner, not
+     * to an individual stage.
      */
-    public void setObserver(Observer sessionObserver) {
+    public void setObserver(
+            Observer sessionObserver
+    ) {
+
         observer = sessionObserver;
     }
 
     /**
-     * Registers the currently active stage.
+     * Registers the command handler for the currently
+     * active TV stage.
+     *
+     * Only one stage handler is active at a time.
      */
-    public void registerStageHandler(TvCommandHandler handler) {
+    public synchronized void registerStageHandler(
+            TvCommandHandler handler
+    ) {
+
+        if (handler == null) {
+            return;
+        }
+
         activeStageHandler = handler;
     }
 
     /**
-     * Unregisters a stage only if it is still active.
+     * Unregisters a stage only when the supplied handler
+     * is still the currently registered handler.
+     *
+     * This prevents an older Activity from accidentally
+     * unregistering a newer stage handler.
+     *
+     * This method does NOT stop the shared receiver.
      */
-    public void unregisterStageHandler(TvCommandHandler handler) {
-        if (handler != null && activeStageHandler == handler) {
+    public synchronized void unregisterStageHandler(
+            TvCommandHandler handler
+    ) {
+
+        if (handler != null
+                && activeStageHandler == handler) {
+
             activeStageHandler = null;
+
+            activeStage = 0;
         }
     }
 
-    public void setActiveStage(int stage) {
-        if (stage >= 1 && stage <= 4) {
+    /**
+     * Sets the currently active TV stage.
+     *
+     * Valid stages are 1 through 4.
+     * Stage 0 means no stage is currently active.
+     */
+    public synchronized void setActiveStage(int stage) {
+
+        if (stage >= 0 && stage <= 4) {
+
             activeStage = stage;
         }
     }
 
     public int getActiveStage() {
+
         return activeStage;
     }
 
+    /**
+     * Returns true only while the controller and
+     * shared receiver are both active.
+     */
     public boolean isSessionStarted() {
+
         return sessionStarted
                 && TvKeyboardReceiver.isSessionEnabled();
     }
 
+    /**
+     * Returns the current six-digit pairing code
+     * generated by the shared receiver.
+     */
     public String getPairingCode() {
+
         return TvKeyboardReceiver.getCurrentPairingCode();
     }
 
     /**
-     * Returns a defensive copy of the last accepted state.
+     * Returns a defensive copy of the last accepted
+     * phone state.
      */
     public JSONObject getLastPhoneState() {
+
         return copyJson(lastPhoneState);
     }
 
     public long getLastStateSequence() {
+
         return lastStateSequence;
     }
 
     /**
-     * Ends the entire shared session.
+     * Ends the entire shared phone-TV session.
+     *
+     * IMPORTANT:
      * Do not call this when changing stages.
+     * Only the session owner should call this method.
      */
     public synchronized void endSession() {
+
         sessionStarted = false;
+
         activeStageHandler = null;
+
         observer = null;
+
         activeStage = 0;
+
         lastStateSequence = 0L;
+
         lastPhoneState = null;
 
         TvKeyboardReceiver.disableSession();
     }
 
+    // ------------------------------------------------
+    // RECEIVER CALLBACKS
+    // ------------------------------------------------
+
     @Override
     public void onPairingCodeReady(String code) {
+
         Observer current = observer;
 
         if (current != null) {
+
             current.onPairingCodeReady(code);
         }
     }
@@ -199,46 +295,61 @@ public final class TvSessionController
     public void onStatusChanged(String message) {
 
         /*
-         * A newly connected phone starts its command sequence
-         * from 1. Reset the previous phone's sequence so that
-         * commands from the new connection are accepted.
+         * Every newly connected phone starts a fresh
+         * command sequence.
          *
-         * This does not end or restart the shared TV session.
+         * Reset the previous phone's sequence and state
+         * without restarting the shared TV session.
          */
         if (message != null
-                && message.contains("Phone controller connected.")) {
-            lastStateSequence = 0L;
-            lastPhoneState = null;
+                && message.contains(
+                        "Phone controller connected."
+                )) {
+
+            synchronized (this) {
+
+                lastStateSequence = 0L;
+
+                lastPhoneState = null;
+            }
         }
 
         Observer current = observer;
 
         if (current != null) {
+
             current.onStatusChanged(message);
         }
     }
 
     @Override
     public void onError(String message) {
+
         Observer current = observer;
 
         if (current != null) {
+
             current.onError(message);
         }
     }
 
     @Override
     public void onSearchRequested(String songTitle) {
-        TvCommandHandler handler = activeStageHandler;
+
+        TvCommandHandler handler =
+                activeStageHandler;
 
         if (handler != null) {
+
             handler.onPhoneSearchRequested(songTitle);
+
             return;
         }
 
         Observer current = observer;
 
         if (current != null) {
+
             current.onPhoneSearchRequested(songTitle);
         }
     }
@@ -249,20 +360,25 @@ public final class TvSessionController
             String text,
             String action
     ) {
-        TvCommandHandler handler = activeStageHandler;
+
+        TvCommandHandler handler =
+                activeStageHandler;
 
         if (handler != null) {
+
             handler.onPhoneTextInput(
                     target,
                     text,
                     action
             );
+
             return;
         }
 
         Observer current = observer;
 
         if (current != null) {
+
             current.onPhoneTextInput(
                     target,
                     text,
@@ -276,31 +392,65 @@ public final class TvSessionController
             JSONObject state,
             long sequence
     ) {
-        if (state == null || sequence <= lastStateSequence) {
+
+        if (state == null || sequence <= 0L) {
             return;
         }
 
-        JSONObject stateCopy = copyJson(state);
+        JSONObject stateCopy =
+                copyJson(state);
 
         if (stateCopy == null) {
             return;
         }
 
-        lastStateSequence = sequence;
-        lastPhoneState = copyJson(stateCopy);
+        TvCommandHandler handler;
 
-        int requestedStage = stateCopy.optInt("stage", 0);
+        Observer current;
 
-        if (requestedStage >= 1 && requestedStage <= 4) {
-            activeStage = requestedStage;
+        synchronized (this) {
+
+            /*
+             * Reject duplicate or older state messages.
+             */
+            if (sequence <= lastStateSequence) {
+                return;
+            }
+
+            lastStateSequence = sequence;
+
+            lastPhoneState =
+                    copyJson(stateCopy);
+
+            /*
+             * Keep the reported stage synchronized with
+             * the phone's current stage when valid.
+             */
+            int requestedStage =
+                    stateCopy.optInt("stage", 0);
+
+            if (requestedStage >= 1
+                    && requestedStage <= 4) {
+
+                activeStage = requestedStage;
+            }
+
+            handler = activeStageHandler;
+
+            current = observer;
         }
 
-        TvCommandHandler handler = activeStageHandler;
-
+        /*
+         * Deliver separate JSON copies so that a stage
+         * cannot modify the observer's state object.
+         */
         if (handler != null) {
-            JSONObject handlerState = copyJson(stateCopy);
+
+            JSONObject handlerState =
+                    copyJson(stateCopy);
 
             if (handlerState != null) {
+
                 handler.onPhoneStateReceived(
                         handlerState,
                         sequence
@@ -308,12 +458,13 @@ public final class TvSessionController
             }
         }
 
-        Observer current = observer;
-
         if (current != null) {
-            JSONObject observerState = copyJson(stateCopy);
+
+            JSONObject observerState =
+                    copyJson(stateCopy);
 
             if (observerState != null) {
+
                 current.onPhoneStateReceived(
                         observerState,
                         sequence
@@ -322,18 +473,31 @@ public final class TvSessionController
         }
     }
 
+    // ------------------------------------------------
+    // JSON HELPERS
+    // ------------------------------------------------
+
     /**
-     * Creates a defensive JSON copy without exposing JSONException
-     * to callers.
+     * Creates a defensive JSON copy.
+     *
+     * Returns null if the source cannot be copied.
      */
-    private static JSONObject copyJson(JSONObject source) {
+    private static JSONObject copyJson(
+            JSONObject source
+    ) {
+
         if (source == null) {
             return null;
         }
 
         try {
-            return new JSONObject(source.toString());
+
+            return new JSONObject(
+                    source.toString()
+            );
+
         } catch (JSONException ignored) {
+
             return null;
         }
     }
