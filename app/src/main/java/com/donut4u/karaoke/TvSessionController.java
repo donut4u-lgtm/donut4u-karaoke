@@ -63,6 +63,16 @@ public final class TvSessionController
                 long sequence
         ) {
         }
+
+        /**
+         * Handles phone requests when no active stage
+         * handler is available.
+         */
+        default JSONObject onPhoneRemoteRequest(
+                JSONObject request
+        ) {
+            return null;
+        }
     }
 
     public interface TvCommandHandler {
@@ -81,6 +91,22 @@ public final class TvSessionController
                 JSONObject state,
                 long sequence
         ) {
+        }
+
+        /**
+         * Handles request-response commands sent by the phone.
+         *
+         * Supported requests include:
+         * - get_results
+         * - select_song
+         *
+         * Return a JSONObject containing the response data.
+         * Return null when the request is not handled.
+         */
+        default JSONObject onPhoneRemoteRequest(
+                JSONObject request
+        ) {
+            return null;
         }
     }
 
@@ -473,9 +499,117 @@ public final class TvSessionController
         }
     }
 
+    /**
+     * Receives request-response commands from the phone.
+     *
+     * The active stage gets first opportunity to handle
+     * the request. If it returns null, the session observer
+     * gets an opportunity to handle it.
+     *
+     * The receiver wraps the returned object in its normal
+     * response envelope.
+     */
+    @Override
+    public JSONObject onRemoteRequest(
+            JSONObject request
+    ) {
+
+        if (request == null) {
+            return null;
+        }
+
+        JSONObject requestCopy =
+                copyJson(request);
+
+        if (requestCopy == null) {
+            return null;
+        }
+
+        TvCommandHandler handler =
+                activeStageHandler;
+
+        if (handler != null) {
+
+            try {
+
+                JSONObject result =
+                        handler.onPhoneRemoteRequest(
+                                copyJson(requestCopy)
+                        );
+
+                if (result != null) {
+                    return copyJson(result);
+                }
+
+            } catch (Exception e) {
+
+                android.util.Log.e(
+                        "TvSessionController",
+                        "Active stage failed to handle phone request.",
+                        e
+                );
+
+                return createErrorResponse(
+                        "Active TV stage could not process the request."
+                );
+            }
+        }
+
+        Observer current = observer;
+
+        if (current != null) {
+
+            try {
+
+                JSONObject result =
+                        current.onPhoneRemoteRequest(
+                                copyJson(requestCopy)
+                        );
+
+                if (result != null) {
+                    return copyJson(result);
+                }
+
+            } catch (Exception e) {
+
+                android.util.Log.e(
+                        "TvSessionController",
+                        "Session observer failed to handle phone request.",
+                        e
+                );
+
+                return createErrorResponse(
+                        "TV session could not process the request."
+                );
+            }
+        }
+
+        return createErrorResponse(
+                "No active TV stage can handle this request."
+        );
+    }
+
     // ------------------------------------------------
     // JSON HELPERS
     // ------------------------------------------------
+
+    private static JSONObject createErrorResponse(
+            String message
+    ) {
+
+        JSONObject response = new JSONObject();
+
+        try {
+
+            response.put("ok", false);
+
+            response.put("message", message);
+
+        } catch (JSONException ignored) {
+        }
+
+        return response;
+    }
 
     /**
      * Creates a defensive JSON copy.
