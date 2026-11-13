@@ -155,7 +155,7 @@ public class TvStageMenuActivity extends Activity {
         }
 
         if (message.contains(
-                "Encrypted phone controller connected."
+                "Phone controller connected."
         )) {
             phonePaired = true;
             openingStage = false;
@@ -166,8 +166,7 @@ public class TvStageMenuActivity extends Activity {
         }
 
         if (message.contains("Phone disconnected.")
-                || message.contains("Phone connection ended.")
-                || message.contains("Phone disconnected or TLS")) {
+                || message.contains("Phone connection ended.")) {
 
             phonePaired = false;
             openingStage = false;
