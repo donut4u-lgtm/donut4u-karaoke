@@ -6,7 +6,6 @@ import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Handler;
 import android.os.Looper;
-import android.security.KeyPairGeneratorSpec;
 
 import org.json.JSONObject;
 
@@ -14,27 +13,16 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
-import java.math.BigInteger;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyPairGenerator;
-import java.security.KeyStore;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
-import javax.security.auth.x500.X500Principal;
 
 public final class TvKeyboardReceiver {
 
@@ -45,9 +33,6 @@ public final class TvKeyboardReceiver {
 
     private static final String SERVICE_NAME =
             "Donut4U-TV-Keyboard";
-
-    private static final String KEY_ALIAS =
-            "donut4u_tv_pairing_session";
 
     private static final int MAX_TEXT_LENGTH = 2000;
 
@@ -74,15 +59,6 @@ public final class TvKeyboardReceiver {
         ) {
         }
 
-        /**
-         * Receives a complete phone-controlled TV state snapshot.
-         *
-         * This callback runs on the Android main thread.
-         *
-         * The receiver passes a separate JSONObject copy so that
-         * changes made by the TV screen cannot modify the received
-         * network message.
-         */
         default void onStateReceived(
                 JSONObject state,
                 long sequence
@@ -110,7 +86,7 @@ public final class TvKeyboardReceiver {
 
     private ExecutorService networkExecutor;
 
-    private SSLServerSocket serverSocket;
+    private ServerSocket serverSocket;
 
     private NsdManager nsdManager;
 
@@ -227,7 +203,7 @@ public final class TvKeyboardReceiver {
 
         networkExecutor = Executors.newSingleThreadExecutor();
 
-        notifyStatus("Preparing encrypted phone connection...");
+        notifyStatus("Preparing phone connection...");
 
         try {
             networkExecutor.execute(() -> {
@@ -236,8 +212,8 @@ public final class TvKeyboardReceiver {
                         return;
                     }
 
-                    SSLServerSocket newServerSocket =
-                            createEncryptedServer();
+                    ServerSocket newServerSocket =
+                            createPlainServer();
 
                     if (!running) {
                         newServerSocket.close();
@@ -245,7 +221,7 @@ public final class TvKeyboardReceiver {
                     }
 
                     String newPairingCode =
-                            getCertificatePairingCode();
+                            generatePairingCode();
 
                     synchronized (TvKeyboardReceiver.this) {
                         if (!running) {
@@ -268,7 +244,7 @@ public final class TvKeyboardReceiver {
                     }
 
                     notifyStatus(
-                            "Encrypted connection ready. "
+                            "Phone connection ready. "
                                     + "Enter the code on your phone."
                     );
 
@@ -277,7 +253,7 @@ public final class TvKeyboardReceiver {
                 } catch (Exception e) {
                     if (running) {
                         notifyError(
-                                "Unable to start encrypted connection: "
+                                "Unable to start phone connection: "
                                         + safeMessage(e)
                         );
 
@@ -297,146 +273,32 @@ public final class TvKeyboardReceiver {
     }
 
     /**
-     * Creates a temporary TV certificate in Android Keystore.
-     *
-     * The private key remains in Android Keystore.
-     * It is not exported into a PKCS12 file.
+     * Creates an ordinary TCP server socket.
+     * No TLS, SSL, certificates, or encryption are used.
      */
-    private SSLServerSocket createEncryptedServer()
+    private ServerSocket createPlainServer()
             throws Exception {
 
-        KeyStore androidKeyStore =
-                KeyStore.getInstance("AndroidKeyStore");
+        ServerSocket socket = new ServerSocket();
 
-        androidKeyStore.load(null);
+        socket.setReuseAddress(true);
+        socket.bind(new java.net.InetSocketAddress(0));
 
-        if (androidKeyStore.containsAlias(KEY_ALIAS)) {
-            androidKeyStore.deleteEntry(KEY_ALIAS);
-        }
-
-        Calendar start = Calendar.getInstance();
-
-        Calendar end = Calendar.getInstance();
-        end.add(Calendar.YEAR, 10);
-
-        KeyPairGenerator generator =
-                KeyPairGenerator.getInstance(
-                        "RSA",
-                        "AndroidKeyStore"
-                );
-
-        KeyPairGeneratorSpec specification =
-                new KeyPairGeneratorSpec.Builder(appContext)
-                        .setAlias(KEY_ALIAS)
-                        .setSubject(
-                                new X500Principal("CN=Donut4U TV")
-                        )
-                        .setSerialNumber(BigInteger.ONE)
-                        .setStartDate(start.getTime())
-                        .setEndDate(end.getTime())
-                        .setKeySize(2048)
-                        .build();
-
-        generator.initialize(specification);
-        generator.generateKeyPair();
-
-        if (androidKeyStore.getKey(KEY_ALIAS, null) == null
-                || androidKeyStore.getCertificate(KEY_ALIAS) == null) {
-            throw new IllegalStateException(
-                    "TV pairing certificate could not be created."
-            );
-        }
-
-        /*
-         * Initialize the key manager directly with Android Keystore.
-         * Do not copy the private key into a temporary PKCS12 store.
-         */
-        KeyManagerFactory keyManagerFactory =
-                KeyManagerFactory.getInstance(
-                        KeyManagerFactory.getDefaultAlgorithm()
-                );
-
-        keyManagerFactory.init(androidKeyStore, null);
-
-        SSLContext sslContext =
-                SSLContext.getInstance("TLS");
-
-        sslContext.init(
-                keyManagerFactory.getKeyManagers(),
-                null,
-                secureRandom
-        );
-
-        SSLServerSocket sslServerSocket =
-                (SSLServerSocket) sslContext
-                        .getServerSocketFactory()
-                        .createServerSocket(0);
-
-        sslServerSocket.setReuseAddress(true);
-        sslServerSocket.setNeedClientAuth(false);
-
-        enableSupportedTlsProtocols(sslServerSocket);
-
-        return sslServerSocket;
-    }
-
-    private void enableSupportedTlsProtocols(
-            SSLServerSocket socket
-    ) {
-        String[] supported = socket.getSupportedProtocols();
-
-        ArrayList<String> enabled = new ArrayList<>();
-
-        for (String protocol : supported) {
-            if ("TLSv1.3".equals(protocol)
-                    || "TLSv1.2".equals(protocol)) {
-                enabled.add(protocol);
-            }
-        }
-
-        if (!enabled.isEmpty()) {
-            socket.setEnabledProtocols(
-                    enabled.toArray(new String[0])
-            );
-        }
+        return socket;
     }
 
     /**
-     * Pairing code calculation must match the phone TLS helper.
+     * Generates a random six-digit pairing code.
      */
-    private String getCertificatePairingCode()
-            throws Exception {
+    private String generatePairingCode() {
 
-        KeyStore keyStore =
-                KeyStore.getInstance("AndroidKeyStore");
-
-        keyStore.load(null);
-
-        java.security.cert.Certificate certificate =
-                keyStore.getCertificate(KEY_ALIAS);
-
-        if (certificate == null) {
-            throw new IllegalStateException(
-                    "TV certificate is missing."
-            );
-        }
-
-        byte[] digest =
-                MessageDigest.getInstance("SHA-256")
-                        .digest(
-                                certificate.getPublicKey().getEncoded()
-                        );
-
-        long number =
-                ((digest[0] & 0xffL) << 24)
-                        | ((digest[1] & 0xffL) << 16)
-                        | ((digest[2] & 0xffL) << 8)
-                        | (digest[3] & 0xffL);
+        int number =
+                secureRandom.nextInt(1000000);
 
         return String.format(
                 Locale.US,
                 "%06d",
-                number % 1000000L
+                number
         );
     }
 
@@ -583,10 +445,10 @@ public final class TvKeyboardReceiver {
 
     private void acceptConnections() {
         while (running) {
-            SSLSocket socket = null;
+            Socket socket = null;
 
             try {
-                SSLServerSocket currentServer;
+                ServerSocket currentServer;
 
                 synchronized (this) {
                     currentServer = serverSocket;
@@ -597,19 +459,18 @@ public final class TvKeyboardReceiver {
                     return;
                 }
 
-                socket = (SSLSocket) currentServer.accept();
-
-                enableSupportedTlsProtocols(socket);
+                socket = currentServer.accept();
 
                 socket.setSoTimeout(15000);
-                socket.startHandshake();
+                socket.setTcpNoDelay(true);
+                socket.setKeepAlive(true);
 
                 handlePhone(socket);
 
             } catch (Exception e) {
                 if (running) {
                     notifyStatus(
-                            "Phone disconnected or TLS verification failed. "
+                            "Phone disconnected. "
                                     + "Waiting for reconnection."
                     );
                 }
@@ -625,26 +486,7 @@ public final class TvKeyboardReceiver {
         }
     }
 
-    private void enableSupportedTlsProtocols(SSLSocket socket) {
-        String[] supported = socket.getSupportedProtocols();
-
-        ArrayList<String> enabled = new ArrayList<>();
-
-        for (String protocol : supported) {
-            if ("TLSv1.3".equals(protocol)
-                    || "TLSv1.2".equals(protocol)) {
-                enabled.add(protocol);
-            }
-        }
-
-        if (!enabled.isEmpty()) {
-            socket.setEnabledProtocols(
-                    enabled.toArray(new String[0])
-            );
-        }
-    }
-
-    private void handlePhone(SSLSocket socket) {
+    private void handlePhone(Socket socket) {
         try {
             BufferedReader reader =
                     new BufferedReader(
@@ -696,7 +538,7 @@ public final class TvKeyboardReceiver {
             pairingResponse.put(
                     "message",
                     codeValid
-                            ? "Encrypted connection established"
+                            ? "Connection established"
                             : "Invalid code"
             );
 
@@ -713,7 +555,7 @@ public final class TvKeyboardReceiver {
 
             socket.setSoTimeout(0);
 
-            notifyStatus("Encrypted phone controller connected.");
+            notifyStatus("Phone controller connected.");
 
             String line;
             long lastStateSequence = 0L;
@@ -961,24 +803,6 @@ public final class TvKeyboardReceiver {
         );
     }
 
-    /**
-     * Accepts a phone-controlled TV state snapshot.
-     *
-     * Message format:
-     *
-     * {
-     *   "type": "state",
-     *   "version": 1,
-     *   "sequence": 1,
-     *   "state": {
-     *     "mode": "paired",
-     *     "stage": 1,
-     *     "screen": "karaoke"
-     *   }
-     * }
-     *
-     * Sequence numbers must increase during one connection.
-     */
     private long handleStateRequest(
             JSONObject request,
             BufferedWriter writer,
