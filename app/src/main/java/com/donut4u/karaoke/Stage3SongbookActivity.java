@@ -25,6 +25,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -46,6 +47,8 @@ public class Stage3SongbookActivity extends Activity {
     private static final int REQUEST_IMPORT_SONGLIST = 3104;
     private static final int REQUEST_IMPORT_SONGHUB_FOLDER = 3105;
 
+    private static final int TV_STAGE_NUMBER = 3;
+
     private final ArrayList<Song> songs = new ArrayList<>();
 
     private LinearLayout songList;
@@ -54,11 +57,13 @@ public class Stage3SongbookActivity extends Activity {
     private SharedPreferences preferences;
     private int nextNumber = 10000;
 
-    // Phone-to-TV keyboard connection.
+    // TV session connection.
     private boolean tvMode = false;
     private boolean activityDestroyed = false;
 
-    private TvKeyboardReceiver tvKeyboardReceiver;
+    private TvSessionController tvSessionController;
+    private TvSessionController.TvCommandHandler tvCommandHandler;
+
     private TextView tvKeyboardCodeText;
     private TextView tvKeyboardStatusText;
 
@@ -285,7 +290,8 @@ public class Stage3SongbookActivity extends Activity {
         panel.addView(tvKeyboardCodeText);
 
         tvKeyboardStatusText = new TextView(this);
-        tvKeyboardStatusText.setText("Starting phone keyboard connection...");
+        tvKeyboardStatusText.setText(
+                "Phone connection is managed by the TV session.");
         tvKeyboardStatusText.setTextColor(Color.LTGRAY);
         tvKeyboardStatusText.setTextSize(12);
         tvKeyboardStatusText.setGravity(Gravity.CENTER);
@@ -324,34 +330,18 @@ public class Stage3SongbookActivity extends Activity {
         return states;
     }
 
-    private void startTvKeyboardReceiver() {
-        if (!tvMode || activityDestroyed
-                || tvKeyboardReceiver != null
-                || tvKeyboardCodeText == null
-                || tvKeyboardStatusText == null) {
-            return;
-        }
+    // ------------------------------------------------
+    // SHARED PHONE-TV SESSION
+    // ------------------------------------------------
 
-        tvKeyboardStatusText.setText(
-                "Starting phone keyboard connection...");
-
-        tvKeyboardReceiver = new TvKeyboardReceiver(
-                this,
-                new TvKeyboardReceiver.Listener() {
+    private void createTvCommandHandler() {
+        tvCommandHandler =
+                new TvSessionController.TvCommandHandler() {
 
                     @Override
-                    public void onPairingCodeReady(String code) {
-                        if (activityDestroyed
-                                || tvKeyboardCodeText == null) {
-                            return;
-                        }
-
-                        tvKeyboardCodeText.setText(code);
-                    }
-
-                    @Override
-                    public void onSearchRequested(String songTitle) {
-                        if (activityDestroyed || searchInput == null) {
+                    public void onPhoneSearchRequested(String songTitle) {
+                        if (activityDestroyed || !tvMode
+                                || searchInput == null) {
                             return;
                         }
 
@@ -364,7 +354,7 @@ public class Stage3SongbookActivity extends Activity {
                     }
 
                     @Override
-                    public void onTextInput(
+                    public void onPhoneTextInput(
                             String target,
                             String text,
                             String action
@@ -377,43 +367,275 @@ public class Stage3SongbookActivity extends Activity {
                     }
 
                     @Override
-                    public void onStatusChanged(String message) {
-                        if (activityDestroyed
-                                || tvKeyboardStatusText == null) {
-                            return;
+                    public JSONObject onPhoneRemoteRequest(
+                            JSONObject request
+                    ) {
+                        if (activityDestroyed || !tvMode
+                                || request == null) {
+                            return null;
                         }
 
-                        tvKeyboardStatusText.setText(message);
-                    }
+                        String type = request.optString(
+                                "type", "").trim().toLowerCase(Locale.ROOT);
 
-                    @Override
-                    public void onError(String message) {
-                        if (activityDestroyed
-                                || tvKeyboardStatusText == null) {
-                            return;
+                        if ("get_results".equals(type)) {
+                            return createPhoneSearchResults();
                         }
 
-                        tvKeyboardStatusText.setText(
-                                "Connection error: " + message);
+                        if ("select_song".equals(type)) {
+                            return handlePhoneSongSelection(request);
+                        }
 
-                        android.util.Log.e(
-                                "Stage3Songbook",
-                                "Phone keyboard receiver: " + message);
+                        return null;
                     }
-                });
+                };
+    }
+
+    private void registerTvCommandHandler() {
+        if (!tvMode || activityDestroyed) {
+            return;
+        }
+
+        if (tvSessionController == null) {
+            tvSessionController =
+                    TvSessionController.getInstance(this);
+        }
+
+        if (tvCommandHandler == null) {
+            createTvCommandHandler();
+        }
+
+        tvSessionController.registerStageHandler(tvCommandHandler);
+        tvSessionController.setActiveStage(TV_STAGE_NUMBER);
+
+        updateTvPairingCode();
+    }
+
+    private void unregisterTvCommandHandler() {
+        if (tvSessionController != null
+                && tvCommandHandler != null) {
+
+            tvSessionController.unregisterStageHandler(
+                    tvCommandHandler);
+        }
+    }
+
+    private void updateTvPairingCode() {
+        if (!tvMode || tvKeyboardCodeText == null) {
+            return;
+        }
+
+        if (tvSessionController == null) {
+            tvSessionController =
+                    TvSessionController.getInstance(this);
+        }
+
+        String code = tvSessionController.getPairingCode();
+
+        if (code != null && !code.trim().isEmpty()) {
+            tvKeyboardCodeText.setText(code);
+        } else {
+            tvKeyboardCodeText.setText("------");
+        }
+    }
+
+    /**
+     * Builds the current filtered song results for the phone.
+     *
+     * The phone receives the same filtered entries currently
+     * displayed by the TV songbook.
+     */
+    private JSONObject createPhoneSearchResults() {
+        JSONObject response = new JSONObject();
+        JSONArray results = new JSONArray();
 
         try {
-            tvKeyboardReceiver.start();
+            String query = searchInput == null
+                    ? ""
+                    : searchInput.getText().toString();
+
+            ArrayList<Song> matches = getFilteredSongs(query);
+
+            int maximumResults = Math.min(matches.size(), 100);
+
+            for (int i = 0; i < maximumResults; i++) {
+                Song song = matches.get(i);
+
+                JSONObject item = new JSONObject();
+                item.put("number", song.number);
+                item.put("title", song.title);
+                item.put("type", song.type);
+                item.put("uri", song.uri);
+
+                JSONObject songObject = new JSONObject();
+                songObject.put("number", song.number);
+                songObject.put("title", song.title);
+                songObject.put("uri", song.uri);
+                songObject.put("type", song.type);
+
+                item.put("song", songObject);
+
+                results.put(item);
+            }
+
+            response.put("songs", results);
+            response.put("count", matches.size());
+            response.put("returned", maximumResults);
+            response.put("limit", 100);
+
+        } catch (JSONException e) {
+            android.util.Log.e(
+                    "Stage3Songbook",
+                    "Could not prepare phone search results.",
+                    e);
+        }
+
+        return response;
+    }
+
+    /**
+     * Resolves a phone selection against the actual saved
+     * songbook. The phone-provided list index is not trusted.
+     *
+     * The saved URI is the primary identifier. Number and
+     * title are checked as additional identity information.
+     */
+    private JSONObject handlePhoneSongSelection(
+            JSONObject request
+    ) {
+        String requestedNumber =
+                request.optString("number", "").trim();
+
+        String requestedTitle =
+                request.optString("title", "").trim();
+
+        JSONObject suppliedSong =
+                request.optJSONObject("song");
+
+        String requestedUri = "";
+
+        if (suppliedSong != null) {
+            requestedUri = suppliedSong.optString(
+                    "uri", "").trim();
+
+            if (requestedNumber.isEmpty()) {
+                requestedNumber = suppliedSong.optString(
+                        "number", "").trim();
+            }
+
+            if (requestedTitle.isEmpty()) {
+                requestedTitle = suppliedSong.optString(
+                        "title", "").trim();
+            }
+        }
+
+        Song selectedSong = null;
+
+        if (!requestedUri.isEmpty()) {
+            for (Song song : songs) {
+                if (requestedUri.equals(song.uri)) {
+                    selectedSong = song;
+                    break;
+                }
+            }
+        }
+
+        /*
+         * Fallback for compatible phone clients that send
+         * number and title but do not send a URI.
+         *
+         * The fallback must identify exactly one song.
+         */
+        if (selectedSong == null && requestedUri.isEmpty()
+                && !requestedNumber.isEmpty()
+                && !requestedTitle.isEmpty()) {
+
+            for (Song song : songs) {
+                if (requestedNumber.equals(song.number)
+                        && requestedTitle.equals(song.title)) {
+
+                    if (selectedSong != null) {
+                        return createSelectionResponse(
+                                false,
+                                "The song selection is ambiguous.");
+                    }
+
+                    selectedSong = song;
+                }
+            }
+        }
+
+        if (selectedSong == null) {
+            return createSelectionResponse(
+                    false,
+                    "The selected song is no longer in the TV songbook.");
+        }
+
+        if (!isPlayableSong(selectedSong)) {
+            return createSelectionResponse(
+                    false,
+                    "This entry has no playable media. "
+                            + "Import its matching media file first.");
+        }
+
+        try {
+            playInDonutStage(selectedSong);
+
+            return createSelectionResponse(
+                    true,
+                    "Song selected. Opening Stage 3 player on TV.");
+
         } catch (Exception e) {
             android.util.Log.e(
                     "Stage3Songbook",
-                    "Could not start phone keyboard receiver.", e);
+                    "Phone song selection could not launch playback.",
+                    e);
 
-            tvKeyboardStatusText.setText(
-                    "Could not start phone keyboard connection.");
-            tvKeyboardReceiver = null;
+            return createSelectionResponse(
+                    false,
+                    "Could not open the selected song.");
         }
     }
+
+    private JSONObject createSelectionResponse(
+            boolean selected,
+            String message
+    ) {
+        JSONObject response = new JSONObject();
+
+        try {
+            response.put("selected", selected);
+            response.put("message", message);
+        } catch (JSONException ignored) {
+        }
+
+        return response;
+    }
+
+    private boolean isPlayableSong(Song song) {
+        if (song == null
+                || song.uri == null
+                || song.uri.trim().isEmpty()) {
+            return false;
+        }
+
+        if ("CATALOG".equalsIgnoreCase(song.type)
+                || "SOUNDFONT".equalsIgnoreCase(song.type)
+                || "LYRICS".equalsIgnoreCase(song.type)) {
+            return false;
+        }
+
+        String lowerTitle = song.title == null
+                ? ""
+                : song.title.toLowerCase(Locale.ROOT);
+
+        return !lowerTitle.endsWith(".sf2")
+                && !lowerTitle.endsWith(".lrc");
+    }
+
+    // ------------------------------------------------
+    // PHONE TEXT INPUT
+    // ------------------------------------------------
 
     /**
      * Receives generic phone keyboard actions for the Stage 3
@@ -519,21 +741,9 @@ public class Stage3SongbookActivity extends Activity {
         }
     }
 
-    private void stopTvKeyboardReceiver() {
-        if (tvKeyboardReceiver == null) {
-            return;
-        }
-
-        try {
-            tvKeyboardReceiver.stop();
-        } catch (Exception e) {
-            android.util.Log.w(
-                    "Stage3Songbook",
-                    "Error stopping phone keyboard receiver.", e);
-        }
-
-        tvKeyboardReceiver = null;
-    }
+    // ------------------------------------------------
+    // BUTTONS AND LAYOUT
+    // ------------------------------------------------
 
     private Button makeButton(String text) {
         Button button = new Button(this);
@@ -560,6 +770,10 @@ public class Stage3SongbookActivity extends Activity {
         params.bottomMargin = dp(8);
         return params;
     }
+
+    // ------------------------------------------------
+    // SONGHUB FOLDER IMPORT
+    // ------------------------------------------------
 
     private void chooseSongHubFolder() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -866,6 +1080,10 @@ public class Stage3SongbookActivity extends Activity {
         return imported;
     }
 
+    // ------------------------------------------------
+    // FILE PICKERS AND SPREADSHEET IMPORT
+    // ------------------------------------------------
+
     private void chooseSongs() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.setType("*/*");
@@ -1155,6 +1373,10 @@ public class Stage3SongbookActivity extends Activity {
         return false;
     }
 
+    // ------------------------------------------------
+    // SONGBOOK STORAGE
+    // ------------------------------------------------
+
     private void loadSongs() {
         songs.clear();
 
@@ -1212,6 +1434,29 @@ public class Stage3SongbookActivity extends Activity {
                     "Could not save the songbook.",
                     Toast.LENGTH_LONG).show();
         }
+    }
+
+    // ------------------------------------------------
+    // SONG LIST DISPLAY
+    // ------------------------------------------------
+
+    private ArrayList<Song> getFilteredSongs(String query) {
+        ArrayList<Song> filtered = new ArrayList<>();
+
+        String search = query == null
+                ? "" : query.trim().toLowerCase(Locale.ROOT);
+
+        for (Song song : songs) {
+            String searchable = (
+                    song.number + " " + song.title + " " + song.type
+            ).toLowerCase(Locale.ROOT);
+
+            if (search.isEmpty() || searchable.contains(search)) {
+                filtered.add(song);
+            }
+        }
+
+        return filtered;
     }
 
     private void renderSongs(String query) {
@@ -1469,6 +1714,10 @@ public class Stage3SongbookActivity extends Activity {
                 .show();
     }
 
+    // ------------------------------------------------
+    // STAGE 3 PLAYBACK LAUNCH
+    // ------------------------------------------------
+
     private void playInDonutStage(Song song) {
         if (song == null || song.uri == null
                 || song.uri.trim().isEmpty()) {
@@ -1495,8 +1744,15 @@ public class Stage3SongbookActivity extends Activity {
             Toast.makeText(this,
                     "Could not open Donut4U Stage 3.",
                     Toast.LENGTH_LONG).show();
+
+            throw new IllegalStateException(
+                    "Could not launch Stage 3 player.", e);
         }
     }
+
+    // ------------------------------------------------
+    // ACTIVITY LIFECYCLE
+    // ------------------------------------------------
 
     @Override
     protected void onResume() {
@@ -1513,7 +1769,7 @@ public class Stage3SongbookActivity extends Activity {
         }
 
         if (tvMode) {
-            startTvKeyboardReceiver();
+            registerTvCommandHandler();
 
             if (searchInput != null) {
                 searchInput.requestFocus();
@@ -1523,14 +1779,14 @@ public class Stage3SongbookActivity extends Activity {
 
     @Override
     protected void onPause() {
-        stopTvKeyboardReceiver();
+        unregisterTvCommandHandler();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
-        stopTvKeyboardReceiver();
+        unregisterTvCommandHandler();
         super.onDestroy();
     }
 }
