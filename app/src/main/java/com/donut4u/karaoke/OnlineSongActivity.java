@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -80,6 +79,9 @@ public class OnlineSongActivity extends Activity {
     private static final String EXTRA_TV_STAGE1 =
             "com.donut4u.karaoke.EXTRA_TV_STAGE1";
 
+    private static final String EXTRA_TV_PHONE_CONTROLLED =
+            "com.donut4u.karaoke.EXTRA_TV_PHONE_CONTROLLED";
+
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
@@ -129,11 +131,81 @@ public class OnlineSongActivity extends Activity {
     private TextView status;
     private LinearLayout resultsContainer;
 
-    private TvKeyboardReceiver tvKeyboardReceiver;
     private TextView tvPairingCodeText;
     private TextView tvKeyboardStatusText;
 
     private boolean tvStage1Mode = false;
+    private boolean tvPhoneControlled = false;
+
+    private TvSessionController tvSessionController;
+
+    private final TvSessionController.TvCommandHandler tvCommandHandler =
+            new TvSessionController.TvCommandHandler() {
+
+                @Override
+                public void onPhoneSearchRequested(String songTitle) {
+                    runOnUiThread(() -> {
+                        if (closing
+                                || !tvStage1Mode
+                                || !tvPhoneControlled
+                                || searchBox == null) {
+                            return;
+                        }
+
+                        String query = songTitle == null
+                                ? "" : songTitle.trim();
+
+                        if (query.isEmpty()) {
+                            return;
+                        }
+
+                        searchBox.setText(query);
+                        searchBox.setSelection(searchBox.length());
+
+                        updateTvKeyboardStatus("Phone search received.");
+
+                        searchVideos();
+                    });
+                }
+
+                @Override
+                public void onPhoneTextInput(
+                        String target,
+                        String text,
+                        String action
+                ) {
+                    runOnUiThread(() -> applyPhoneTextInput(
+                            target,
+                            text,
+                            action
+                    ));
+                }
+
+                @Override
+                public void onPhoneStateReceived(
+                        JSONObject state,
+                        long sequence
+                ) {
+                    runOnUiThread(() -> {
+                        if (closing || !tvStage1Mode || state == null) {
+                            return;
+                        }
+
+                        int requestedStage =
+                                state.optInt("stage", 0);
+
+                        String mode =
+                                state.optString("mode", "");
+
+                        if (requestedStage == 1
+                                && "paired".equalsIgnoreCase(mode)) {
+                            updateTvKeyboardStatus(
+                                    "Phone controller is connected."
+                            );
+                        }
+                    });
+                }
+            };
 
     private View searchScreen;
     private FrameLayout playbackScreen;
@@ -193,6 +265,10 @@ public class OnlineSongActivity extends Activity {
         return tvStage1Mode;
     }
 
+    private boolean isTvPhoneControlled() {
+        return tvStage1Mode && tvPhoneControlled;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -200,27 +276,35 @@ public class OnlineSongActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        auth = FirebaseAuth.getInstance();
-
-        FirebaseUser user = auth.getCurrentUser();
-
-        if (user == null || !user.isEmailVerified()) {
-            openAuthentication();
-            return;
-        }
-
-        AppUpdateChecker.checkForUpdates(this);
-
+        /*
+         * TV Stage 1 is handled before Firebase authentication.
+         *
+         * The TV is a display/playback device in phone-controlled
+         * mode. TV-only mode uses the TV's own keyboard.
+         */
         if (isAndroidTv()
                 && getIntent() != null
                 && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
 
             tvStage1Mode = true;
+
+            tvPhoneControlled = getIntent().getBooleanExtra(
+                    EXTRA_TV_PHONE_CONTROLLED,
+                    false
+            );
+
             sessionValid = true;
+
+            AppUpdateChecker.checkForUpdates(this);
+
             buildSearchScreen();
             return;
         }
 
+        /*
+         * Other Android TV launches continue to the TV songbook.
+         * They do not require a separate TV login.
+         */
         if (isAndroidTv()) {
             Intent tvIntent = new Intent(
                     OnlineSongActivity.this,
@@ -233,6 +317,21 @@ public class OnlineSongActivity extends Activity {
             finish();
             return;
         }
+
+        /*
+         * Ordinary phone operation retains the existing Firebase
+         * authentication and active-session verification.
+         */
+        auth = FirebaseAuth.getInstance();
+
+        FirebaseUser user = auth.getCurrentUser();
+
+        if (user == null || !user.isEmailVerified()) {
+            openAuthentication();
+            return;
+        }
+
+        AppUpdateChecker.checkForUpdates(this);
 
         installationId = getInstallationId();
 
@@ -675,9 +774,9 @@ public class OnlineSongActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(20));
         root.addView(subtitle, fullWidthWrap());
 
-        if (isTvStage1()) {
+        if (isTvPhoneControlled()) {
             addTvPhoneKeyboardPanel(root);
-        } else {
+        } else if (!isTvStage1()) {
             phoneKeyboardButton =
                     makeButton("USE PHONE AS KEYBOARD");
 
@@ -707,15 +806,24 @@ public class OnlineSongActivity extends Activity {
         searchBox.setFocusable(true);
         searchBox.setFocusableInTouchMode(true);
 
-        searchBox.setShowSoftInputOnFocus(!isTvStage1());
+        /*
+         * TV ONLY: allow the Android TV on-screen keyboard.
+         * CONNECT PHONE: suppress the TV keyboard because the
+         * phone sends text through TvSessionController.
+         */
+        searchBox.setShowSoftInputOnFocus(!isTvPhoneControlled());
 
         styleEdit(searchBox);
 
         if (isTvStage1()) {
             searchBox.setBackground(createTvSearchBackground());
+
             searchBox.setFocusable(true);
             searchBox.setFocusableInTouchMode(true);
-            searchBox.setShowSoftInputOnFocus(false);
+
+            searchBox.setShowSoftInputOnFocus(
+                    !isTvPhoneControlled()
+            );
 
             searchBox.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() == KeyEvent.ACTION_UP
@@ -806,9 +914,14 @@ public class OnlineSongActivity extends Activity {
                 return;
             }
 
-            startActivity(new Intent(
+            Intent intent = new Intent(
                     OnlineSongActivity.this,
-                    KaraokeStudioActivity.class));
+                    KaraokeStudioActivity.class
+            );
+
+            addTvStageExtras(intent, 2);
+
+            startActivity(intent);
         });
 
         Button stage3Button = makeButton("🎤 STAGE 3 — SONGBOOK");
@@ -823,20 +936,27 @@ public class OnlineSongActivity extends Activity {
                 return;
             }
 
-            startActivity(new Intent(
+            Intent intent = new Intent(
                     OnlineSongActivity.this,
-                    Stage3SongbookActivity.class));
+                    Stage3SongbookActivity.class
+            );
+
+            addTvStageExtras(intent, 3);
+
+            startActivity(intent);
         });
 
-        Button switchAccountButton =
-                makeButton("LOG OUT / SWITCH ACCOUNT");
+        if (!isTvStage1()) {
+            Button switchAccountButton =
+                    makeButton("LOG OUT / SWITCH ACCOUNT");
 
-        LinearLayout.LayoutParams switchParams = fullWidth(dp(50));
-        switchParams.topMargin = dp(10);
-        root.addView(switchAccountButton, switchParams);
+            LinearLayout.LayoutParams switchParams = fullWidth(dp(50));
+            switchParams.topMargin = dp(10);
+            root.addView(switchAccountButton, switchParams);
 
-        switchAccountButton.setOnClickListener(
-                v -> signOutAndSwitchAccount());
+            switchAccountButton.setOnClickListener(
+                    v -> signOutAndSwitchAccount());
+        }
 
         Button feedbackButton =
                 makeButton("💬 QUESTIONS & SUGGESTIONS");
@@ -888,9 +1008,26 @@ public class OnlineSongActivity extends Activity {
         });
 
         if (isTvStage1()) {
-            searchBox.clearFocus();
+            if (isTvPhoneControlled()) {
+                searchBox.clearFocus();
+            } else {
+                searchBox.requestFocus();
+            }
         } else {
             searchBox.requestFocus();
+        }
+    }
+
+    private void addTvStageExtras(Intent intent, int stage) {
+        if (intent == null || !tvStage1Mode) {
+            return;
+        }
+
+        intent.putExtra(EXTRA_TV_MODE, true);
+        intent.putExtra(EXTRA_TV_PHONE_CONTROLLED, tvPhoneControlled);
+
+        if (stage == 1) {
+            intent.putExtra(EXTRA_TV_STAGE1, true);
         }
     }
 
@@ -938,11 +1075,9 @@ public class OnlineSongActivity extends Activity {
 
         TextView instruction = new TextView(this);
         instruction.setText(
-                "USE YOUR PHONE KEYBOARD\n"
-                        + "Open Donut4U on your phone, enter Stage 1, "
-                        + "then tap USE PHONE AS KEYBOARD.\n"
-                        + "Connect both devices to the same Wi-Fi "
-                        + "or phone hotspot and enter this code."
+                "PHONE CONTROL ACTIVE\n"
+                        + "Use your phone to search, type, and control "
+                        + "Stage 1. The TV keyboard is disabled."
         );
         instruction.setTextColor(WHITE);
         instruction.setTextSize(14);
@@ -950,173 +1085,179 @@ public class OnlineSongActivity extends Activity {
         panel.addView(instruction, fullWidthWrap());
 
         tvPairingCodeText = new TextView(this);
-        tvPairingCodeText.setText("------");
+        tvPairingCodeText.setText("PHONE CONTROLLER");
         tvPairingCodeText.setTextColor(GREEN);
-        tvPairingCodeText.setTextSize(38);
+        tvPairingCodeText.setTextSize(23);
         tvPairingCodeText.setTypeface(null, Typeface.BOLD);
         tvPairingCodeText.setGravity(Gravity.CENTER);
-        tvPairingCodeText.setLetterSpacing(0.18f);
         tvPairingCodeText.setPadding(0, dp(12), 0, dp(8));
         panel.addView(tvPairingCodeText, fullWidthWrap());
 
         tvKeyboardStatusText = new TextView(this);
-        tvKeyboardStatusText.setText("Starting phone keyboard connection...");
+        tvKeyboardStatusText.setText(
+                "Waiting for phone commands..."
+        );
         tvKeyboardStatusText.setTextColor(MUTED);
         tvKeyboardStatusText.setTextSize(12);
         tvKeyboardStatusText.setGravity(Gravity.CENTER);
         panel.addView(tvKeyboardStatusText, fullWidthWrap());
     }
 
-    private void startTvPhoneKeyboardReceiver() {
-        if (!isTvStage1() || closing || tvKeyboardReceiver != null) {
+    private void updateTvKeyboardStatus(String message) {
+        if (!isTvPhoneControlled() || closing) {
             return;
         }
 
-        tvKeyboardReceiver = new TvKeyboardReceiver(
-                getApplicationContext(),
-                new TvKeyboardReceiver.Listener() {
-                    @Override
-                    public void onPairingCodeReady(String code) {
-                        if (closing || tvPairingCodeText == null) {
-                            return;
-                        }
+        runOnUiThread(() -> {
+            if (tvKeyboardStatusText != null && !closing) {
+                tvKeyboardStatusText.setText(
+                        message == null ? "" : message
+                );
+            }
+        });
+    }
 
-                        tvPairingCodeText.setText(code);
-                    }
+    private void applyPhoneTextInput(
+            String target,
+            String text,
+            String action
+    ) {
+        if (closing
+                || !isTvPhoneControlled()
+                || searchBox == null
+                || target == null
+                || action == null) {
+            return;
+        }
 
-                    @Override
-                    public void onSearchRequested(String songTitle) {
-                        if (closing || searchBox == null) {
-                            return;
-                        }
+        String requestedTarget = target.trim();
 
-                        searchBox.setText(songTitle);
-                        searchBox.setSelection(searchBox.length());
-                        searchVideos();
-                    }
+        if (!requestedTarget.isEmpty()
+                && !"active".equalsIgnoreCase(requestedTarget)
+                && !"search".equalsIgnoreCase(requestedTarget)) {
+            return;
+        }
 
-                    @Override
-                    public void onTextInput(
-                            String target,
-                            String text,
-                            String action) {
+        String requestedAction =
+                action.trim().toLowerCase(Locale.US);
 
-                        if (closing
-                                || !isTvStage1()
-                                || searchBox == null
-                                || target == null
-                                || action == null) {
-                            return;
-                        }
+        String input = text == null ? "" : text;
 
-                        String requestedTarget = target.trim();
+        Editable editable = searchBox.getText();
 
-                        if (!requestedTarget.isEmpty()
-                                && !"active".equalsIgnoreCase(requestedTarget)
-                                && !"search".equalsIgnoreCase(requestedTarget)) {
-                            return;
-                        }
+        int length = editable.length();
 
-                        String requestedAction =
-                                action.trim().toLowerCase(Locale.US);
+        int selectionStart = searchBox.getSelectionStart();
+        int selectionEnd = searchBox.getSelectionEnd();
 
-                        String input = text == null ? "" : text;
+        if (selectionStart < 0 || selectionEnd < 0) {
+            selectionStart = length;
+            selectionEnd = length;
+        }
 
-                        Editable editable = searchBox.getText();
+        selectionStart = Math.max(
+                0, Math.min(selectionStart, length));
 
-                        int length = editable.length();
+        selectionEnd = Math.max(
+                0, Math.min(selectionEnd, length));
 
-                        int selectionStart = searchBox.getSelectionStart();
-                        int selectionEnd = searchBox.getSelectionEnd();
+        int start = Math.min(selectionStart, selectionEnd);
+        int end = Math.max(selectionStart, selectionEnd);
 
-                        if (selectionStart < 0 || selectionEnd < 0) {
-                            selectionStart = length;
-                            selectionEnd = length;
-                        }
+        switch (requestedAction) {
 
-                        selectionStart = Math.max(
-                                0, Math.min(selectionStart, length));
+            case "replace":
+                searchBox.setText(input);
+                searchBox.setSelection(searchBox.length());
+                updateTvKeyboardStatus("Text received from phone.");
+                break;
 
-                        selectionEnd = Math.max(
-                                0, Math.min(selectionEnd, length));
+            case "append":
+                editable.replace(start, end, input);
+                searchBox.setSelection(
+                        Math.min(start + input.length(),
+                                searchBox.length()));
+                updateTvKeyboardStatus("Text received from phone.");
+                break;
 
-                        int start = Math.min(selectionStart, selectionEnd);
-                        int end = Math.max(selectionStart, selectionEnd);
+            case "backspace":
+                if (start != end) {
+                    editable.delete(start, end);
+                    searchBox.setSelection(start);
 
-                        switch (requestedAction) {
+                } else if (start > 0) {
+                    int deleteStart =
+                            Character.offsetByCodePoints(
+                                    editable,
+                                    start,
+                                    -1);
 
-                            case "replace":
-                                searchBox.setText(input);
-                                searchBox.setSelection(searchBox.length());
-                                break;
-
-                            case "append":
-                                editable.replace(start, end, input);
-                                searchBox.setSelection(
-                                        Math.min(start + input.length(),
-                                                searchBox.length()));
-                                break;
-
-                            case "backspace":
-                                if (start != end) {
-                                    editable.delete(start, end);
-                                    searchBox.setSelection(start);
-
-                                } else if (start > 0) {
-                                    int deleteStart =
-                                            Character.offsetByCodePoints(
-                                                    editable,
-                                                    start,
-                                                    -1);
-
-                                    editable.delete(deleteStart, start);
-                                    searchBox.setSelection(deleteStart);
-                                }
-                                break;
-
-                            case "clear":
-                                searchBox.setText("");
-                                searchBox.setSelection(0);
-                                break;
-
-                            case "submit":
-                                searchVideos();
-                                break;
-
-                            default:
-                                break;
-                        }
-                    }
-
-                    @Override
-                    public void onStatusChanged(String message) {
-                        if (closing || tvKeyboardStatusText == null) {
-                            return;
-                        }
-
-                        tvKeyboardStatusText.setText(message);
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        if (closing) {
-                            return;
-                        }
-
-                        if (tvKeyboardStatusText != null) {
-                            tvKeyboardStatusText.setText(message);
-                        }
-
-                        toast(message);
-                    }
+                    editable.delete(deleteStart, start);
+                    searchBox.setSelection(deleteStart);
                 }
+
+                break;
+
+            case "clear":
+                searchBox.setText("");
+                searchBox.setSelection(0);
+                updateTvKeyboardStatus("Search field cleared.");
+                break;
+
+            case "submit":
+                updateTvKeyboardStatus("Phone submitted the search.");
+                searchVideos();
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    private void registerTvStageHandler() {
+        if (!isTvPhoneControlled() || closing) {
+            return;
+        }
+
+        if (tvSessionController == null) {
+            tvSessionController =
+                    TvSessionController.getInstance(
+                            getApplicationContext()
+                    );
+        }
+
+        tvSessionController.setActiveStage(1);
+
+        tvSessionController.registerStageHandler(
+                tvCommandHandler
         );
 
-        tvKeyboardReceiver.start();
+        String pairingCode =
+                tvSessionController.getPairingCode();
+
+        if (tvPairingCodeText != null
+                && pairingCode != null
+                && !pairingCode.trim().isEmpty()) {
+            tvPairingCodeText.setText("PHONE CONTROLLER");
+        }
+
+        updateTvKeyboardStatus(
+                tvSessionController.isSessionStarted()
+                        ? "Shared TV session is active. Waiting for phone commands."
+                        : "Waiting for the shared TV session..."
+        );
+    }
+
+    private void unregisterTvStageHandler() {
+        if (tvSessionController != null) {
+            tvSessionController.unregisterStageHandler(
+                    tvCommandHandler
+            );
+        }
     }
 
     private void showSearchKeyboard() {
-        if (searchBox == null || isTvStage1()) {
+        if (searchBox == null || isTvPhoneControlled()) {
             return;
         }
 
@@ -1360,6 +1501,13 @@ public class OnlineSongActivity extends Activity {
 
         if (offlineAccess) {
             toast("YouTube search requires an internet connection. Your downloaded songs may still be available in Stage 3.");
+            return;
+        }
+
+        if (searchBox == null
+                || searchButton == null
+                || resultsContainer == null
+                || status == null) {
             return;
         }
 
@@ -2243,10 +2391,11 @@ public class OnlineSongActivity extends Activity {
             adView.pause();
         }
 
-        if (tvKeyboardReceiver != null) {
-            tvKeyboardReceiver.stop();
-            tvKeyboardReceiver = null;
-        }
+        /*
+         * Stage 1 releases only its own command handler.
+         * The application-wide TV session remains active.
+         */
+        unregisterTvStageHandler();
 
         if (microphoneMonitor != null
                 && microphoneMonitor.isRunning()) {
@@ -2265,15 +2414,33 @@ public class OnlineSongActivity extends Activity {
             adView.resume();
         }
 
-        if (isTvStage1()
+        if (isTvPhoneControlled()
                 && searchScreen != null
                 && searchBox != null
                 && !playbackVisible
                 && !donationScreenVisible
                 && !closing) {
 
-            startTvPhoneKeyboardReceiver();
+            registerTvStageHandler();
 
+            searchBox.post(() -> {
+                if (searchBox != null && !closing) {
+                    searchBox.clearFocus();
+                }
+            });
+
+        } else if (isTvStage1()
+                && !isTvPhoneControlled()
+                && searchScreen != null
+                && searchBox != null
+                && !playbackVisible
+                && !donationScreenVisible
+                && !closing) {
+
+            /*
+             * TV ONLY: keep the search field ready for the
+             * TV remote and allow the TV's own keyboard.
+             */
             searchBox.post(() -> {
                 if (searchBox != null && !closing) {
                     searchBox.requestFocus();
@@ -2303,7 +2470,7 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        if (searchBox != null) {
+        if (searchBox != null && !isTvPhoneControlled()) {
             Object service = getSystemService(
                     Context.INPUT_METHOD_SERVICE);
 
@@ -2323,9 +2490,8 @@ public class OnlineSongActivity extends Activity {
             }
         }
 
-        if (isAndroidTv()
-                && getIntent() != null
-                && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
+        if (isTvStage1()) {
+            unregisterTvStageHandler();
             finish();
             return;
         }
@@ -2340,10 +2506,7 @@ public class OnlineSongActivity extends Activity {
 
         cancelPendingSessionMismatch();
 
-        if (tvKeyboardReceiver != null) {
-            tvKeyboardReceiver.stop();
-            tvKeyboardReceiver = null;
-        }
+        unregisterTvStageHandler();
 
         stopMicrophoneMonitoring(false);
 
