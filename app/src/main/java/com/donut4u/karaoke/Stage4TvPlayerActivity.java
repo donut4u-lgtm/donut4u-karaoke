@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -49,12 +50,14 @@ public class Stage4TvPlayerActivity extends Activity {
 
     private TextureView videoTexture;
     private ScrollView lyricsScroll;
+
     private TextView titleLabel;
     private TextView statusLabel;
     private TextView lyricsLabel;
     private TextView timeLabel;
 
     private Button playButton;
+    private Button pauseButton;
     private Button stopButton;
     private Button backButton;
 
@@ -92,6 +95,7 @@ public class Stage4TvPlayerActivity extends Activity {
 
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
+
         getWindow().addFlags(
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         );
@@ -137,136 +141,249 @@ public class Stage4TvPlayerActivity extends Activity {
         );
     }
 
+    /*
+     * Main screen arrangement:
+     *
+     * SONG TITLE
+     * STATUS
+     * VIDEO PREVIEW (video files only)
+     * LARGE LYRICS AREA
+     * SONG TIME
+     * PLAY | PAUSE | STOP
+     * BACK
+     * REMOTE HELP
+     */
     private void buildScreen() {
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BACKGROUND);
-        root.setPadding(dp(28), dp(12), dp(28), dp(12));
+
+        root.setPadding(
+                dp(28),
+                dp(8),
+                dp(28),
+                dp(8)
+        );
 
         titleLabel = new TextView(this);
         titleLabel.setText(songTitle);
         titleLabel.setTextColor(GREEN);
-        titleLabel.setTextSize(25);
-        titleLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        titleLabel.setTextSize(24);
+        titleLabel.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
         titleLabel.setGravity(Gravity.CENTER);
         titleLabel.setMaxLines(2);
 
         root.addView(
                 titleLabel,
-                new LinearLayout.LayoutParams(-1, dp(58))
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(48)
+                )
         );
 
         statusLabel = new TextView(this);
         statusLabel.setText("Preparing song...");
         statusLabel.setTextColor(MUTED);
-        statusLabel.setTextSize(15);
+        statusLabel.setTextSize(14);
         statusLabel.setGravity(Gravity.CENTER);
 
         root.addView(
                 statusLabel,
-                new LinearLayout.LayoutParams(-1, dp(32))
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(26)
+                )
         );
 
         videoTexture = new TextureView(this);
         videoTexture.setBackgroundColor(Color.BLACK);
 
+        LinearLayout.LayoutParams videoParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(105)
+                );
+
+        videoParams.bottomMargin = dp(5);
+
         root.addView(
                 videoTexture,
-                new LinearLayout.LayoutParams(-1, 0, 1f)
+                videoParams
         );
 
         lyricsScroll = new ScrollView(this);
         lyricsScroll.setFillViewport(true);
-        lyricsScroll.setBackgroundColor(BACKGROUND);
+        lyricsScroll.setVerticalScrollBarEnabled(false);
+        lyricsScroll.setBackgroundColor(PANEL);
 
         lyricsLabel = new TextView(this);
         lyricsLabel.setTextColor(WHITE);
-        lyricsLabel.setTextSize(27);
+        lyricsLabel.setTextSize(30);
         lyricsLabel.setGravity(Gravity.CENTER);
-        lyricsLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        lyricsLabel.setPadding(
-                dp(24), dp(22), dp(24), dp(22)
+        lyricsLabel.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
         );
+
+        lyricsLabel.setLineSpacing(
+                dp(9),
+                1.0f
+        );
+
+        lyricsLabel.setPadding(
+                dp(28),
+                dp(24),
+                dp(28),
+                dp(24)
+        );
+
         lyricsLabel.setText("Get ready to sing!");
 
         lyricsScroll.addView(
                 lyricsLabel,
-                new ScrollView.LayoutParams(-1, -2)
+                new ScrollView.LayoutParams(
+                        -1,
+                        -2
+                )
         );
+
+        LinearLayout.LayoutParams lyricsParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        0,
+                        1f
+                );
+
+        lyricsParams.topMargin = dp(5);
 
         root.addView(
                 lyricsScroll,
-                new LinearLayout.LayoutParams(-1, 0, 2f)
+                lyricsParams
         );
 
         timeLabel = new TextView(this);
         timeLabel.setTextColor(MUTED);
-        timeLabel.setTextSize(15);
+        timeLabel.setTextSize(14);
         timeLabel.setGravity(Gravity.CENTER);
 
         root.addView(
                 timeLabel,
-                new LinearLayout.LayoutParams(-1, dp(28))
-        );
-
-        TextView remoteHelp = new TextView(this);
-        remoteHelp.setText(
-                "REMOTE: CENTER = PLAY / PAUSE     "
-                        + "LEFT / RIGHT = REWIND / FORWARD"
-        );
-        remoteHelp.setTextColor(MUTED);
-        remoteHelp.setTextSize(12);
-        remoteHelp.setGravity(Gravity.CENTER);
-
-        root.addView(
-                remoteHelp,
-                new LinearLayout.LayoutParams(-1, dp(26))
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(26)
+                )
         );
 
         /*
-         * Controls are arranged vertically so the TV remote can
-         * reach every button with UP and DOWN. LEFT and RIGHT are
-         * reserved for media rewind and fast-forward.
+         * Three separate horizontal playback buttons.
          */
         LinearLayout controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.VERTICAL);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
+        controls.setWeightSum(3f);
 
-        playButton = createButton("PAUSE");
-        playButton.setOnClickListener(v -> togglePlayback());
+        playButton = createButton("PLAY");
+        playButton.setOnClickListener(v -> startPlayback());
+
+        pauseButton = createButton("PAUSE");
+        pauseButton.setOnClickListener(v -> pausePlayback());
 
         stopButton = createButton("STOP");
         stopButton.setOnClickListener(v -> stopPlayback());
 
-        backButton = createButton("BACK");
-        backButton.setOnClickListener(v -> finish());
+        LinearLayout.LayoutParams playParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(54),
+                        1f
+                );
 
-        LinearLayout.LayoutParams buttonParams =
-                new LinearLayout.LayoutParams(dp(220), dp(48));
+        playParams.setMargins(
+                dp(4),
+                dp(3),
+                dp(4),
+                dp(3)
+        );
 
-        buttonParams.gravity = Gravity.CENTER;
-        buttonParams.bottomMargin = dp(5);
+        LinearLayout.LayoutParams pauseParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(54),
+                        1f
+                );
 
-        controls.addView(playButton, buttonParams);
+        pauseParams.setMargins(
+                dp(4),
+                dp(3),
+                dp(4),
+                dp(3)
+        );
 
         LinearLayout.LayoutParams stopParams =
-                new LinearLayout.LayoutParams(dp(220), dp(48));
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(54),
+                        1f
+                );
 
-        stopParams.gravity = Gravity.CENTER;
-        stopParams.bottomMargin = dp(5);
+        stopParams.setMargins(
+                dp(4),
+                dp(3),
+                dp(4),
+                dp(3)
+        );
 
+        controls.addView(playButton, playParams);
+        controls.addView(pauseButton, pauseParams);
         controls.addView(stopButton, stopParams);
-
-        LinearLayout.LayoutParams backParams =
-                new LinearLayout.LayoutParams(dp(220), dp(48));
-
-        backParams.gravity = Gravity.CENTER;
-
-        controls.addView(backButton, backParams);
 
         root.addView(
                 controls,
-                new LinearLayout.LayoutParams(-1, dp(160))
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(62)
+                )
+        );
+
+        /*
+         * BACK stays separate from playback controls.
+         */
+        backButton = createButton("BACK");
+        backButton.setOnClickListener(v -> finish());
+
+        LinearLayout.LayoutParams backParams =
+                new LinearLayout.LayoutParams(
+                        dp(180),
+                        dp(42)
+                );
+
+        backParams.gravity = Gravity.CENTER;
+        backParams.topMargin = dp(2);
+
+        root.addView(
+                backButton,
+                backParams
+        );
+
+        TextView remoteHelp = new TextView(this);
+        remoteHelp.setText(
+                "REMOTE: LEFT / RIGHT = SEEK     "
+                        + "CENTER = SELECT"
+        );
+        remoteHelp.setTextColor(MUTED);
+        remoteHelp.setTextSize(11);
+        remoteHelp.setGravity(Gravity.CENTER);
+
+        root.addView(
+                remoteHelp,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(22)
+                )
         );
 
         setContentView(root);
@@ -276,18 +393,24 @@ public class Stage4TvPlayerActivity extends Activity {
         }
 
         /*
-         * Start with a visible focus target for D-pad users.
+         * Begin with PLAY selected for the TV remote.
          */
         playButton.requestFocus();
     }
 
     private Button createButton(String label) {
+
         Button button = new Button(this);
 
         button.setText(label);
-        button.setTextSize(17);
+        button.setTextSize(16);
         button.setTextColor(WHITE);
-        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+
+        button.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
+
         button.setAllCaps(false);
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
@@ -298,6 +421,7 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private StateListDrawable createButtonBackground() {
+
         StateListDrawable states = new StateListDrawable();
 
         GradientDrawable focused = new GradientDrawable();
@@ -325,16 +449,21 @@ public class Stage4TvPlayerActivity extends Activity {
                 focused
         );
 
-        states.addState(new int[]{}, normal);
+        states.addState(
+                new int[]{},
+                normal
+        );
 
         return states;
     }
 
     private void startMidiSong() {
+
         statusLabel.setText("Preparing MIDI / KAR playback...");
         lyricsLabel.setText("Loading timed karaoke lyrics...");
 
         try {
+
             midiEngine = Stage3MidiEngine.create(this);
 
             midiEngine.play(
@@ -344,6 +473,7 @@ public class Stage4TvPlayerActivity extends Activity {
 
                         @Override
                         public void onReady(long durationTicks) {
+
                             if (released) return;
 
                             midiReady = true;
@@ -353,29 +483,43 @@ public class Stage4TvPlayerActivity extends Activity {
                                     "stage3_midi/song.mid"
                             );
 
-                            midiLyrics = Stage3MidiLyrics.read(midiFile);
+                            midiLyrics = Stage3MidiLyrics.read(
+                                    midiFile
+                            );
 
                             if (midiLyrics.hasLyrics()) {
+
                                 lyricsLabel.setText(
                                         midiLyrics.styledFullTextAtTick(
                                                 0L,
                                                 durationTicks
                                         )
                                 );
-                                statusLabel.setText("MIDI / KAR PLAYING");
+
+                                statusLabel.setText(
+                                        "MIDI / KAR PLAYING"
+                                );
+
                             } else {
+
                                 lyricsLabel.setText(
                                         "No timed lyrics were found "
                                                 + "in this MIDI/KAR file."
                                 );
-                                statusLabel.setText("MIDI / KAR PLAYING");
+
+                                statusLabel.setText(
+                                        "MIDI / KAR PLAYING"
+                                );
                             }
+
+                            lastLyricLine = Integer.MIN_VALUE;
 
                             updateMidiDisplay();
                         }
 
                         @Override
                         public void onError(String message) {
+
                             if (released) return;
 
                             midiReady = false;
@@ -387,16 +531,18 @@ public class Stage4TvPlayerActivity extends Activity {
 
                         @Override
                         public void onFinished() {
+
                             if (released) return;
 
                             midiReady = false;
+
                             statusLabel.setText("SONG FINISHED");
-                            playButton.setText("PLAY");
                         }
                     }
             );
 
         } catch (Exception e) {
+
             showError(
                     "Could not start MIDI playback: "
                             + e.getMessage()
@@ -405,38 +551,47 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void startMediaSong() {
+
         try {
+
             statusLabel.setText("Loading audio / video...");
 
             mediaPlayer = new ExoPlayer.Builder(this).build();
 
             if (songType.toUpperCase(Locale.ROOT).contains("VIDEO")) {
+
                 videoTexture.setVisibility(View.VISIBLE);
+
                 mediaPlayer.setVideoTextureView(videoTexture);
             }
 
             mediaPlayer.addListener(new Player.Listener() {
+
                 @Override
                 public void onPlaybackStateChanged(int playbackState) {
+
                     if (released) return;
 
                     if (playbackState == Player.STATE_READY) {
+
                         statusLabel.setText("PLAYING");
+
                     } else if (playbackState == Player.STATE_ENDED) {
+
                         statusLabel.setText("SONG FINISHED");
-                        playButton.setText("PLAY");
-                    } else if (playbackState == Player.STATE_BUFFERING) {
+
+                    } else if (
+                            playbackState == Player.STATE_BUFFERING
+                    ) {
+
                         statusLabel.setText("BUFFERING...");
                     }
                 }
 
                 @Override
                 public void onIsPlayingChanged(boolean isPlaying) {
-                    if (released) return;
 
-                    playButton.setText(
-                            isPlaying ? "PAUSE" : "PLAY"
-                    );
+                    if (released) return;
 
                     if (isPlaying) {
                         statusLabel.setText("PLAYING");
@@ -447,6 +602,7 @@ public class Stage4TvPlayerActivity extends Activity {
                 public void onPlayerError(
                         androidx.media3.common.PlaybackException error
                 ) {
+
                     showError(
                             "Media playback error: " + error.getMessage()
                     );
@@ -461,6 +617,7 @@ public class Stage4TvPlayerActivity extends Activity {
             mediaPlayer.play();
 
         } catch (Exception e) {
+
             showError(
                     "Could not start audio/video: "
                             + e.getMessage()
@@ -469,24 +626,25 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     /*
-     * Android TV remote media-key handling.
+     * TV remote handling.
      *
-     * D-pad CENTER:
-     *   Toggles playback when focus is not on a button.
-     *   The focused button receives CENTER normally.
+     * LEFT / RIGHT:
+     *   When a playback button has focus, allow normal
+     *   horizontal button navigation.
      *
-     * D-pad LEFT / RIGHT:
-     *   Rewinds / fast-forwards the current song.
+     *   Otherwise, rewind / fast-forward the song.
      *
-     * MEDIA_PLAY_PAUSE:
-     *   Toggles playback.
+     * CENTER / ENTER:
+     *   Activates the focused button normally.
      *
-     * MEDIA_REWIND / MEDIA_FAST_FORWARD:
-     *   Performs a larger seek.
+     * MEDIA keys:
+     *   Continue to control playback directly.
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
+
             int keyCode = event.getKeyCode();
 
             if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
@@ -514,22 +672,36 @@ public class Stage4TvPlayerActivity extends Activity {
                 return true;
             }
 
+            View focused = getCurrentFocus();
+
+            boolean buttonHasFocus = focused instanceof Button;
+
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+
+                if (buttonHasFocus) {
+                    return super.dispatchKeyEvent(event);
+                }
+
                 seekBackward(MEDIA_SEEK_MS);
                 return true;
             }
 
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+
+                if (buttonHasFocus) {
+                    return super.dispatchKeyEvent(event);
+                }
+
                 seekForward(MEDIA_SEEK_MS);
                 return true;
             }
 
-            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
-                    || keyCode == KeyEvent.KEYCODE_ENTER) {
+            if (
+                    keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                            || keyCode == KeyEvent.KEYCODE_ENTER
+            ) {
 
-                View focused = getCurrentFocus();
-
-                if (!(focused instanceof Button)) {
+                if (!buttonHasFocus) {
                     togglePlayback();
                     return true;
                 }
@@ -540,6 +712,7 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void togglePlayback() {
+
         if (isPlaybackRunning()) {
             pausePlayback();
         } else {
@@ -548,7 +721,9 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private boolean isPlaybackRunning() {
+
         if (midiMode) {
+
             return midiReady
                     && midiEngine != null
                     && midiEngine.isPlaying();
@@ -558,31 +733,37 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void startPlayback() {
+
         if (midiMode) {
+
             if (!midiReady || midiEngine == null) return;
 
             midiEngine.resume();
-            playButton.setText("PAUSE");
+
             statusLabel.setText("PLAYING");
 
         } else if (mediaPlayer != null) {
+
             mediaPlayer.play();
-            playButton.setText("PAUSE");
+
             statusLabel.setText("PLAYING");
         }
     }
 
     private void pausePlayback() {
+
         if (midiMode) {
+
             if (!midiReady || midiEngine == null) return;
 
             midiEngine.pause();
-            playButton.setText("PLAY");
+
             statusLabel.setText("PAUSED");
 
         } else if (mediaPlayer != null) {
+
             mediaPlayer.pause();
-            playButton.setText("PLAY");
+
             statusLabel.setText("PAUSED");
         }
     }
@@ -596,6 +777,7 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void seekBy(long amount) {
+
         if (midiMode) {
             seekMidi(amount);
         } else {
@@ -603,12 +785,8 @@ public class Stage4TvPlayerActivity extends Activity {
         }
     }
 
-    /*
-     * The MIDI engine exposes tick-based seeking.
-     * A small percentage of the song duration is used per
-     * D-pad press because MIDI tick rates vary between files.
-     */
     private void seekMidi(long direction) {
+
         if (!midiReady || midiEngine == null) return;
 
         long duration = midiEngine.getDurationTicks();
@@ -626,8 +804,11 @@ public class Stage4TvPlayerActivity extends Activity {
         long target;
 
         if (direction < 0L) {
+
             target = Math.max(0L, current - step);
+
         } else {
+
             target = Math.min(duration, current + step);
         }
 
@@ -641,6 +822,7 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void seekMedia(long amountMs) {
+
         if (mediaPlayer == null) return;
 
         long duration = mediaPlayer.getDuration();
@@ -663,38 +845,56 @@ public class Stage4TvPlayerActivity extends Activity {
         updateMediaDisplay();
     }
 
+    /*
+     * STOP pauses and returns MIDI playback to the beginning.
+     * The loaded MIDI engine remains available for PLAY.
+     */
     private void stopPlayback() {
+
         if (midiMode) {
-            if (midiEngine != null) {
-                midiEngine.stop();
+
+            if (midiEngine != null && midiReady) {
+
+                midiEngine.pause();
+                midiEngine.seekTo(0L);
             }
 
-            midiReady = false;
-            playButton.setText("PLAY");
             statusLabel.setText("STOPPED");
-            lyricsLabel.setText("Song stopped.");
+
+            lastLyricLine = Integer.MIN_VALUE;
+
+            if (midiReady) {
+                updateMidiDisplay();
+            }
 
         } else if (mediaPlayer != null) {
+
             mediaPlayer.pause();
             mediaPlayer.seekTo(0L);
-            playButton.setText("PLAY");
+
             statusLabel.setText("STOPPED");
         }
     }
 
     private void updateMidiDisplay() {
+
         if (midiEngine == null || !midiReady) return;
 
         long tick = midiEngine.getCurrentTick();
+
         long duration = midiEngine.getDurationTicks();
 
         lyricsLabel.setText(
-                midiLyrics.styledFullTextAtTick(tick, duration)
+                midiLyrics.styledFullTextAtTick(
+                        tick,
+                        duration
+                )
         );
 
         int line = midiLyrics.activeLineNumberAtTick(tick);
 
         if (line != lastLyricLine) {
+
             lastLyricLine = line;
 
             final int offset = Math.max(
@@ -703,17 +903,23 @@ public class Stage4TvPlayerActivity extends Activity {
             );
 
             lyricsScroll.post(() -> {
+
                 if (released) return;
 
                 android.text.Layout layout =
                         lyricsLabel.getLayout();
 
-                if (layout != null
-                        && offset <= lyricsLabel.length()) {
+                if (
+                        layout != null
+                                && offset <= lyricsLabel.length()
+                ) {
 
                     int safeOffset = Math.min(
                             offset,
-                            Math.max(0, lyricsLabel.length() - 1)
+                            Math.max(
+                                    0,
+                                    lyricsLabel.length() - 1
+                            )
                     );
 
                     int lineNumber =
@@ -731,16 +937,14 @@ public class Stage4TvPlayerActivity extends Activity {
                 "MIDI TICK: " + tick
                         + " / " + duration
         );
-
-        playButton.setText(
-                midiEngine.isPlaying() ? "PAUSE" : "PLAY"
-        );
     }
 
     private void updateMediaDisplay() {
+
         if (mediaPlayer == null) return;
 
         long position = mediaPlayer.getCurrentPosition();
+
         long duration = mediaPlayer.getDuration();
 
         timeLabel.setText(
@@ -748,15 +952,14 @@ public class Stage4TvPlayerActivity extends Activity {
                         + " / "
                         + formatTime(duration)
         );
-
-        playButton.setText(
-                mediaPlayer.isPlaying() ? "PAUSE" : "PLAY"
-        );
     }
 
     private String formatTime(long millis) {
+
         long seconds = Math.max(0L, millis) / 1000L;
+
         long minutes = seconds / 60L;
+
         seconds %= 60L;
 
         return String.format(
@@ -768,6 +971,7 @@ public class Stage4TvPlayerActivity extends Activity {
     }
 
     private void showError(String message) {
+
         if (statusLabel != null) {
             statusLabel.setText("PLAYBACK ERROR");
         }
@@ -775,32 +979,39 @@ public class Stage4TvPlayerActivity extends Activity {
         if (lyricsLabel != null) {
             lyricsLabel.setText(message);
         }
-
-        if (playButton != null) {
-            playButton.setText("PLAY");
-        }
     }
 
     @Override
     protected void onPause() {
+
         super.onPause();
 
-        if (midiMode && midiReady && midiEngine != null
-                && midiEngine.isPlaying()) {
+        if (
+                midiMode
+                        && midiReady
+                        && midiEngine != null
+                        && midiEngine.isPlaying()
+        ) {
 
             midiEngine.pause();
+
             pausedForLifecycle = true;
 
-        } else if (!midiMode && mediaPlayer != null
-                && mediaPlayer.isPlaying()) {
+        } else if (
+                !midiMode
+                        && mediaPlayer != null
+                        && mediaPlayer.isPlaying()
+        ) {
 
             mediaPlayer.pause();
+
             pausedForLifecycle = true;
         }
     }
 
     @Override
     protected void onResume() {
+
         super.onResume();
 
         if (!pausedForLifecycle || released) return;
@@ -808,26 +1019,35 @@ public class Stage4TvPlayerActivity extends Activity {
         pausedForLifecycle = false;
 
         if (midiMode && midiReady && midiEngine != null) {
+
             midiEngine.resume();
 
         } else if (!midiMode && mediaPlayer != null) {
+
             mediaPlayer.play();
         }
     }
 
     @Override
     protected void onDestroy() {
+
         released = true;
+
         handler.removeCallbacks(progressUpdater);
 
         if (midiEngine != null) {
+
             midiEngine.release();
+
             midiEngine = null;
         }
 
         if (mediaPlayer != null) {
+
             mediaPlayer.clearVideoTextureView(videoTexture);
+
             mediaPlayer.release();
+
             mediaPlayer = null;
         }
 
