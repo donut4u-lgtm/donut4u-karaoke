@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Bundle;
@@ -21,6 +22,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -74,6 +76,10 @@ public class PhoneRemoteActivity extends Activity {
 
     private TextView statusText;
     private TextView tvFoundText;
+    private TextView resultsHeading;
+    private TextView resultsMessage;
+
+    private LinearLayout resultsContainer;
 
     private Button connectButton;
     private Button searchButton;
@@ -139,8 +145,8 @@ public class PhoneRemoteActivity extends Activity {
                         + "4. Enter the TV code below and connect.\n\n"
                         + "5. Choose a karaoke stage on your phone. "
                         + "The TV will open that stage.\n\n"
-                        + "6. Use song search and the phone keyboard "
-                        + "to send commands to the TV."
+                        + "6. Search for songs and select a result "
+                        + "on your phone."
         );
         instruction.setTextColor(WHITE);
         instruction.setTextSize(14);
@@ -251,6 +257,31 @@ public class PhoneRemoteActivity extends Activity {
 
         searchButton.setEnabled(false);
         searchButton.setOnClickListener(v -> sendSearch());
+
+        resultsHeading = makeHeading("MATCHING SONGS");
+        resultsHeading.setPadding(
+                0, dp(18), 0, dp(8)
+        );
+
+        root.addView(resultsHeading, fullWidthWrap());
+
+        resultsMessage = new TextView(this);
+        resultsMessage.setText(
+                "Search on the TV to see matching songs here."
+        );
+        resultsMessage.setTextColor(MUTED);
+        resultsMessage.setTextSize(13);
+        resultsMessage.setPadding(
+                0, dp(4), 0, dp(10)
+        );
+
+        root.addView(resultsMessage, fullWidthWrap());
+
+        resultsContainer = new LinearLayout(this);
+        resultsContainer.setOrientation(LinearLayout.VERTICAL);
+        resultsContainer.setPadding(0, 0, 0, dp(4));
+
+        root.addView(resultsContainer, fullWidthWrap());
 
         addSeparator(root);
 
@@ -804,6 +835,8 @@ public class PhoneRemoteActivity extends Activity {
         }
 
         searchButton.setEnabled(false);
+        clearSongResults("Searching on TV...");
+
         setStatus("Sending song title to TV...");
 
         networkExecutor.execute(() -> {
@@ -817,17 +850,288 @@ public class PhoneRemoteActivity extends Activity {
                 boolean success =
                         response.optBoolean("ok", false);
 
+                if (!success) {
+                    String message =
+                            response.optString(
+                                    "message",
+                                    "TV could not accept that search."
+                            );
+
+                    mainHandler.post(() -> {
+                        if (!closing) {
+                            searchButton.setEnabled(connected);
+                            resultsMessage.setText(message);
+                            setStatus(message);
+                        }
+                    });
+
+                    return;
+                }
+
+                requestSongResults();
+
+            } catch (Exception e) {
+                handleConnectionFailure();
+            }
+        });
+    }
+
+    /**
+     * Requests the current matching song list from the TV.
+     *
+     * Expected response:
+     * {
+     *   "ok": true,
+     *   "data": {
+     *     "songs": [
+     *       {
+     *         "title": "Song title",
+     *         "number": "10001",
+     *         "type": "MIDI"
+     *       }
+     *     ]
+     *   }
+     * }
+     */
+    private void requestSongResults() throws Exception {
+
+        JSONObject request = new JSONObject();
+        request.put("type", "get_results");
+
+        JSONObject response =
+                sendRequestAndRead(request);
+
+        if (!response.optBoolean("ok", false)) {
+
+            String message =
+                    response.optString(
+                            "message",
+                            "Unable to retrieve song results."
+                    );
+
+            mainHandler.post(() -> {
+                if (!closing) {
+                    searchButton.setEnabled(connected);
+                    resultsMessage.setText(message);
+                    setStatus(message);
+                }
+            });
+
+            return;
+        }
+
+        JSONObject data =
+                response.optJSONObject("data");
+
+        JSONArray songs = data == null
+                ? null
+                : data.optJSONArray("songs");
+
+        if (songs == null) {
+            songs = new JSONArray();
+        }
+
+        JSONArray safeSongs =
+                new JSONArray(songs.toString());
+
+        mainHandler.post(() -> {
+            if (closing) {
+                return;
+            }
+
+            searchButton.setEnabled(connected);
+            displaySongResults(safeSongs);
+
+            setStatus(
+                    safeSongs.length() == 0
+                            ? "No matching songs were returned by the TV."
+                            : safeSongs.length()
+                            + " matching song(s). Select one on your phone."
+            );
+        });
+    }
+
+    private void clearSongResults(String message) {
+        if (resultsContainer != null) {
+            resultsContainer.removeAllViews();
+        }
+
+        if (resultsMessage != null) {
+            resultsMessage.setText(message);
+        }
+    }
+
+    private void displaySongResults(JSONArray songs) {
+
+        resultsContainer.removeAllViews();
+
+        if (songs == null || songs.length() == 0) {
+            resultsMessage.setText(
+                    "No matching songs found. Try another search."
+            );
+            return;
+        }
+
+        resultsMessage.setText(
+                songs.length()
+                        + " matching song(s). Tap a song to play it on TV."
+        );
+
+        for (int i = 0; i < songs.length(); i++) {
+
+            JSONObject song = songs.optJSONObject(i);
+
+            if (song == null) {
+                continue;
+            }
+
+            final int songIndex = i;
+
+            final JSONObject selectedSong;
+
+            try {
+                selectedSong =
+                        new JSONObject(song.toString());
+            } catch (Exception e) {
+                continue;
+            }
+
+            String title =
+                    selectedSong.optString(
+                            "title",
+                            selectedSong.optString(
+                                    "name",
+                                    "Untitled song"
+                            )
+                    );
+
+            String number =
+                    selectedSong.optString("number", "");
+
+            String type =
+                    selectedSong.optString("type", "");
+
+            StringBuilder label = new StringBuilder();
+
+            if (!number.trim().isEmpty()) {
+                label.append(number.trim()).append("  ");
+            }
+
+            label.append(title);
+
+            if (!type.trim().isEmpty()) {
+                label.append("\n").append(type.trim());
+            }
+
+            Button songButton = makeSongButton(
+                    label.toString()
+            );
+
+            LinearLayout.LayoutParams params =
+                    fullWidth(dp(64));
+
+            params.bottomMargin = dp(8);
+
+            resultsContainer.addView(
+                    songButton,
+                    params
+            );
+
+            songButton.setOnClickListener(
+                    v -> sendSongSelection(
+                            songIndex,
+                            selectedSong,
+                            songButton
+                    )
+            );
+        }
+    }
+
+    /**
+     * Sends the selected song's result-list index and
+     * identifying information to the active TV stage.
+     */
+    private void sendSongSelection(
+            int index,
+            JSONObject song,
+            Button selectedButton
+    ) {
+
+        if (!connected) {
+            setStatus("Connect to the TV first.");
+            return;
+        }
+
+        if (song == null || index < 0) {
+            return;
+        }
+
+        setSongButtonsEnabled(false);
+
+        selectedButton.setText("SENDING SELECTION...");
+
+        setStatus("Sending selected song to TV...");
+
+        networkExecutor.execute(() -> {
+            try {
+                JSONObject request = new JSONObject();
+
+                request.put("type", "select_song");
+                request.put("index", index);
+
+                request.put(
+                        "title",
+                        song.optString(
+                                "title",
+                                song.optString("name", "")
+                        )
+                );
+
+                request.put(
+                        "number",
+                        song.optString("number", "")
+                );
+
+                request.put(
+                        "song",
+                        new JSONObject(song.toString())
+                );
+
+                JSONObject response =
+                        sendRequestAndRead(request);
+
+                boolean success =
+                        response.optBoolean("ok", false);
+
+                String message =
+                        response.optString(
+                                "message",
+                                success
+                                        ? "Song selection accepted"
+                                        : "TV could not select this song"
+                        );
+
                 mainHandler.post(() -> {
                     if (closing) {
                         return;
                     }
 
-                    searchButton.setEnabled(connected);
+                    setSongButtonsEnabled(true);
+
+                    selectedButton.setText(
+                            song.optString(
+                                    "title",
+                                    song.optString(
+                                            "name",
+                                            "Selected song"
+                                    )
+                            )
+                    );
 
                     setStatus(
                             success
-                                    ? "Search sent to TV: " + songTitle
-                                    : "TV could not accept that search."
+                                    ? "TV accepted your song selection."
+                                    : "Song selection failed: " + message
                     );
                 });
 
@@ -835,6 +1139,21 @@ public class PhoneRemoteActivity extends Activity {
                 handleConnectionFailure();
             }
         });
+    }
+
+    private void setSongButtonsEnabled(boolean enabled) {
+        if (resultsContainer == null) {
+            return;
+        }
+
+        for (int i = 0; i < resultsContainer.getChildCount(); i++) {
+
+            View child = resultsContainer.getChildAt(i);
+
+            if (child instanceof Button) {
+                child.setEnabled(enabled);
+            }
+        }
     }
 
     private void sendText(String action) {
@@ -1011,6 +1330,7 @@ public class PhoneRemoteActivity extends Activity {
         }
 
         setConnectedControls(false);
+        setSongButtonsEnabled(false);
 
         if (connectButton != null) {
             connectButton.setEnabled(true);
@@ -1085,6 +1405,19 @@ public class PhoneRemoteActivity extends Activity {
         return button;
     }
 
+    private Button makeSongButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextColor(WHITE);
+        button.setTextSize(14);
+        button.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        button.setPadding(dp(14), dp(8), dp(14), dp(8));
+        button.setTypeface(null, Typeface.BOLD);
+        button.setAllCaps(false);
+        button.setBackground(round(PANEL, dp(10)));
+        return button;
+    }
+
     private Button makeSmallButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -1096,12 +1429,12 @@ public class PhoneRemoteActivity extends Activity {
         return button;
     }
 
-    private android.graphics.drawable.GradientDrawable round(
+    private GradientDrawable round(
             int color,
             int radius
     ) {
-        android.graphics.drawable.GradientDrawable drawable =
-                new android.graphics.drawable.GradientDrawable();
+        GradientDrawable drawable =
+                new GradientDrawable();
 
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
