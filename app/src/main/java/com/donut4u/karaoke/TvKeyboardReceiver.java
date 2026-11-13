@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class TvKeyboardReceiver {
 
@@ -35,11 +36,8 @@ public final class TvKeyboardReceiver {
             "Donut4U-TV-Keyboard";
 
     private static final int MAX_TEXT_LENGTH = 2000;
-
     private static final int MAX_STATE_LENGTH = 65536;
-
     private static final int MAX_MESSAGE_LENGTH = 100000;
-
     private static final int CALLBACK_TIMEOUT_SECONDS = 3;
 
     public interface Listener {
@@ -63,6 +61,17 @@ public final class TvKeyboardReceiver {
                 JSONObject state,
                 long sequence
         ) {
+        }
+
+        /**
+         * Handles phone requests that need a response from the active TV
+         * screen, such as retrieving song results or selecting a song.
+         *
+         * Return a JSONObject containing the requested data or result.
+         * Return null when the request cannot be handled.
+         */
+        default JSONObject onRemoteRequest(JSONObject request) {
+            return null;
         }
     }
 
@@ -601,6 +610,14 @@ public final class TvKeyboardReceiver {
                                     lastStateSequence
                             );
 
+                } else if ("get_results".equals(type)
+                        || "select_song".equals(type)) {
+
+                    handleRemoteRequest(
+                            request,
+                            writer
+                    );
+
                 } else if ("disconnect".equals(type)) {
 
                     notifyStatus(
@@ -801,6 +818,141 @@ public final class TvKeyboardReceiver {
                         ? "Text input delivered"
                         : "No active TV screen accepted the input"
         );
+    }
+
+    /**
+     * Handles requests that need data or an action result from the TV.
+     *
+     * Supported request types:
+     * - get_results
+     * - select_song
+     *
+     * The active screen returns a JSONObject. The receiver sends that
+     * object back to the phone inside the "data" property.
+     */
+    private void handleRemoteRequest(
+            JSONObject request,
+            BufferedWriter writer
+    ) throws Exception {
+
+        String type =
+                request.optString("type", "").trim();
+
+        if (!"get_results".equals(type)
+                && !"select_song".equals(type)) {
+
+            sendResponse(
+                    writer,
+                    false,
+                    "Unsupported remote request"
+            );
+            return;
+        }
+
+        String requestText = request.toString();
+
+        if (requestText.length() > MAX_MESSAGE_LENGTH) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Remote request is too large"
+            );
+            return;
+        }
+
+        Listener listener = activeListener;
+
+        if (!sessionEnabled || listener == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "No active TV screen is listening."
+            );
+            return;
+        }
+
+        CountDownLatch completed = new CountDownLatch(1);
+
+        AtomicReference<JSONObject> resultReference =
+                new AtomicReference<>();
+
+        AtomicBoolean expired = new AtomicBoolean(false);
+
+        mainHandler.post(() -> {
+            try {
+                Listener current = activeListener;
+
+                if (!expired.get()
+                        && running
+                        && sessionEnabled
+                        && current != null) {
+
+                    JSONObject requestCopy =
+                            new JSONObject(requestText);
+
+                    JSONObject result =
+                            current.onRemoteRequest(requestCopy);
+
+                    if (result != null) {
+                        resultReference.set(
+                                new JSONObject(result.toString())
+                        );
+                    }
+                }
+
+            } catch (Exception ignored) {
+                resultReference.set(null);
+
+            } finally {
+                completed.countDown();
+            }
+        });
+
+        boolean finished = completed.await(
+                CALLBACK_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS
+        );
+
+        if (!finished) {
+            expired.set(true);
+        }
+
+        JSONObject result = resultReference.get();
+
+        boolean success =
+                finished && result != null;
+
+        JSONObject response =
+                new JSONObject();
+
+        response.put("ok", success);
+
+        response.put(
+                "message",
+                success
+                        ? "Remote request completed"
+                        : finished
+                        ? "The active TV screen could not handle the request"
+                        : "The TV did not respond in time"
+        );
+
+        if (success) {
+            String resultText = result.toString();
+
+            if (resultText.length() > MAX_MESSAGE_LENGTH) {
+                response.put("ok", false);
+                response.put(
+                        "message",
+                        "TV response is too large"
+                );
+            } else {
+                response.put("data", result);
+            }
+        }
+
+        writer.write(response.toString());
+        writer.newLine();
+        writer.flush();
     }
 
     private long handleStateRequest(
