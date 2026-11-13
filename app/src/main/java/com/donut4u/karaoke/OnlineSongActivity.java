@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -828,8 +829,7 @@ public class OnlineSongActivity extends Activity {
             searchBox.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() == KeyEvent.ACTION_UP
                         && (keyCode == KeyEvent.KEYCODE_ENTER
-                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
-                        || keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
+                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
                     searchVideos();
                     return true;
                 }
