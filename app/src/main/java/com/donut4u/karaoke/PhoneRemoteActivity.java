@@ -44,6 +44,8 @@ public class PhoneRemoteActivity extends Activity {
 
     private static final String ACTIVE_TARGET = "active";
 
+    private static final int STATE_PROTOCOL_VERSION = 1;
+
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
 
@@ -66,6 +68,8 @@ public class PhoneRemoteActivity extends Activity {
     private volatile boolean resolving = false;
     private volatile boolean connecting = false;
 
+    private volatile long stateSequence = 0;
+
     private EditText pairingCodeInput;
     private EditText songInput;
     private EditText textInput;
@@ -80,6 +84,8 @@ public class PhoneRemoteActivity extends Activity {
     private Button clearButton;
     private Button submitButton;
     private Button disconnectButton;
+
+    private Button[] stageButtons = new Button[4];
 
     private String discoveredServiceName = "";
 
@@ -106,7 +112,7 @@ public class PhoneRemoteActivity extends Activity {
         scrollView.addView(root);
 
         TextView heading = new TextView(this);
-        heading.setText("DONUT4U PHONE KEYBOARD");
+        heading.setText("DONUT4U PHONE CONTROLLER");
         heading.setTextColor(GREEN);
         heading.setTextSize(23);
         heading.setTypeface(null, Typeface.BOLD);
@@ -116,7 +122,7 @@ public class PhoneRemoteActivity extends Activity {
 
         TextView subtitle = new TextView(this);
         subtitle.setText(
-                "Your phone is the keyboard and controller. "
+                "Your phone controls the karaoke stages. "
                         + "The TV displays and plays karaoke."
         );
         subtitle.setTextColor(MUTED);
@@ -133,10 +139,10 @@ public class PhoneRemoteActivity extends Activity {
                         + "3. Keep both devices on the same Wi-Fi "
                         + "network or phone hotspot.\n\n"
                         + "4. Enter the TV code below and connect.\n\n"
-                        + "5. Select the desired input field on the TV. "
-                        + "Type on your phone and send the text.\n\n"
-                        + "6. Use SUBMIT when you want the TV to "
-                        + "finish the current input."
+                        + "5. Choose a karaoke stage on your phone. "
+                        + "The TV will open that stage.\n\n"
+                        + "6. Use song search and the phone keyboard "
+                        + "to send commands to the TV."
         );
         instruction.setTextColor(WHITE);
         instruction.setTextSize(14);
@@ -183,6 +189,54 @@ public class PhoneRemoteActivity extends Activity {
 
         root.addView(connectButton, connectParams);
         connectButton.setOnClickListener(v -> connectToTv());
+
+        addSeparator(root);
+
+        TextView stageHeading =
+                makeHeading("CHOOSE KARAOKE STAGE");
+
+        root.addView(stageHeading, fullWidthWrap());
+
+        TextView stageInstructions = new TextView(this);
+        stageInstructions.setText(
+                "Connect first. Select a stage here to open it "
+                        + "on your TV."
+        );
+        stageInstructions.setTextColor(MUTED);
+        stageInstructions.setTextSize(13);
+        stageInstructions.setPadding(
+                0, 0, 0, dp(12)
+        );
+
+        root.addView(stageInstructions, fullWidthWrap());
+
+        addStageButton(
+                root,
+                0,
+                "STAGE 1 - YOUTUBE KARAOKE",
+                1
+        );
+
+        addStageButton(
+                root,
+                1,
+                "STAGE 2 - KARAOKE STUDIO",
+                2
+        );
+
+        addStageButton(
+                root,
+                2,
+                "STAGE 3 - MIDI / KAR SONGBOOK",
+                3
+        );
+
+        addStageButton(
+                root,
+                3,
+                "STAGE 4 - TV SONGBOOK",
+                4
+        );
 
         addSeparator(root);
 
@@ -331,6 +385,29 @@ public class PhoneRemoteActivity extends Activity {
 
         setContentView(scrollView);
         setConnectedControls(false);
+    }
+
+    private void addStageButton(
+            LinearLayout root,
+            int index,
+            String label,
+            int stage
+    ) {
+        Button button = makeButton(label);
+
+        LinearLayout.LayoutParams params =
+                fullWidth(dp(56));
+
+        params.bottomMargin = dp(9);
+
+        root.addView(button, params);
+
+        button.setEnabled(false);
+        button.setOnClickListener(
+                v -> sendStageSelection(stage)
+        );
+
+        stageButtons[index] = button;
     }
 
     private void addSeparator(LinearLayout root) {
@@ -558,10 +635,6 @@ public class PhoneRemoteActivity extends Activity {
             SSLSocket newSocket = null;
 
             try {
-                /*
-                 * TvPairingTls verifies the TV certificate against
-                 * the six-digit pairing code before returning.
-                 */
                 newSocket = TvPairingTls.connect(
                         address,
                         port,
@@ -616,6 +689,7 @@ public class PhoneRemoteActivity extends Activity {
                 reader = newReader;
                 writer = newWriter;
                 connected = true;
+                stateSequence = 0;
 
                 socket.setSoTimeout(0);
 
@@ -635,8 +709,7 @@ public class PhoneRemoteActivity extends Activity {
 
                     setStatus(
                             "ENCRYPTED CONNECTION ESTABLISHED. "
-                                    + "Select a TV input field, "
-                                    + "then type on your phone."
+                                    + "Choose a stage on your phone."
                     );
 
                     showPhoneKeyboard(textInput);
@@ -662,6 +735,71 @@ public class PhoneRemoteActivity extends Activity {
                         );
                     }
                 });
+            }
+        });
+    }
+
+    private void sendStageSelection(int stage) {
+        if (!connected) {
+            setStatus("Connect to the TV first.");
+            return;
+        }
+
+        if (stage < 1 || stage > 4) {
+            return;
+        }
+
+        setStageButtonsEnabled(false);
+        setStatus("Opening Stage " + stage + " on TV...");
+
+        networkExecutor.execute(() -> {
+            try {
+                long sequence = ++stateSequence;
+
+                JSONObject state = new JSONObject();
+                state.put("mode", "paired");
+                state.put("stage", stage);
+                state.put("screen", "karaoke");
+
+                JSONObject request = new JSONObject();
+                request.put("type", "state");
+                request.put(
+                        "version",
+                        STATE_PROTOCOL_VERSION
+                );
+                request.put("sequence", sequence);
+                request.put("state", state);
+
+                JSONObject response =
+                        sendRequestAndRead(request);
+
+                boolean success =
+                        response.optBoolean("ok", false);
+
+                String message =
+                        response.optString(
+                                "message",
+                                success
+                                        ? "Stage selection received"
+                                        : "TV rejected stage selection"
+                        );
+
+                mainHandler.post(() -> {
+                    if (closing) {
+                        return;
+                    }
+
+                    setStageButtonsEnabled(connected);
+
+                    setStatus(
+                            success
+                                    ? "TV is opening Stage " + stage
+                                    : "Stage selection failed: " + message
+                    );
+                });
+
+            } catch (Exception e) {
+                handleConnectionFailure();
             }
         });
     }
@@ -839,6 +977,15 @@ public class PhoneRemoteActivity extends Activity {
         }
 
         setTextButtonsEnabled(enabled);
+        setStageButtonsEnabled(enabled);
+    }
+
+    private void setStageButtonsEnabled(boolean enabled) {
+        for (Button button : stageButtons) {
+            if (button != null) {
+                button.setEnabled(enabled);
+            }
+        }
     }
 
     private void setTextButtonsEnabled(boolean enabled) {
