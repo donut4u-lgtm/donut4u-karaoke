@@ -28,11 +28,10 @@ import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import javax.net.ssl.SSLSocket;
 
 public class PhoneRemoteActivity extends Activity {
 
@@ -43,7 +42,6 @@ public class PhoneRemoteActivity extends Activity {
     private static final int MUTED = Color.LTGRAY;
 
     private static final String ACTIVE_TARGET = "active";
-
     private static final int STATE_PROTOCOL_VERSION = 1;
 
     private final Handler mainHandler =
@@ -58,7 +56,7 @@ public class PhoneRemoteActivity extends Activity {
     private InetAddress tvAddress;
     private int tvPort = -1;
 
-    private volatile SSLSocket socket;
+    private volatile Socket socket;
     private volatile BufferedReader reader;
     private volatile BufferedWriter writer;
 
@@ -211,31 +209,23 @@ public class PhoneRemoteActivity extends Activity {
         root.addView(stageInstructions, fullWidthWrap());
 
         addStageButton(
-                root,
-                0,
-                "STAGE 1 - YOUTUBE KARAOKE",
-                1
+                root, 0,
+                "STAGE 1 - YOUTUBE KARAOKE", 1
         );
 
         addStageButton(
-                root,
-                1,
-                "STAGE 2 - KARAOKE STUDIO",
-                2
+                root, 1,
+                "STAGE 2 - KARAOKE STUDIO", 2
         );
 
         addStageButton(
-                root,
-                2,
-                "STAGE 3 - MIDI / KAR SONGBOOK",
-                3
+                root, 2,
+                "STAGE 3 - MIDI / KAR SONGBOOK", 3
         );
 
         addStageButton(
-                root,
-                3,
-                "STAGE 4 - TV SONGBOOK",
-                4
+                root, 3,
+                "STAGE 4 - TV SONGBOOK", 4
         );
 
         addSeparator(root);
@@ -318,29 +308,17 @@ public class PhoneRemoteActivity extends Activity {
 
         editActions.addView(
                 backspaceButton,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                )
+                new LinearLayout.LayoutParams(0, dp(48), 1)
         );
 
         LinearLayout.LayoutParams actionParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                );
+                new LinearLayout.LayoutParams(0, dp(48), 1);
         actionParams.leftMargin = dp(6);
 
         editActions.addView(clearButton, actionParams);
 
         LinearLayout.LayoutParams submitParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                );
+                new LinearLayout.LayoutParams(0, dp(48), 1);
         submitParams.leftMargin = dp(6);
 
         editActions.addView(submitButton, submitParams);
@@ -626,13 +604,13 @@ public class PhoneRemoteActivity extends Activity {
 
         connecting = true;
         connectButton.setEnabled(false);
-        setStatus("Establishing encrypted connection...");
+        setStatus("Connecting to TV...");
 
         final InetAddress address = tvAddress;
         final int port = tvPort;
 
         networkExecutor.execute(() -> {
-            SSLSocket newSocket = null;
+            Socket newSocket = null;
 
             try {
                 newSocket = TvPairingTls.connect(
@@ -708,7 +686,7 @@ public class PhoneRemoteActivity extends Activity {
                     setConnectedControls(true);
 
                     setStatus(
-                            "ENCRYPTED CONNECTION ESTABLISHED. "
+                            "CONNECTION ESTABLISHED. "
                                     + "Choose a stage on your phone."
                     );
 
@@ -730,7 +708,7 @@ public class PhoneRemoteActivity extends Activity {
                         connectButton.setEnabled(true);
 
                         setStatus(
-                                "Secure connection failed: "
+                                "Connection failed: "
                                         + safeMessage(e)
                         );
                     }
