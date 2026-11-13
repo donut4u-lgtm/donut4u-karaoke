@@ -97,7 +97,7 @@ public final class TvSessionController
     }
 
     /**
-     * Starts the shared encrypted phone-TV session.
+     * Starts the shared phone-TV session.
      */
     public synchronized void startSession(Observer sessionObserver) {
         observer = sessionObserver;
@@ -197,6 +197,20 @@ public final class TvSessionController
 
     @Override
     public void onStatusChanged(String message) {
+
+        /*
+         * A newly connected phone starts its command sequence
+         * from 1. Reset the previous phone's sequence so that
+         * commands from the new connection are accepted.
+         *
+         * This does not end or restart the shared TV session.
+         */
+        if (message != null
+                && message.contains("Phone controller connected.")) {
+            lastStateSequence = 0L;
+            lastPhoneState = null;
+        }
+
         Observer current = observer;
 
         if (current != null) {
