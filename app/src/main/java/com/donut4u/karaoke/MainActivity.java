@@ -51,9 +51,6 @@ public class MainActivity extends Activity {
     private AdView adView;
     private AppOpenAd appOpenAd;
 
-    private TextView tvPairingCodeText;
-    private TextView tvPairingStatusText;
-
     private boolean verifiedUserAtLaunch;
     private boolean continuedAfterAd;
     private boolean appOpenAdShowing;
@@ -67,16 +64,18 @@ public class MainActivity extends Activity {
 
         /*
          * ANDROID TV:
-         * Start the TV pairing server and open the TV menu.
+         * Open the TV menu directly.
          *
-         * TV startup does not require a separate Firebase sign-in.
-         * The TV menu is responsible for the standalone TV experience.
+         * TvStageMenuActivity and TvSessionController own
+         * the shared TV pairing session.
+         *
+         * MainActivity must not create another receiver
+         * or replace the active TV session listener.
+         *
+         * TV startup does not require Firebase sign-in.
          */
         if (isAndroidTv()) {
-            startTvPairing();
-
             AppUpdateChecker.checkForUpdates(this);
-
             openSongSearch();
             return;
         }
@@ -117,57 +116,6 @@ public class MainActivity extends Activity {
                     })
             );
         }
-    }
-
-    /**
-     * Starts one application-wide TV pairing session.
-     */
-    private void startTvPairing() {
-        TvKeyboardReceiver.enableSession(
-                getApplicationContext(),
-                new TvKeyboardReceiver.Listener() {
-
-                    @Override
-                    public void onPairingCodeReady(String code) {
-                        runOnUiThread(() -> {
-                            if (tvPairingCodeText != null) {
-                                tvPairingCodeText.setText(code);
-                            }
-
-                            if (tvPairingStatusText != null) {
-                                tvPairingStatusText.setText(
-                                        "READY - CONNECT YOUR PHONE"
-                                );
-                            }
-                        });
-                    }
-
-                    @Override
-                    public void onSearchRequested(String songTitle) {
-                        // The active TV stage handles search requests.
-                    }
-
-                    @Override
-                    public void onStatusChanged(String message) {
-                        runOnUiThread(() -> {
-                            if (tvPairingStatusText != null) {
-                                tvPairingStatusText.setText(message);
-                            }
-                        });
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        runOnUiThread(() -> {
-                            if (tvPairingStatusText != null) {
-                                tvPairingStatusText.setText(
-                                        "PAIRING ERROR: " + message
-                                );
-                            }
-                        });
-                    }
-                }
-        );
     }
 
     private boolean isAndroidTv() {
@@ -377,39 +325,6 @@ public class MainActivity extends Activity {
         subtitle.setPadding(0, dp(10), 0, dp(24));
         root.addView(subtitle, fullWidthWrap());
 
-        if (isAndroidTv()) {
-            TextView pairingLabel = new TextView(this);
-            pairingLabel.setText("PHONE KEYBOARD PAIRING CODE");
-            pairingLabel.setTextColor(MUTED);
-            pairingLabel.setTextSize(15);
-            pairingLabel.setTypeface(null, Typeface.BOLD);
-            pairingLabel.setGravity(Gravity.CENTER);
-            pairingLabel.setPadding(0, dp(8), 0, dp(4));
-            root.addView(pairingLabel, fullWidthWrap());
-
-            tvPairingCodeText = new TextView(this);
-            tvPairingCodeText.setText(
-                    TvKeyboardReceiver.getCurrentPairingCode().isEmpty()
-                            ? "------"
-                            : TvKeyboardReceiver.getCurrentPairingCode()
-            );
-            tvPairingCodeText.setTextColor(GREEN);
-            tvPairingCodeText.setTextSize(42);
-            tvPairingCodeText.setTypeface(null, Typeface.BOLD);
-            tvPairingCodeText.setGravity(Gravity.CENTER);
-            tvPairingCodeText.setLetterSpacing(0.18f);
-            tvPairingCodeText.setPadding(0, dp(2), 0, dp(2));
-            root.addView(tvPairingCodeText, fullWidthWrap());
-
-            tvPairingStatusText = new TextView(this);
-            tvPairingStatusText.setText("STARTING PHONE CONNECTION...");
-            tvPairingStatusText.setTextColor(MUTED);
-            tvPairingStatusText.setTextSize(13);
-            tvPairingStatusText.setGravity(Gravity.CENTER);
-            tvPairingStatusText.setPadding(0, 0, 0, dp(18));
-            root.addView(tvPairingStatusText, fullWidthWrap());
-        }
-
         Button createButton = makeButton("Create account");
         addButton(root, createButton, 10);
         createButton.setOnClickListener(v ->
@@ -424,30 +339,28 @@ public class MainActivity extends Activity {
         addButton(root, shareButton, 18);
         shareButton.setOnClickListener(v -> shareApp());
 
-        if (!isAndroidTv()) {
-            TextView advertisement = new TextView(this);
-            advertisement.setText("Advertisement");
-            advertisement.setTextColor(MUTED);
-            advertisement.setTextSize(12);
-            advertisement.setGravity(Gravity.CENTER);
-            advertisement.setPadding(0, dp(8), 0, dp(8));
-            root.addView(advertisement, fullWidthWrap());
+        TextView advertisement = new TextView(this);
+        advertisement.setText("Advertisement");
+        advertisement.setTextColor(MUTED);
+        advertisement.setTextSize(12);
+        advertisement.setGravity(Gravity.CENTER);
+        advertisement.setPadding(0, dp(8), 0, dp(8));
+        root.addView(advertisement, fullWidthWrap());
 
-            LinearLayout adContainer = new LinearLayout(this);
-            adContainer.setTag("donut4u_banner_container");
-            adContainer.setOrientation(LinearLayout.VERTICAL);
-            adContainer.setGravity(Gravity.CENTER);
-            adContainer.setBackground(
-                    roundDrawable(PANEL, dp(10))
-            );
-            adContainer.setPadding(
-                    dp(4), dp(12), dp(4), dp(12)
-            );
+        LinearLayout adContainer = new LinearLayout(this);
+        adContainer.setTag("donut4u_banner_container");
+        adContainer.setOrientation(LinearLayout.VERTICAL);
+        adContainer.setGravity(Gravity.CENTER);
+        adContainer.setBackground(
+                roundDrawable(PANEL, dp(10))
+        );
+        adContainer.setPadding(
+                dp(4), dp(12), dp(4), dp(12)
+        );
 
-            LinearLayout.LayoutParams adParams = fullWidthWrap();
-            adParams.bottomMargin = dp(20);
-            root.addView(adContainer, adParams);
-        }
+        LinearLayout.LayoutParams adParams = fullWidthWrap();
+        adParams.bottomMargin = dp(20);
+        root.addView(adContainer, adParams);
 
         Button donateButton = makeButton("Donate");
         addButton(root, donateButton, 10);
