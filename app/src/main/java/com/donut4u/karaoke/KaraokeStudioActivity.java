@@ -110,11 +110,48 @@ public class KaraokeStudioActivity extends Activity {
     private WebView videoWebView;
     private AdView adView;
 
-    // PHONE-TO-TV KEYBOARD
+    // SHARED PHONE-TO-TV SESSION
     private boolean tvMode;
-    private TvKeyboardReceiver tvKeyboardReceiver;
+    private TvSessionController tvSessionController;
     private TextView tvKeyboardCodeText;
     private TextView tvKeyboardStatusText;
+
+    private final TvSessionController.TvCommandHandler tvCommandHandler =
+            new TvSessionController.TvCommandHandler() {
+
+        @Override
+        public void onPhoneSearchRequested(String songTitle) {
+            mainHandler.post(() -> {
+                if (activityDestroyed || searchInput == null) {
+                    return;
+                }
+
+                showSearchScreen();
+
+                searchInput.setText(songTitle);
+                searchInput.setSelection(
+                        searchInput.getText().length()
+                );
+
+                searchSongs();
+            });
+        }
+
+        @Override
+        public void onPhoneTextInput(
+                String target,
+                String text,
+                String action
+        ) {
+            mainHandler.post(() -> {
+                if (activityDestroyed || searchInput == null) {
+                    return;
+                }
+
+                applyTvTextInput(target, text, action);
+            });
+        }
+    };
 
     // STAGE 2 MICROPHONE AND SINGING SCORE
     private Stage3MicrophoneMonitor microphoneMonitor;
@@ -291,7 +328,6 @@ public class KaraokeStudioActivity extends Activity {
 
         root.addView(subtitle, subtitleParams);
 
-        // Shared status stays visible on both screens.
         statusText = text(
                 "Enter a song title or artist to begin.",
                 14, MUTED, false
@@ -304,9 +340,7 @@ public class KaraokeStudioActivity extends Activity {
 
         root.addView(statusText, statusParams);
 
-        // --------------------------------------------
         // SEARCH SCREEN
-        // --------------------------------------------
 
         searchPanel = new LinearLayout(this);
         searchPanel.setOrientation(LinearLayout.VERTICAL);
@@ -414,9 +448,7 @@ public class KaraokeStudioActivity extends Activity {
 
         searchPanel.addView(resultsContainer, matchWrap());
 
-        // --------------------------------------------
         // PLAYER SCREEN
-        // --------------------------------------------
 
         playerPanel = new LinearLayout(this);
         playerPanel.setOrientation(LinearLayout.VERTICAL);
@@ -561,7 +593,6 @@ public class KaraokeStudioActivity extends Activity {
             }
         });
 
-        // PLAYER HEIGHT: 280dp
         LinearLayout.LayoutParams videoParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
@@ -641,7 +672,6 @@ public class KaraokeStudioActivity extends Activity {
                 v -> stopPlayback()
         );
 
-        // STAGE 2 SINGING PERFORMANCE PANEL
         addStage2MicrophonePanel();
 
         addSectionTitle("SUPPORT DONUT4U KARAOKE");
@@ -789,7 +819,6 @@ public class KaraokeStudioActivity extends Activity {
 
         playerPanel.addView(adView, adParams);
 
-        // Start on the search screen.
         showSearchScreen();
     }
 
@@ -977,7 +1006,7 @@ public class KaraokeStudioActivity extends Activity {
         );
 
         tvKeyboardStatusText = text(
-                "Starting phone keyboard connection...",
+                "Preparing phone connection...",
                 13, MUTED, false
         );
 
@@ -991,13 +1020,16 @@ public class KaraokeStudioActivity extends Activity {
         );
     }
 
+    /**
+     * Stage 2 registers as a handler with the existing
+     * application-wide phone-TV session.
+     *
+     * The TV menu owns and starts the shared session.
+     * This Activity must never create or stop a receiver.
+     */
     private void startTvPhoneKeyboardReceiver() {
 
         if (!tvMode || activityDestroyed) {
-            return;
-        }
-
-        if (tvKeyboardReceiver != null) {
             return;
         }
 
@@ -1006,85 +1038,66 @@ public class KaraokeStudioActivity extends Activity {
             return;
         }
 
-        tvKeyboardReceiver =
-                new TvKeyboardReceiver(
-                        getApplicationContext(),
-                        new TvKeyboardReceiver.Listener() {
-
-            @Override
-            public void onPairingCodeReady(String code) {
-
-                if (activityDestroyed
-                        || tvKeyboardCodeText == null) {
-                    return;
-                }
-
-                tvKeyboardCodeText.setText(code);
-            }
-
-            @Override
-            public void onSearchRequested(String songTitle) {
-
-                if (activityDestroyed
-                        || searchInput == null) {
-                    return;
-                }
-
-                showSearchScreen();
-
-                searchInput.setText(songTitle);
-                searchInput.setSelection(
-                        searchInput.getText().length()
+        tvSessionController =
+                TvSessionController.getInstance(
+                        getApplicationContext()
                 );
 
-                searchSongs();
-            }
+        tvSessionController.setActiveStage(2);
 
-            @Override
-            public void onTextInput(
-                    String target,
-                    String text,
-                    String action
-            ) {
+        tvSessionController.registerStageHandler(
+                tvCommandHandler
+        );
 
-                if (activityDestroyed
-                        || searchInput == null) {
-                    return;
-                }
+        String code =
+                tvSessionController.getPairingCode();
 
-                applyTvTextInput(
-                        target,
-                        text,
-                        action
-                );
-            }
+        if (code != null && !code.isEmpty()) {
 
-            @Override
-            public void onStatusChanged(String message) {
+            tvKeyboardCodeText.setText(code);
 
-                if (activityDestroyed
-                        || tvKeyboardStatusText == null) {
-                    return;
-                }
+            tvKeyboardStatusText.setText(
+                    "Use the code above in Donut4U Phone Remote."
+            );
 
-                tvKeyboardStatusText.setText(message);
-            }
+        } else {
 
-            @Override
-            public void onError(String message) {
+            tvKeyboardStatusText.setText(
+                    "Waiting for the shared phone-TV session..."
+            );
 
-                if (activityDestroyed
-                        || tvKeyboardStatusText == null) {
-                    return;
-                }
+            Log.w(
+                    TAG,
+                    "Stage 2 registered, but the shared TV session "
+                            + "has not supplied a pairing code."
+            );
+        }
+    }
 
-                tvKeyboardStatusText.setText(message);
+    /**
+     * Unregisters Stage 2 only.
+     *
+     * It deliberately does not call endSession(),
+     * disableSession(), or stop() on the shared receiver.
+     */
+    private void stopTvPhoneKeyboardReceiver() {
 
-                Log.e(TAG, message);
-            }
-        });
+        if (tvSessionController != null) {
 
-        tvKeyboardReceiver.start();
+            tvSessionController.unregisterStageHandler(
+                    tvCommandHandler
+            );
+
+            tvSessionController = null;
+        }
+
+        if (tvKeyboardStatusText != null
+                && !activityDestroyed) {
+
+            tvKeyboardStatusText.setText(
+                    "Stage 2 phone keyboard handler disconnected."
+            );
+        }
     }
 
     /**
@@ -1225,7 +1238,6 @@ public class KaraokeStudioActivity extends Activity {
                     int deleteStart =
                             lower - 1;
 
-                    // Keep a Unicode surrogate pair together.
                     if (deleteStart > 0
                             && Character.isLowSurrogate(
                                     editable.charAt(deleteStart)
@@ -1282,23 +1294,6 @@ public class KaraokeStudioActivity extends Activity {
         if (tvKeyboardStatusText != null) {
             tvKeyboardStatusText.setText(
                     "Phone keyboard connected. Text received."
-            );
-        }
-    }
-
-    private void stopTvPhoneKeyboardReceiver() {
-
-        if (tvKeyboardReceiver != null) {
-
-            tvKeyboardReceiver.stop();
-            tvKeyboardReceiver = null;
-        }
-
-        if (tvKeyboardStatusText != null
-                && !activityDestroyed) {
-
-            tvKeyboardStatusText.setText(
-                    "Phone keyboard disconnected."
             );
         }
     }
@@ -2352,7 +2347,6 @@ public class KaraokeStudioActivity extends Activity {
                         : "\n" + currentArtist)
         );
 
-        // Move to the dedicated player screen.
         showPlayerScreen();
 
         setStatus("Opening YouTube player...");
@@ -2587,8 +2581,6 @@ public class KaraokeStudioActivity extends Activity {
 
     private void hideKeyboard() {
 
-        // Keep the TV search field focused so its green
-        // focus border remains visible after a phone search.
         if (tvMode) {
             return;
         }
@@ -2657,12 +2649,10 @@ public class KaraokeStudioActivity extends Activity {
     @Override
     protected void onPause() {
 
-        // Stop the local receiver when Stage 2 is no
-        // longer the active TV screen.
+        // Unregister Stage 2 only.
+        // The shared phone-TV receiver remains alive.
         stopTvPhoneKeyboardReceiver();
 
-        // Stop microphone capture when leaving Stage 2.
-        // Tap the microphone button again after returning.
         stopStage2Microphone(false);
 
         if (adView != null) {
