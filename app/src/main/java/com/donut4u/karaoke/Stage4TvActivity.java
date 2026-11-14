@@ -1,92 +1,95 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
-import android.content.ClipData;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
-import android.net.Uri;
 import android.os.Bundle;
-import android.provider.OpenableColumns;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.BaseAdapter;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.content.Context;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-public class Stage4TvActivity extends Activity {
-
-    private static final String SONGBOOK_PREFS =
-            "donut4u_stage3_songbook";
-
-    private static final String SONGS_KEY = "songs_json";
-
-    private static final int REQUEST_IMPORT_TV_SONGS = 4101;
-
-    private static final String EXTRA_NUMBER = "stage4_song_number";
-    private static final String EXTRA_TITLE = "stage4_song_title";
-    private static final String EXTRA_URI = "stage4_song_uri";
-    private static final String EXTRA_TYPE = "stage4_song_type";
+public class Stage1TvActivity extends Activity {
 
     private static final int BACKGROUND =
-            Color.rgb(8, 20, 25);
+            Color.rgb(8, 18, 25);
 
     private static final int PANEL =
-            Color.rgb(20, 39, 42);
+            Color.rgb(18, 42, 48);
 
     private static final int GREEN =
-            Color.rgb(0, 220, 115);
+            Color.rgb(50, 220, 130);
 
     private static final int WHITE =
-            Color.rgb(245, 250, 247);
+            Color.WHITE;
 
     private static final int MUTED =
-            Color.rgb(175, 193, 187);
+            Color.rgb(180, 195, 195);
 
-    private final ArrayList<TvSong> songs =
+    private final ExecutorService executor =
+            Executors.newSingleThreadExecutor();
+
+    private final ArrayList<Video> videos =
             new ArrayList<>();
 
-    private SharedPreferences preferences;
+    private LinearLayout resultsContainer;
+    private EditText searchInput;
+    private Button searchButton;
+    private TextView statusText;
 
-    private ListView songList;
-    private TextView countLabel;
-    private TextView emptyLabel;
-    private Button importButton;
-    private SongAdapter adapter;
+    private ScrollView searchScroll;
+    private View searchScreen;
 
-    private int nextNumber = 10000;
-    private int totalSavedEntries;
+    private LinearLayout playerScreen;
+    private WebView player;
 
-    private static final class TvSong {
-        final String number;
+    private volatile boolean destroyed = false;
+
+    private int searchGeneration = 0;
+
+    private static final class Video {
+        final String id;
         final String title;
-        final String uri;
-        final String type;
+        final String channel;
 
-        TvSong(
-                String number,
+        Video(
+                String id,
                 String title,
-                String uri,
-                String type
+                String channel
         ) {
-            this.number = number;
+            this.id = id;
             this.title = title;
-            this.uri = uri;
-            this.type = type;
+            this.channel = channel;
         }
     }
 
@@ -101,20 +104,8 @@ public class Stage4TvActivity extends Activity {
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         );
 
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-        );
-
-        preferences = getSharedPreferences(
-                SONGBOOK_PREFS,
-                MODE_PRIVATE
-        );
-
-        loadSongs();
-        buildScreen();
+        hideSystemUi();
+        buildSearchScreen();
     }
 
     private int dp(float value) {
@@ -124,171 +115,108 @@ public class Stage4TvActivity extends Activity {
         );
     }
 
-    private void loadSongs() {
-        songs.clear();
-        totalSavedEntries = 0;
-        nextNumber = 10000;
-
-        try {
-            String savedJson =
-                    preferences.getString(SONGS_KEY, "[]");
-
-            JSONArray array = new JSONArray(savedJson);
-
-            totalSavedEntries = array.length();
-
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject object = array.optJSONObject(i);
-
-                if (object == null) {
-                    continue;
-                }
-
-                String number =
-                        object.optString("number", "");
-
-                String title =
-                        object.optString("title", "");
-
-                String uri =
-                        object.optString("uri", "");
-
-                String type =
-                        object.optString("type", "AUDIO");
-
-                if (number.trim().isEmpty()
-                        || title.trim().isEmpty()
-                        || uri.trim().isEmpty()) {
-                    continue;
-                }
-
-                updateNextNumber(number);
-
-                if (!isPlayableEntry(title, type)) {
-                    continue;
-                }
-
-                songs.add(new TvSong(
-                        number,
-                        title,
-                        uri,
-                        type
-                ));
-            }
-
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not load TV songbook.",
-                    e
-            );
-
-            Toast.makeText(
-                    this,
-                    "Could not read the TV songbook.",
-                    Toast.LENGTH_LONG
-            ).show();
-        }
+    private void hideSystemUi() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
     }
 
-    private void updateNextNumber(String number) {
-        try {
-            int value = Integer.parseInt(number);
-
-            if (value >= nextNumber && value < 99999) {
-                nextNumber = value + 1;
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    private String generateNumber() {
-        String candidate;
-
-        do {
-            candidate = String.format(
-                    Locale.US,
-                    "%05d",
-                    nextNumber++
-            );
-
-            if (nextNumber > 99999) {
-                nextNumber = 10000;
-            }
-
-        } while (numberExists(candidate));
-
-        return candidate;
-    }
-
-    private boolean numberExists(String number) {
-        try {
-            JSONArray array = new JSONArray(
-                    preferences.getString(SONGS_KEY, "[]")
-            );
-
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject object = array.optJSONObject(i);
-
-                if (object != null
-                        && number.equals(
-                                object.optString("number", ""))) {
-                    return true;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-
-        return false;
-    }
-
-    private boolean isPlayableEntry(
-            String title,
-            String type
+    private GradientDrawable roundedBackground(
+            int color,
+            int strokeColor
     ) {
-        String safeTitle = title == null
-                ? ""
-                : title.toLowerCase(Locale.ROOT);
+        GradientDrawable drawable =
+                new GradientDrawable();
 
-        String safeType = type == null
-                ? ""
-                : type.toUpperCase(Locale.ROOT);
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(12));
 
-        return !"CATALOG".equals(safeType)
-                && !"SOUNDFONT".equals(safeType)
-                && !"LYRICS".equals(safeType)
-                && !safeTitle.endsWith(".sf2")
-                && !safeTitle.endsWith(".lrc");
+        if (strokeColor != Color.TRANSPARENT) {
+            drawable.setStroke(dp(2), strokeColor);
+        }
+
+        return drawable;
     }
 
-    private void buildScreen() {
+    private LinearLayout.LayoutParams fullWidth(
+            int height
+    ) {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                height
+        );
+    }
+
+    private LinearLayout.LayoutParams fullWidthWrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+    }
+
+    private Button makeButton(String label) {
+        Button button = new Button(this);
+
+        button.setText(label);
+        button.setTextColor(WHITE);
+        button.setTextSize(17);
+        button.setAllCaps(false);
+        button.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
+
+        button.setBackground(
+                roundedBackground(PANEL, GREEN)
+        );
+
+        button.setPadding(
+                dp(16),
+                dp(10),
+                dp(16),
+                dp(10)
+        );
+
+        button.setFocusable(true);
+        button.setFocusableInTouchMode(true);
+
+        return button;
+    }
+
+    private void buildSearchScreen() {
+        searchScroll = new ScrollView(this);
+        searchScroll.setFillViewport(true);
+        searchScroll.setBackgroundColor(BACKGROUND);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(BACKGROUND);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(
-                dp(54),
-                dp(18),
-                dp(54),
-                dp(16)
+                dp(42),
+                dp(22),
+                dp(42),
+                dp(24)
         );
+
+        searchScroll.addView(root);
 
         TextView brand = new TextView(this);
         brand.setText("DONUT4U KARAOKE");
         brand.setTextColor(GREEN);
-        brand.setTextSize(19);
+        brand.setTextSize(22);
         brand.setTypeface(
                 Typeface.DEFAULT,
                 Typeface.BOLD
         );
         brand.setGravity(Gravity.CENTER);
 
-        root.addView(
-                brand,
-                new LinearLayout.LayoutParams(-1, dp(32))
-        );
+        root.addView(brand, fullWidthWrap());
 
         TextView heading = new TextView(this);
-        heading.setText("CHOOSE YOUR KARAOKE SONG");
+        heading.setText("STAGE 1 - YOUTUBE KARAOKE");
         heading.setTextColor(WHITE);
         heading.setTextSize(29);
         heading.setTypeface(
@@ -296,655 +224,652 @@ public class Stage4TvActivity extends Activity {
                 Typeface.BOLD
         );
         heading.setGravity(Gravity.CENTER);
-        heading.setPadding(0, dp(5), 0, dp(5));
-
-        root.addView(
-                heading,
-                new LinearLayout.LayoutParams(-1, dp(54))
+        heading.setPadding(
+                0,
+                dp(10),
+                0,
+                dp(8)
         );
 
-        countLabel = new TextView(this);
-        countLabel.setTextColor(MUTED);
-        countLabel.setTextSize(15);
-        countLabel.setGravity(Gravity.CENTER);
-        countLabel.setPadding(0, dp(2), 0, dp(8));
-
-        root.addView(
-                countLabel,
-                new LinearLayout.LayoutParams(-1, dp(38))
-        );
-
-        importButton = new Button(this);
-        importButton.setText("IMPORT SONGS FROM THIS TV");
-        importButton.setTextSize(17);
-        importButton.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
-        importButton.setTextColor(Color.BLACK);
-        importButton.setAllCaps(false);
-        importButton.setBackground(createImportBackground());
-        importButton.setFocusable(true);
-        importButton.setFocusableInTouchMode(true);
-        importButton.setOnClickListener(v -> chooseSongsFromTv());
-
-        LinearLayout.LayoutParams importParams =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(54)
-                );
-
-        importParams.bottomMargin = dp(10);
-
-        root.addView(importButton, importParams);
-
-        emptyLabel = new TextView(this);
-        emptyLabel.setText(
-                "No songs imported on this TV yet.\n"
-                        + "Choose IMPORT SONGS FROM THIS TV."
-        );
-        emptyLabel.setTextColor(MUTED);
-        emptyLabel.setTextSize(18);
-        emptyLabel.setGravity(Gravity.CENTER);
-        emptyLabel.setPadding(
-                dp(20), dp(20), dp(20), dp(20)
-        );
-
-        songList = new ListView(this);
-        songList.setBackgroundColor(BACKGROUND);
-        songList.setDivider(
-                new android.graphics.drawable.ColorDrawable(
-                        Color.rgb(35, 55, 57)
-                )
-        );
-        songList.setDividerHeight(dp(5));
-        songList.setPadding(
-                dp(8), dp(5), dp(8), dp(5)
-        );
-        songList.setClipToPadding(false);
-        songList.setFocusable(true);
-        songList.setFocusableInTouchMode(true);
-        songList.setItemsCanFocus(false);
-        songList.setSelector(createListSelector());
-
-        adapter = new SongAdapter();
-        songList.setAdapter(adapter);
-        songList.setEmptyView(emptyLabel);
-
-        songList.setOnItemClickListener(
-                (parent, view, position, id) -> {
-                    if (position >= 0
-                            && position < songs.size()) {
-                        playSong(songs.get(position));
-                    }
-                }
-        );
-
-        root.addView(
-                songList,
-                new LinearLayout.LayoutParams(-1, 0, 1f)
-        );
-
-        root.addView(
-                emptyLabel,
-                new LinearLayout.LayoutParams(-1, 0, 1f)
-        );
+        root.addView(heading, fullWidthWrap());
 
         TextView instructions = new TextView(this);
         instructions.setText(
-                "REMOTE: UP / DOWN to choose  •  OK to select  •  BACK to exit"
+                "Search for a song title or artist, then choose a video."
         );
         instructions.setTextColor(MUTED);
-        instructions.setTextSize(14);
+        instructions.setTextSize(16);
         instructions.setGravity(Gravity.CENTER);
-        instructions.setPadding(0, dp(8), 0, 0);
+        instructions.setPadding(
+                0,
+                0,
+                0,
+                dp(18)
+        );
+
+        root.addView(instructions, fullWidthWrap());
+
+        searchInput = new EditText(this);
+        searchInput.setSingleLine(true);
+        searchInput.setTextColor(WHITE);
+        searchInput.setHintTextColor(MUTED);
+        searchInput.setHint("Enter song title or artist");
+        searchInput.setTextSize(19);
+        searchInput.setPadding(
+                dp(16),
+                0,
+                dp(16),
+                0
+        );
+        searchInput.setBackground(
+                roundedBackground(PANEL, GREEN)
+        );
+        searchInput.setFocusable(true);
+        searchInput.setFocusableInTouchMode(true);
+        searchInput.setShowSoftInputOnFocus(true);
+        searchInput.setImeOptions(
+                EditorInfo.IME_ACTION_SEARCH
+        );
 
         root.addView(
-                instructions,
-                new LinearLayout.LayoutParams(-1, dp(30))
+                searchInput,
+                fullWidth(dp(58))
         );
 
-        setContentView(root);
+        searchButton = makeButton("SEARCH YOUTUBE");
 
-        updateCount();
+        LinearLayout.LayoutParams searchParams =
+                fullWidth(dp(58));
 
-        if (songs.isEmpty()) {
-            importButton.requestFocus();
-        } else {
-            songList.setSelection(0);
-            songList.requestFocus();
+        searchParams.topMargin = dp(12);
+
+        root.addView(searchButton, searchParams);
+
+        searchButton.setOnClickListener(
+                v -> searchVideos()
+        );
+
+        searchInput.setOnEditorActionListener(
+                (view, actionId, event) -> {
+                    boolean enterPressed =
+                            event != null
+                                    && event.getAction()
+                                    == KeyEvent.ACTION_UP
+                                    && (event.getKeyCode()
+                                    == KeyEvent.KEYCODE_ENTER
+                                    || event.getKeyCode()
+                                    == KeyEvent.KEYCODE_NUMPAD_ENTER);
+
+                    if (actionId == EditorInfo.IME_ACTION_SEARCH
+                            || enterPressed) {
+                        searchVideos();
+                        return true;
+                    }
+
+                    return false;
+                }
+        );
+
+        statusText = new TextView(this);
+        statusText.setText(
+                "Ready to search YouTube."
+        );
+        statusText.setTextColor(MUTED);
+        statusText.setTextSize(15);
+        statusText.setGravity(Gravity.CENTER);
+        statusText.setPadding(
+                0,
+                dp(14),
+                0,
+                dp(12)
+        );
+
+        root.addView(statusText, fullWidthWrap());
+
+        resultsContainer = new LinearLayout(this);
+        resultsContainer.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        root.addView(
+                resultsContainer,
+                fullWidthWrap()
+        );
+
+        Button backButton = makeButton("BACK TO TV STAGE MENU");
+
+        LinearLayout.LayoutParams backParams =
+                fullWidth(dp(54));
+
+        backParams.topMargin = dp(18);
+
+        root.addView(backButton, backParams);
+
+        backButton.setOnClickListener(v -> finish());
+
+        searchScreen = searchScroll;
+
+        setContentView(searchScreen);
+
+        searchInput.requestFocus();
+    }
+
+    private String normalizedQuery(String query) {
+        String result = query.trim();
+
+        if (!result.toLowerCase().contains("karaoke")) {
+            result += " karaoke";
         }
+
+        return result;
     }
 
-    private GradientDrawable createImportBackground() {
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(GREEN);
-        background.setCornerRadius(dp(10));
-        return background;
-    }
-
-    private StateListDrawable createListSelector() {
-        StateListDrawable selector = new StateListDrawable();
-
-        GradientDrawable focused = new GradientDrawable();
-        focused.setColor(PANEL);
-        focused.setCornerRadius(dp(10));
-        focused.setStroke(dp(3), GREEN);
-
-        GradientDrawable pressed = new GradientDrawable();
-        pressed.setColor(Color.rgb(35, 75, 55));
-        pressed.setCornerRadius(dp(10));
-        pressed.setStroke(dp(3), GREEN);
-
-        GradientDrawable normal = new GradientDrawable();
-        normal.setColor(Color.rgb(18, 34, 37));
-        normal.setCornerRadius(dp(10));
-        normal.setStroke(
-                dp(1),
-                Color.rgb(40, 65, 65)
-        );
-
-        selector.addState(
-                new int[]{android.R.attr.state_pressed},
-                pressed
-        );
-
-        selector.addState(
-                new int[]{android.R.attr.state_focused},
-                focused
-        );
-
-        selector.addState(new int[]{}, normal);
-
-        return selector;
-    }
-
-    private void updateCount() {
-        if (countLabel == null) {
+    private void searchVideos() {
+        if (destroyed) {
             return;
         }
 
-        countLabel.setText(
-                "AVAILABLE SONGS: " + songs.size()
-                        + "   •   SAVED FILES: "
-                        + totalSavedEntries
+        String query = searchInput.getText()
+                .toString()
+                .trim();
+
+        if (query.isEmpty()) {
+            Toast.makeText(
+                    this,
+                    "Enter a song title or artist.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            searchInput.requestFocus();
+            return;
+        }
+
+        InputMethodManager keyboard =
+                (InputMethodManager) getSystemService(
+                        Context.INPUT_METHOD_SERVICE
+                );
+
+        if (keyboard != null) {
+            keyboard.hideSoftInputFromWindow(
+                    searchInput.getWindowToken(),
+                    0
+            );
+        }
+
+        String apiKey = BuildConfig.YOUTUBE_API_KEY;
+
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            statusText.setText(
+                    "YouTube API key is missing. Check the YOUTUBE_API_KEY GitHub secret."
+            );
+            return;
+        }
+
+        final int generation = ++searchGeneration;
+
+        final String searchQuery =
+                normalizedQuery(query);
+
+        searchButton.setEnabled(false);
+        resultsContainer.removeAllViews();
+        videos.clear();
+
+        statusText.setText("Searching YouTube...");
+
+        executor.execute(() -> {
+            ArrayList<Video> found =
+                    new ArrayList<>();
+
+            String error = null;
+
+            HttpURLConnection connection = null;
+
+            try {
+                String encodedQuery =
+                        URLEncoder.encode(
+                                searchQuery,
+                                "UTF-8"
+                        );
+
+                String encodedKey =
+                        URLEncoder.encode(
+                                apiKey,
+                                "UTF-8"
+                        );
+
+                String requestUrl =
+                        "https://www.googleapis.com/youtube/v3/search"
+                                + "?part=snippet&type=video"
+                                + "&videoEmbeddable=true"
+                                + "&maxResults=25"
+                                + "&regionCode=PH"
+                                + "&q=" + encodedQuery
+                                + "&key=" + encodedKey;
+
+                connection = (HttpURLConnection)
+                        new URL(requestUrl).openConnection();
+
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(15000);
+
+                int responseCode =
+                        connection.getResponseCode();
+
+                InputStream stream =
+                        responseCode >= 200
+                                && responseCode < 300
+                                ? connection.getInputStream()
+                                : connection.getErrorStream();
+
+                String response = readAll(stream);
+
+                if (responseCode < 200
+                        || responseCode >= 300) {
+
+                    JSONObject errorJson =
+                            new JSONObject(response);
+
+                    JSONObject errorObject =
+                            errorJson.optJSONObject("error");
+
+                    String message = errorObject == null
+                            ? ""
+                            : errorObject.optString(
+                                    "message",
+                                    ""
+                            );
+
+                    throw new Exception(
+                            message.isEmpty()
+                                    ? "YouTube API error: HTTP "
+                                    + responseCode
+                                    : message
+                    );
+                }
+
+                JSONObject json =
+                        new JSONObject(response);
+
+                JSONArray items =
+                        json.optJSONArray("items");
+
+                if (items != null) {
+                    for (int i = 0; i < items.length(); i++) {
+                        JSONObject item =
+                                items.optJSONObject(i);
+
+                        if (item == null) {
+                            continue;
+                        }
+
+                        JSONObject idObject =
+                                item.optJSONObject("id");
+
+                        JSONObject snippet =
+                                item.optJSONObject("snippet");
+
+                        if (idObject == null
+                                || snippet == null) {
+                            continue;
+                        }
+
+                        String videoId =
+                                idObject.optString(
+                                        "videoId",
+                                        ""
+                                );
+
+                        if (!videoId.matches(
+                                "[A-Za-z0-9_-]{6,20}")) {
+                            continue;
+                        }
+
+                        String title =
+                                snippet.optString(
+                                        "title",
+                                        "YouTube karaoke video"
+                                );
+
+                        String channel =
+                                snippet.optString(
+                                        "channelTitle",
+                                        "YouTube channel"
+                                );
+
+                        found.add(
+                                new Video(
+                                        videoId,
+                                        title,
+                                        channel
+                                )
+                        );
+                    }
+                }
+
+            } catch (Exception e) {
+                error = e.getMessage() == null
+                        ? "Unable to search YouTube."
+                        : e.getMessage();
+
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+
+            final String finalError = error;
+            final ArrayList<Video> results = found;
+
+            runOnUiThread(() -> {
+                if (destroyed
+                        || isFinishing()
+                        || generation != searchGeneration) {
+                    return;
+                }
+
+                searchButton.setEnabled(true);
+
+                if (finalError != null) {
+                    statusText.setText(
+                            "YouTube search failed: "
+                                    + finalError
+                    );
+                    return;
+                }
+
+                if (results.isEmpty()) {
+                    statusText.setText(
+                            "No embeddable videos found. Try another search."
+                    );
+                    return;
+                }
+
+                videos.clear();
+                videos.addAll(results);
+
+                statusText.setText(
+                        "FOUND " + videos.size()
+                                + " VIDEOS - SELECT ONE TO PLAY"
+                );
+
+                displayResults();
+            });
+        });
+    }
+
+    private String readAll(InputStream stream)
+            throws Exception {
+
+        if (stream == null) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        try (BufferedReader reader =
+                     new BufferedReader(
+                             new InputStreamReader(
+                                     stream,
+                                     StandardCharsets.UTF_8
+                             )
+                     )) {
+
+            String line;
+
+            while ((line = reader.readLine()) != null) {
+                builder.append(line);
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private void displayResults() {
+        resultsContainer.removeAllViews();
+
+        for (int i = 0; i < videos.size(); i++) {
+            Video video = videos.get(i);
+
+            Button resultButton =
+                    makeButton(
+                            (i + 1) + ".  " + video.title
+                                    + "\n"
+                                    + video.channel
+                    );
+
+            resultButton.setTextSize(16);
+            resultButton.setGravity(
+                    Gravity.CENTER_VERTICAL
+                            | Gravity.LEFT
+            );
+            resultButton.setMaxLines(3);
+            resultButton.setMinHeight(dp(76));
+
+            LinearLayout.LayoutParams params =
+                    fullWidth(
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                    );
+
+            params.bottomMargin = dp(10);
+
+            resultsContainer.addView(
+                    resultButton,
+                    params
+            );
+
+            resultButton.setOnClickListener(
+                    v -> playVideo(video)
+            );
+        }
+
+        if (resultsContainer.getChildCount() > 0) {
+            resultsContainer.getChildAt(0).requestFocus();
+        }
+    }
+
+    private void playVideo(Video video) {
+        if (destroyed || video == null) {
+            return;
+        }
+
+        showPlayerScreen(video);
+    }
+
+    private void showPlayerScreen(Video video) {
+        playerScreen = new LinearLayout(this);
+        playerScreen.setOrientation(
+                LinearLayout.VERTICAL
+        );
+        playerScreen.setGravity(Gravity.CENTER);
+        playerScreen.setBackgroundColor(Color.BLACK);
+        playerScreen.setPadding(
+                dp(24),
+                dp(18),
+                dp(24),
+                dp(18)
+        );
+
+        TextView title = new TextView(this);
+        title.setText(video.title);
+        title.setTextColor(WHITE);
+        title.setTextSize(21);
+        title.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
+        title.setGravity(Gravity.CENTER);
+        title.setMaxLines(2);
+
+        playerScreen.addView(
+                title,
+                fullWidth(dp(62))
+        );
+
+        TextView channel = new TextView(this);
+        channel.setText(video.channel);
+        channel.setTextColor(MUTED);
+        channel.setTextSize(14);
+        channel.setGravity(Gravity.CENTER);
+
+        playerScreen.addView(
+                channel,
+                fullWidth(dp(32))
+        );
+
+        FrameLayout videoFrame = new FrameLayout(this);
+        videoFrame.setBackgroundColor(Color.BLACK);
+
+        LinearLayout.LayoutParams videoParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                );
+
+        videoParams.topMargin = dp(8);
+        videoParams.bottomMargin = dp(10);
+
+        playerScreen.addView(
+                videoFrame,
+                videoParams
+        );
+
+        player = new WebView(this);
+
+        WebSettings settings = player.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+
+        player.setBackgroundColor(Color.BLACK);
+        player.setWebChromeClient(new WebChromeClient());
+        player.setWebViewClient(new WebViewClient());
+
+        videoFrame.addView(
+                player,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                )
+        );
+
+        Button backButton =
+                makeButton("BACK TO SEARCH RESULTS");
+
+        playerScreen.addView(
+                backButton,
+                fullWidth(dp(56))
+        );
+
+        backButton.setOnClickListener(
+                v -> returnToSearch()
+        );
+
+        setContentView(playerScreen);
+
+        String html =
+                "<!DOCTYPE html>"
+                        + "<html><head>"
+                        + "<meta name='viewport' "
+                        + "content='width=device-width,"
+                        + "initial-scale=1,maximum-scale=1'>"
+                        + "<style>"
+                        + "html,body{margin:0;padding:0;"
+                        + "width:100%;height:100%;"
+                        + "background:#000;overflow:hidden;}"
+                        + "iframe{width:100%;height:100%;"
+                        + "border:0;}"
+                        + "</style></head><body>"
+                        + "<iframe "
+                        + "src='https://www.youtube.com/embed/"
+                        + video.id
+                        + "?autoplay=1&playsinline=1"
+                        + "&rel=0&modestbranding=1' "
+                        + "allow='autoplay; encrypted-media; "
+                        + "picture-in-picture' "
+                        + "allowfullscreen>"
+                        + "</iframe>"
+                        + "</body></html>";
+
+        player.loadDataWithBaseURL(
+                "https://www.youtube.com/",
+                html,
+                "text/html",
+                "UTF-8",
+                null
         );
     }
 
-    private void chooseSongsFromTv() {
-        Intent intent = new Intent(
-                Intent.ACTION_OPEN_DOCUMENT
-        );
+    private void returnToSearch() {
+        destroyPlayer();
 
-        intent.addCategory(
-                Intent.CATEGORY_OPENABLE
-        );
+        if (searchScreen != null) {
+            setContentView(searchScreen);
 
-        intent.setType("*/*");
+            if (resultsContainer != null
+                    && resultsContainer.getChildCount() > 0) {
+                resultsContainer.getChildAt(0).requestFocus();
+            } else if (searchInput != null) {
+                searchInput.requestFocus();
+            }
+        }
+    }
 
-        intent.putExtra(
-                Intent.EXTRA_ALLOW_MULTIPLE,
-                true
-        );
+    private void destroyPlayer() {
+        if (player != null) {
+            try {
+                player.stopLoading();
+                player.loadUrl("about:blank");
+                player.removeAllViews();
+                player.destroy();
+            } catch (Exception ignored) {
+            }
 
-        intent.addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-        );
-
-        try {
-            startActivityForResult(
-                    intent,
-                    REQUEST_IMPORT_TV_SONGS
-            );
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not open TV file picker.",
-                    e
-            );
-
-            Toast.makeText(
-                    this,
-                    "Cannot open the TV file picker.",
-                    Toast.LENGTH_LONG
-            ).show();
+            player = null;
         }
     }
 
     @Override
-    protected void onActivityResult(
-            int requestCode,
-            int resultCode,
-            Intent data
-    ) {
-        super.onActivityResult(
-                requestCode,
-                resultCode,
-                data
-        );
-
-        if (requestCode != REQUEST_IMPORT_TV_SONGS
-                || resultCode != RESULT_OK
-                || data == null) {
+    public void onBackPressed() {
+        if (player != null) {
+            returnToSearch();
             return;
         }
 
-        int imported = 0;
-        int skipped = 0;
-
-        ClipData clip = data.getClipData();
-
-        if (clip != null) {
-            for (int i = 0; i < clip.getItemCount(); i++) {
-                Uri uri = clip.getItemAt(i).getUri();
-
-                if (importSong(uri, data.getFlags())) {
-                    imported++;
-                } else {
-                    skipped++;
-                }
-            }
-        } else {
-            Uri uri = data.getData();
-
-            if (uri != null) {
-                if (importSong(uri, data.getFlags())) {
-                    imported++;
-                } else {
-                    skipped++;
-                }
-            }
-        }
-
-        saveSongs();
-
-        loadSongs();
-
-        if (adapter != null) {
-            adapter.notifyDataSetChanged();
-        }
-
-        updateCount();
-
-        Toast.makeText(
-                this,
-                "Imported: " + imported
-                        + "   Skipped: " + skipped,
-                Toast.LENGTH_LONG
-        ).show();
-
-        if (!songs.isEmpty()) {
-            songList.setSelection(0);
-            songList.requestFocus();
-        } else {
-            importButton.requestFocus();
-        }
-    }
-
-    /*
-     * Only save a song after Android confirms that read access
-     * can be persisted. This prevents dead entries in the songbook.
-     */
-    private boolean importSong(Uri uri, int flags) {
-        if (uri == null) {
-            return false;
-        }
-
-        String uriString = uri.toString();
-
-        try {
-            JSONArray existing = new JSONArray(
-                    preferences.getString(SONGS_KEY, "[]")
-            );
-
-            for (int i = 0; i < existing.length(); i++) {
-                JSONObject object = existing.optJSONObject(i);
-
-                if (object != null
-                        && uriString.equals(
-                                object.optString("uri", ""))) {
-                    return false;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-
-        String fileName = getFileName(uri);
-        String extension = getExtension(fileName);
-
-        if (!isSupported(extension)) {
-            Toast.makeText(
-                    this,
-                    "Unsupported file: " + fileName,
-                    Toast.LENGTH_SHORT
-            ).show();
-            return false;
-        }
-
-        boolean persistableGrant =
-                (flags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0;
-
-        int permissionFlags = flags
-                & (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-
-        boolean hasReadGrant =
-                (permissionFlags
-                        & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0;
-
-        if (!persistableGrant || !hasReadGrant) {
-            Toast.makeText(
-                    this,
-                    "Android did not provide permanent file access: "
-                            + fileName,
-                    Toast.LENGTH_LONG
-            ).show();
-            return false;
-        }
-
-        try {
-            getContentResolver().takePersistableUriPermission(
-                    uri,
-                    permissionFlags
-            );
-        } catch (Exception e) {
-            android.util.Log.w(
-                    "Stage4TV",
-                    "Could not persist file permission: " + uri,
-                    e
-            );
-
-            Toast.makeText(
-                    this,
-                    "Could not save access to: " + fileName,
-                    Toast.LENGTH_LONG
-            ).show();
-
-            return false;
-        }
-
-        boolean savedReadPermission = false;
-
-        for (android.content.UriPermission saved
-                : getContentResolver().getPersistedUriPermissions()) {
-            if (uri.equals(saved.getUri())
-                    && saved.isReadPermission()) {
-                savedReadPermission = true;
-                break;
-            }
-        }
-
-        if (!savedReadPermission) {
-            Toast.makeText(
-                    this,
-                    "TV could not keep access to: " + fileName,
-                    Toast.LENGTH_LONG
-            ).show();
-            return false;
-        }
-
-        try {
-            JSONArray array = new JSONArray(
-                    preferences.getString(SONGS_KEY, "[]")
-            );
-
-            JSONObject object = new JSONObject();
-            object.put("number", generateNumber());
-            object.put("title", fileName);
-            object.put("uri", uriString);
-            object.put("type", getType(extension));
-
-            array.put(object);
-
-            boolean saved = preferences.edit()
-                    .putString(SONGS_KEY, array.toString())
-                    .commit();
-
-            if (!saved) {
-                Toast.makeText(
-                        this,
-                        "Could not save songbook entry: " + fileName,
-                        Toast.LENGTH_LONG
-                ).show();
-            }
-
-            return saved;
-
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not save imported TV song.",
-                    e
-            );
-            return false;
-        }
-    }
-
-    private void saveSongs() {
-        try {
-            preferences.edit()
-                    .putString(
-                            SONGS_KEY,
-                            preferences.getString(SONGS_KEY, "[]")
-                    )
-                    .commit();
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not commit TV songbook.",
-                    e
-            );
-        }
-    }
-
-    private String getFileName(Uri uri) {
-        String name = null;
-
-        try (Cursor cursor = getContentResolver().query(
-                uri,
-                null,
-                null,
-                null,
-                null
-        )) {
-            if (cursor != null && cursor.moveToFirst()) {
-                int index = cursor.getColumnIndex(
-                        OpenableColumns.DISPLAY_NAME
-                );
-
-                if (index >= 0) {
-                    name = cursor.getString(index);
-                }
-            }
-        } catch (Exception e) {
-            android.util.Log.w(
-                    "Stage4TV",
-                    "Could not read file name.",
-                    e
-            );
-        }
-
-        if (name == null || name.trim().isEmpty()) {
-            name = uri.getLastPathSegment();
-        }
-
-        return name == null || name.trim().isEmpty()
-                ? "Untitled song"
-                : name;
-    }
-
-    private String getExtension(String name) {
-        if (name == null) {
-            return "";
-        }
-
-        int dot = name.lastIndexOf('.');
-
-        if (dot < 0 || dot == name.length() - 1) {
-            return "";
-        }
-
-        return name.substring(dot + 1)
-                .toLowerCase(Locale.ROOT);
-    }
-
-    private boolean isSupported(String extension) {
-        switch (extension) {
-            case "mid":
-            case "midi":
-            case "kar":
-            case "mp3":
-            case "wav":
-            case "ogg":
-            case "m4a":
-            case "aac":
-            case "lrc":
-            case "mp4":
-            case "mkv":
-            case "webm":
-            case "sf2":
-                return true;
-
-            default:
-                return false;
-        }
-    }
-
-    private String getType(String extension) {
-        switch (extension) {
-            case "mid":
-            case "midi":
-            case "kar":
-                return "MIDI/KAR";
-
-            case "lrc":
-                return "LYRICS";
-
-            case "sf2":
-                return "SOUNDFONT";
-
-            case "mp4":
-            case "mkv":
-            case "webm":
-                return "VIDEO";
-
-            default:
-                return "AUDIO";
-        }
-    }
-
-    private void playSong(TvSong song) {
-        if (song == null
-                || song.uri == null
-                || song.uri.trim().isEmpty()) {
-            Toast.makeText(
-                    this,
-                    "This song has no playable media file.",
-                    Toast.LENGTH_LONG
-            ).show();
-            return;
-        }
-
-        try {
-            Intent intent = new Intent(
-                    Stage4TvActivity.this,
-                    Stage4TvPlayerActivity.class
-            );
-
-            intent.putExtra(EXTRA_NUMBER, song.number);
-            intent.putExtra(EXTRA_TITLE, song.title);
-            intent.putExtra(EXTRA_URI, song.uri);
-            intent.putExtra(EXTRA_TYPE, song.type);
-
-            startActivity(intent);
-
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not open Stage 4 TV player.",
-                    e
-            );
-
-            Toast.makeText(
-                    this,
-                    "Could not open the TV karaoke player.",
-                    Toast.LENGTH_LONG
-            ).show();
-        }
+        super.onBackPressed();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        hideSystemUi();
 
-        if (adapter != null) {
-            loadSongs();
-            adapter.notifyDataSetChanged();
-            updateCount();
+        if (player != null) {
+            player.onResume();
         }
     }
 
-    private final class SongAdapter extends BaseAdapter {
-
-        @Override
-        public int getCount() {
-            return songs.size();
+    @Override
+    protected void onPause() {
+        if (player != null) {
+            player.onPause();
         }
 
-        @Override
-        public Object getItem(int position) {
-            return songs.get(position);
-        }
+        super.onPause();
+    }
 
-        @Override
-        public long getItemId(int position) {
-            return position;
-        }
+    @Override
+    protected void onDestroy() {
+        destroyed = true;
+        searchGeneration++;
 
-        @Override
-        public View getView(
-                int position,
-                View convertView,
-                android.view.ViewGroup parent
-        ) {
-            TextView row;
+        destroyPlayer();
 
-            if (convertView instanceof TextView) {
-                row = (TextView) convertView;
-            } else {
-                row = new TextView(
-                        Stage4TvActivity.this
-                );
+        executor.shutdownNow();
 
-                row.setTextColor(WHITE);
-                row.setTextSize(19);
-                row.setTypeface(
-                        Typeface.DEFAULT,
-                        Typeface.BOLD
-                );
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(
-                        dp(22), dp(8), dp(22), dp(8)
-                );
-                row.setMinHeight(dp(66));
-                row.setMaxLines(2);
-                row.setEllipsize(
-                        android.text.TextUtils.TruncateAt.END
-                );
-            }
-
-            TvSong song = songs.get(position);
-
-            row.setText(
-                    song.number
-                            + "   •   "
-                            + song.title
-                            + "\n"
-                            + song.type.toUpperCase(Locale.ROOT)
-            );
-
-            return row;
-        }
+        super.onDestroy();
     }
 }
