@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -125,29 +124,6 @@ public class Stage3SongbookActivity extends Activity {
         Button importButton = makeButton("IMPORT SONGS FROM DEVICE");
         importButton.setOnClickListener(v -> chooseSongs());
         root.addView(importButton, buttonParams());
-
-        Button postFileButton =
-                makeButton("UPLOAD MIDI/KAR TO POSTFILE");
-
-        postFileButton.setOnClickListener(v -> {
-            try {
-                Intent intent = new Intent(
-                        Stage3SongbookActivity.this,
-                        Stage3PostFileUploadActivity.class);
-                intent.putExtra(EXTRA_TV_MODE, tvMode);
-                startActivity(intent);
-            } catch (Exception e) {
-                android.util.Log.e("Stage3Songbook",
-                        "Could not open PostFile uploader.", e);
-
-                Toast.makeText(
-                        Stage3SongbookActivity.this,
-                        "Could not open PostFile uploader.",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-
-        root.addView(postFileButton, buttonParams());
 
         Button mediaFireButton =
                 makeButton("SEARCH / DOWNLOAD MIDI/KAR (MEDIAFIRE)");
