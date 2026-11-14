@@ -1,3 +1,4 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -44,8 +45,6 @@
         <activity android:name=".Stage3QueueActivity" android:exported="false" />
         <activity android:name=".Stage3SongHubRemoteActivity" android:exported="false" android:hardwareAccelerated="true" />
         <activity android:name=".Stage3SongbookActivity" android:exported="false" />
-        <activity android:name=".Stage3PostFileUploadActivity" android:exported="false" />
-        <activity android:name=".Stage3PostFileSearchActivity" android:exported="false" />
         <activity android:name=".KaraokeStudioActivity" android:exported="false" android:hardwareAccelerated="true" />
         <activity android:name=".OnlineSongActivity" android:exported="false" />
         <activity android:name=".AuthActivity" android:exported="false" />
