@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -28,6 +27,7 @@ import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -82,6 +82,7 @@ public class PhoneRemoteActivity extends Activity {
                     "Your phone is already paired with the TV.",
                     Toast.LENGTH_SHORT
             ).show();
+
             finish();
             return;
         }
@@ -98,7 +99,12 @@ public class PhoneRemoteActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(22), dp(28), dp(22), dp(24));
+        root.setPadding(
+                dp(22),
+                dp(28),
+                dp(22),
+                dp(24)
+        );
 
         scrollView.addView(root);
 
@@ -135,10 +141,14 @@ public class PhoneRemoteActivity extends Activity {
                         + "will close automatically. Continue using "
                         + "Donut4U normally on your phone."
         );
+
         instructions.setTextColor(WHITE);
         instructions.setTextSize(15);
         instructions.setPadding(
-                dp(16), dp(18), dp(16), dp(18)
+                dp(16),
+                dp(18),
+                dp(16),
+                dp(18)
         );
         instructions.setBackground(round(PANEL, dp(12)));
 
@@ -150,7 +160,12 @@ public class PhoneRemoteActivity extends Activity {
         tvFoundText.setTextSize(15);
         tvFoundText.setTypeface(null, Typeface.BOLD);
         tvFoundText.setGravity(Gravity.CENTER);
-        tvFoundText.setPadding(0, dp(24), 0, dp(16));
+        tvFoundText.setPadding(
+                0,
+                dp(24),
+                0,
+                dp(16)
+        );
 
         root.addView(tvFoundText, fullWidthWrap());
 
@@ -171,7 +186,10 @@ public class PhoneRemoteActivity extends Activity {
                 }
         );
         pairingCodeInput.setPadding(
-                dp(14), dp(12), dp(14), dp(12)
+                dp(14),
+                dp(12),
+                dp(14),
+                dp(12)
         );
         pairingCodeInput.setBackground(round(PANEL, dp(10)));
 
@@ -184,10 +202,14 @@ public class PhoneRemoteActivity extends Activity {
 
         LinearLayout.LayoutParams connectParams =
                 fullWidth(dp(56));
+
         connectParams.topMargin = dp(16);
 
         root.addView(connectButton, connectParams);
-        connectButton.setOnClickListener(v -> connectToTv());
+
+        connectButton.setOnClickListener(
+                v -> connectToTv()
+        );
 
         statusText = new TextView(this);
         statusText.setText(
@@ -196,7 +218,12 @@ public class PhoneRemoteActivity extends Activity {
         statusText.setTextColor(MUTED);
         statusText.setTextSize(14);
         statusText.setGravity(Gravity.CENTER);
-        statusText.setPadding(0, dp(20), 0, dp(10));
+        statusText.setPadding(
+                0,
+                dp(20),
+                0,
+                dp(10)
+        );
 
         root.addView(statusText, fullWidthWrap());
 
@@ -237,7 +264,8 @@ public class PhoneRemoteActivity extends Activity {
                             return;
                         }
 
-                        if (resolving || connecting
+                        if (resolving
+                                || connecting
                                 || connectionTransferred) {
                             return;
                         }
@@ -256,6 +284,7 @@ public class PhoneRemoteActivity extends Activity {
                         if (tvFoundText != null
                                 && tvAddress != null
                                 && !connecting) {
+
                             tvAddress = null;
                             tvPort = -1;
 
@@ -282,6 +311,7 @@ public class PhoneRemoteActivity extends Activity {
                             int errorCode
                     ) {
                         discovering = false;
+
                         setStatus(
                                 "Could not search for TV. "
                                         + "Check your network and try again."
@@ -330,6 +360,7 @@ public class PhoneRemoteActivity extends Activity {
                             int errorCode
                     ) {
                         resolving = false;
+
                         setStatus(
                                 "Found TV, but could not connect. "
                                         + "Check the Wi-Fi connection."
@@ -347,6 +378,7 @@ public class PhoneRemoteActivity extends Activity {
 
                         mainHandler.post(() -> {
                             if (!closing && !connectionTransferred) {
+
                                 if (tvFoundText != null) {
                                     tvFoundText.setText(
                                             "FOUND: "
@@ -385,7 +417,8 @@ public class PhoneRemoteActivity extends Activity {
         }
 
         String code = pairingCodeInput.getText()
-                .toString().trim();
+                .toString()
+                .trim();
 
         if (!code.matches("[0-9]{6}")) {
             pairingCodeInput.setError(
@@ -395,8 +428,10 @@ public class PhoneRemoteActivity extends Activity {
         }
 
         connecting = true;
+
         connectButton.setEnabled(false);
         pairingCodeInput.setEnabled(false);
+
         setStatus("Connecting to Donut4U TV...");
 
         final InetAddress address = tvAddress;
@@ -406,10 +441,11 @@ public class PhoneRemoteActivity extends Activity {
             Socket newSocket = null;
 
             try {
-                newSocket = TvPairingTls.connect(
-                        address,
-                        port,
-                        code,
+                // Ordinary, unencrypted TCP connection.
+                newSocket = new Socket();
+
+                newSocket.connect(
+                        new InetSocketAddress(address, port),
                         PAIRING_TIMEOUT_MS
                 );
 
@@ -475,8 +511,8 @@ public class PhoneRemoteActivity extends Activity {
                     );
                 }
 
-                // The application-wide manager now owns this socket.
-                // Do not close it when this Activity is destroyed.
+                // PhoneTvConnectionManager now owns this socket.
+                // This Activity must not close it.
                 connectionTransferred = true;
                 newSocket = null;
 
@@ -497,6 +533,7 @@ public class PhoneRemoteActivity extends Activity {
                 });
 
             } catch (Exception e) {
+
                 if (newSocket != null) {
                     try {
                         newSocket.close();
@@ -524,6 +561,7 @@ public class PhoneRemoteActivity extends Activity {
         if (discovering
                 && nsdManager != null
                 && discoveryListener != null) {
+
             try {
                 nsdManager.stopServiceDiscovery(
                         discoveryListener
@@ -553,12 +591,14 @@ public class PhoneRemoteActivity extends Activity {
 
     private Button makeButton(String text) {
         Button button = new Button(this);
+
         button.setText(text);
         button.setTextColor(Color.BLACK);
         button.setTextSize(16);
         button.setTypeface(null, Typeface.BOLD);
         button.setAllCaps(false);
         button.setBackground(round(GREEN, dp(10)));
+
         return button;
     }
 
@@ -604,8 +644,8 @@ public class PhoneRemoteActivity extends Activity {
 
         stopDiscovery();
 
-        // The socket is intentionally NOT closed here after a
-        // successful transfer. PhoneTvConnectionManager owns it.
+        // A successfully transferred socket belongs to
+        // PhoneTvConnectionManager and is not closed here.
         networkExecutor.shutdownNow();
 
         super.onDestroy();
