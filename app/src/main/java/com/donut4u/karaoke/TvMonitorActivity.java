@@ -3,7 +3,13 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.os.Bundle;
+import android.text.Layout;
+import android.text.SpannableStringBuilder;
+import android.text.style.BackgroundColorSpan;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -18,15 +24,6 @@ import android.widget.TextView;
 
 import org.json.JSONObject;
 
-/**
- * Dedicated TV karaoke monitor.
- *
- * This Activity displays karaoke content only.
- * Phone controls, microphone, scoring and advertisements
- * remain on the phone.
- *
- * Incoming updates use the existing TvSessionController.
- */
 public class TvMonitorActivity extends Activity
         implements TvSessionController.Observer {
 
@@ -37,6 +34,8 @@ public class TvMonitorActivity extends Activity
     private static final int WHITE = Color.WHITE;
     private static final int GREEN = Color.rgb(50, 220, 130);
     private static final int MUTED = Color.rgb(180, 190, 190);
+    private static final int HIGHLIGHT_BACKGROUND =
+            Color.argb(75, 50, 220, 130);
 
     private TvSessionController sessionController;
 
@@ -55,6 +54,9 @@ public class TvMonitorActivity extends Activity
     private String currentVideoId = "";
     private String currentMediaUrl = "";
     private String currentLyrics = "";
+
+    private int currentActiveLine = -1;
+    private int currentStage = 0;
 
     private boolean destroyed;
     private boolean videoLoaded;
@@ -77,10 +79,6 @@ public class TvMonitorActivity extends Activity
                         getApplicationContext()
                 );
 
-        /*
-         * Reuse the existing application-wide receiver.
-         * Do not create a second socket or receiver here.
-         */
         sessionController.startSession(this);
         sessionController.setObserver(this);
 
@@ -138,8 +136,8 @@ public class TvMonitorActivity extends Activity
         titleView.setGravity(Gravity.CENTER);
         titleView.setMaxLines(2);
         titleView.setTypeface(
-                android.graphics.Typeface.DEFAULT,
-                android.graphics.Typeface.BOLD
+                Typeface.DEFAULT,
+                Typeface.BOLD
         );
 
         informationPanel.addView(
@@ -238,6 +236,8 @@ public class TvMonitorActivity extends Activity
             return;
         }
 
+        currentStage = stage;
+
         String action = state.optString("action", "");
 
         if ("stop".equalsIgnoreCase(action)
@@ -264,12 +264,31 @@ public class TvMonitorActivity extends Activity
                 state.optString("lyricText", "")
         );
 
-        if (!lyrics.isEmpty() && !lyrics.equals(currentLyrics)) {
+        int activeLine = state.optInt("activeLine", -1);
+
+        if (stage == 3) {
+            currentActiveLine = activeLine;
+        } else {
+            currentActiveLine = -1;
+        }
+
+        if (!lyrics.equals(currentLyrics)) {
             currentLyrics = lyrics;
-            lyricsView.setText(lyrics);
-            lyricsScroll.post(
-                    () -> lyricsScroll.scrollTo(0, 0)
+
+            if (lyrics.isEmpty()) {
+                lyricsView.setText("");
+            }
+        }
+
+        if (stage == 3) {
+            displayHighlightedLyrics(
+                    lyrics,
+                    currentActiveLine
             );
+        } else if (!lyrics.isEmpty()
+                && !lyrics.equals(
+                        lyricsView.getText().toString())) {
+            lyricsView.setText(lyrics);
         }
 
         String videoId = state.optString("videoId", "");
@@ -278,6 +297,7 @@ public class TvMonitorActivity extends Activity
         if (!videoId.isEmpty()
                 && !videoId.equals(currentVideoId)) {
             playYouTube(videoId);
+
         } else if (!mediaUrl.isEmpty()
                 && !mediaUrl.equals(currentMediaUrl)) {
             playMediaUrl(mediaUrl);
@@ -288,16 +308,117 @@ public class TvMonitorActivity extends Activity
                 "playing"
         );
 
-        if ("pause".equalsIgnoreCase(playback)) {
+        if ("pause".equalsIgnoreCase(playback)
+                || "paused".equalsIgnoreCase(playback)) {
+
             pauseVideo();
+
         } else if ("play".equalsIgnoreCase(playback)
                 || "playing".equalsIgnoreCase(playback)) {
+
             resumeVideo();
+
+        } else if ("stopped".equalsIgnoreCase(playback)
+                || "stop".equalsIgnoreCase(playback)) {
+
+            stopVideoOnly();
         }
 
         statusView.setText(
                 "PHONE CONNECTED  •  STAGE " + stage
         );
+    }
+
+    private void displayHighlightedLyrics(
+            String lyrics,
+            int activeLine
+    ) {
+        if (lyrics == null || lyrics.isEmpty()) {
+            lyricsView.setText("");
+            return;
+        }
+
+        String[] lines = lyrics.split("\n", -1);
+
+        SpannableStringBuilder builder =
+                new SpannableStringBuilder();
+
+        int targetStart = -1;
+        int targetEnd = -1;
+
+        for (int i = 0; i < lines.length; i++) {
+
+            int start = builder.length();
+
+            builder.append(lines[i]);
+
+            int end = builder.length();
+
+            if (i == activeLine && activeLine >= 0) {
+                targetStart = start;
+                targetEnd = end;
+            }
+
+            if (i < lines.length - 1) {
+                builder.append("\n");
+            }
+        }
+
+        if (targetStart >= 0 && targetEnd > targetStart) {
+
+            builder.setSpan(
+                    new ForegroundColorSpan(GREEN),
+                    targetStart,
+                    targetEnd,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+            );
+
+            builder.setSpan(
+                    new BackgroundColorSpan(
+                            HIGHLIGHT_BACKGROUND
+                    ),
+                    targetStart,
+                    targetEnd,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+            );
+
+            builder.setSpan(
+                    new StyleSpan(Typeface.BOLD),
+                    targetStart,
+                    targetEnd,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+            );
+        }
+
+        lyricsView.setText(builder);
+
+        if (targetStart >= 0) {
+            final int scrollOffset = targetStart;
+
+            lyricsView.post(() -> {
+                if (destroyed || lyricsView == null
+                        || lyricsScroll == null) {
+                    return;
+                }
+
+                Layout layout = lyricsView.getLayout();
+
+                if (layout == null) {
+                    return;
+                }
+
+                int lineNumber =
+                        layout.getLineForOffset(scrollOffset);
+
+                int lineTop =
+                        layout.getLineTop(lineNumber);
+
+                lyricsScroll.smoothScrollTo(
+                        0,
+                        Math.max(0, lineTop - dp(35))
+                );
+            });
+        }
     }
 
     private void setMetadata(
@@ -319,7 +440,13 @@ public class TvMonitorActivity extends Activity
             return;
         }
 
-        currentVideoId = videoId.trim();
+        String safeVideoId = videoId.trim();
+
+        if (!safeVideoId.matches("[A-Za-z0-9_-]{6,20}")) {
+            return;
+        }
+
+        currentVideoId = safeVideoId;
         currentMediaUrl = "";
         videoLoaded = false;
 
@@ -359,8 +486,9 @@ public class TvMonitorActivity extends Activity
                 + "</style></head><body>"
                 + "<iframe id='player' "
                 + "src='https://www.youtube.com/embed/"
-                + currentVideoId
-                + "?playsinline=1&controls=1&rel=0&autoplay=1' "
+                + safeVideoId
+                + "?enablejsapi=1&playsinline=1&controls=1"
+                + "&rel=0&autoplay=1&origin=https://www.youtube.com' "
                 + "allow='autoplay; encrypted-media; picture-in-picture' "
                 + "allowfullscreen></iframe>"
                 + "</body></html>";
@@ -381,11 +509,6 @@ public class TvMonitorActivity extends Activity
             return;
         }
 
-        /*
-         * A phone content:// URI cannot be opened by the TV.
-         * The phone must provide a reachable HTTP media URL
-         * before this playback path can be used.
-         */
         if (!mediaUrl.startsWith("http://")
                 && !mediaUrl.startsWith("https://")) {
             statusView.setText(
@@ -476,20 +599,29 @@ public class TvMonitorActivity extends Activity
         );
     }
 
+    private void stopVideoOnly() {
+        pauseVideo();
+    }
+
     private void stopCurrentPlayback() {
         destroyVideoView();
 
         currentVideoId = "";
         currentMediaUrl = "";
         currentLyrics = "";
+        currentActiveLine = -1;
+        currentStage = 0;
         videoLoaded = false;
 
         titleView.setText("DONUT4U KARAOKE");
         singerView.setVisibility(View.GONE);
         composerView.setVisibility(View.GONE);
+
         lyricsView.setText(
                 "Waiting for a song from your phone..."
         );
+
+        lyricsScroll.scrollTo(0, 0);
 
         statusView.setText("PHONE CONNECTED");
     }
