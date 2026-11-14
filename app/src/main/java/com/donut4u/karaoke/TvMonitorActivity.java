@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -56,6 +55,7 @@ public class TvMonitorActivity extends Activity
     private String currentLyrics = "";
 
     private int currentActiveLine = -1;
+    private int currentActiveLineOffset = -1;
     private int currentStage = 0;
 
     private boolean destroyed;
@@ -265,11 +265,15 @@ public class TvMonitorActivity extends Activity
         );
 
         int activeLine = state.optInt("activeLine", -1);
+        int activeLineOffset =
+                state.optInt("activeLineOffset", -1);
 
         if (stage == 3) {
             currentActiveLine = activeLine;
+            currentActiveLineOffset = activeLineOffset;
         } else {
             currentActiveLine = -1;
+            currentActiveLineOffset = -1;
         }
 
         if (!lyrics.equals(currentLyrics)) {
@@ -283,7 +287,8 @@ public class TvMonitorActivity extends Activity
         if (stage == 3) {
             displayHighlightedLyrics(
                     lyrics,
-                    currentActiveLine
+                    currentActiveLine,
+                    currentActiveLineOffset
             );
         } else if (!lyrics.isEmpty()
                 && !lyrics.equals(
@@ -331,40 +336,66 @@ public class TvMonitorActivity extends Activity
 
     private void displayHighlightedLyrics(
             String lyrics,
-            int activeLine
+            int activeLine,
+            int activeLineOffset
     ) {
         if (lyrics == null || lyrics.isEmpty()) {
             lyricsView.setText("");
             return;
         }
 
-        String[] lines = lyrics.split("\n", -1);
-
         SpannableStringBuilder builder =
-                new SpannableStringBuilder();
+                new SpannableStringBuilder(lyrics);
 
         int targetStart = -1;
         int targetEnd = -1;
 
-        for (int i = 0; i < lines.length; i++) {
+        /*
+         * Preferred method:
+         * Use the exact character offset supplied by Stage 3.
+         */
+        if (activeLineOffset >= 0
+                && activeLineOffset < lyrics.length()) {
 
-            int start = builder.length();
+            targetStart = lyrics.lastIndexOf(
+                    "\n",
+                    Math.max(0, activeLineOffset - 1)
+            ) + 1;
 
-            builder.append(lines[i]);
+            targetEnd = lyrics.indexOf(
+                    "\n",
+                    activeLineOffset
+            );
 
-            int end = builder.length();
-
-            if (i == activeLine && activeLine >= 0) {
-                targetStart = start;
-                targetEnd = end;
+            if (targetEnd < 0) {
+                targetEnd = lyrics.length();
             }
 
-            if (i < lines.length - 1) {
-                builder.append("\n");
+        } else {
+            /*
+             * Compatibility fallback:
+             * Older phone state sends only activeLine.
+             */
+            String[] lines = lyrics.split("\n", -1);
+
+            int lineStart = 0;
+
+            for (int i = 0; i < lines.length; i++) {
+                int lineEnd = lineStart + lines[i].length();
+
+                if (i == activeLine && activeLine >= 0) {
+                    targetStart = lineStart;
+                    targetEnd = lineEnd;
+                    break;
+                }
+
+                lineStart = lineEnd + 1;
             }
         }
 
-        if (targetStart >= 0 && targetEnd > targetStart) {
+        if (targetStart >= 0
+                && targetEnd > targetStart
+                && targetEnd <= builder.length()) {
 
             builder.setSpan(
                     new ForegroundColorSpan(GREEN),
@@ -610,6 +641,7 @@ public class TvMonitorActivity extends Activity
         currentMediaUrl = "";
         currentLyrics = "";
         currentActiveLine = -1;
+        currentActiveLineOffset = -1;
         currentStage = 0;
         videoLoaded = false;
 
