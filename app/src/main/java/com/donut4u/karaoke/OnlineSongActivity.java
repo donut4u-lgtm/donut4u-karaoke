@@ -6,12 +6,10 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -61,7 +59,6 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -77,25 +74,26 @@ public class OnlineSongActivity extends Activity {
     private static final String EXTRA_TV_MODE =
             "com.donut4u.karaoke.EXTRA_TV_MODE";
 
-    private static final String EXTRA_TV_STAGE1 =
-            "com.donut4u.karaoke.EXTRA_TV_STAGE1";
-
-    private static final String EXTRA_TV_PHONE_CONTROLLED =
-            "com.donut4u.karaoke.EXTRA_TV_PHONE_CONTROLLED";
-
     private static final String DATABASE_URL =
             "https://donut4u-karaoke-39967-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
-    private static final String DEVICE_PREFS = "donut4u_device_session";
-    private static final String DEVICE_ID_KEY = "installation_id";
+    private static final String DEVICE_PREFS =
+            "donut4u_device_session";
+
+    private static final String DEVICE_ID_KEY =
+            "installation_id";
 
     private static final String OFFLINE_SESSION_PREFS =
             "donut4u_verified_offline_session";
 
-    private static final String OFFLINE_UID_KEY = "verified_uid";
-    private static final String OFFLINE_DEVICE_KEY = "verified_device_id";
+    private static final String OFFLINE_UID_KEY =
+            "verified_uid";
 
-    private static final String CACHE_NAME = "donut4u_song_search_cache";
+    private static final String OFFLINE_DEVICE_KEY =
+            "verified_device_id";
+
+    private static final String CACHE_NAME =
+            "donut4u_song_search_cache";
 
     private static final String FACEBOOK_URL =
             "https://www.facebook.com/share/17zkgf3o8j/";
@@ -120,93 +118,16 @@ public class OnlineSongActivity extends Activity {
     private TextView microphonePitchText;
     private TextView microphoneStreakText;
     private TextView microphoneRatingText;
-    private View microphoneLevelBar;
     private View microphoneLevelFill;
 
-    private boolean microphonePermissionPending = false;
     private boolean microphoneWasStoppedByLifecycle = false;
 
     private EditText searchBox;
     private Button searchButton;
     private Button phoneKeyboardButton;
+
     private TextView status;
     private LinearLayout resultsContainer;
-
-    private TextView tvPairingCodeText;
-    private TextView tvKeyboardStatusText;
-
-    private boolean tvStage1Mode = false;
-    private boolean tvPhoneControlled = false;
-
-    private TvSessionController tvSessionController;
-
-    private final TvSessionController.TvCommandHandler tvCommandHandler =
-            new TvSessionController.TvCommandHandler() {
-
-                @Override
-                public void onPhoneSearchRequested(String songTitle) {
-                    runOnUiThread(() -> {
-                        if (closing
-                                || !tvStage1Mode
-                                || !tvPhoneControlled
-                                || searchBox == null) {
-                            return;
-                        }
-
-                        String query = songTitle == null
-                                ? "" : songTitle.trim();
-
-                        if (query.isEmpty()) {
-                            return;
-                        }
-
-                        searchBox.setText(query);
-                        searchBox.setSelection(searchBox.length());
-
-                        updateTvKeyboardStatus("Phone search received.");
-
-                        searchVideos();
-                    });
-                }
-
-                @Override
-                public void onPhoneTextInput(
-                        String target,
-                        String text,
-                        String action
-                ) {
-                    runOnUiThread(() -> applyPhoneTextInput(
-                            target,
-                            text,
-                            action
-                    ));
-                }
-
-                @Override
-                public void onPhoneStateReceived(
-                        JSONObject state,
-                        long sequence
-                ) {
-                    runOnUiThread(() -> {
-                        if (closing || !tvStage1Mode || state == null) {
-                            return;
-                        }
-
-                        int requestedStage =
-                                state.optInt("stage", 0);
-
-                        String mode =
-                                state.optString("mode", "");
-
-                        if (requestedStage == 1
-                                && "paired".equalsIgnoreCase(mode)) {
-                            updateTvKeyboardStatus(
-                                    "Phone controller is connected."
-                            );
-                        }
-                    });
-                }
-            };
 
     private View searchScreen;
     private FrameLayout playbackScreen;
@@ -228,6 +149,7 @@ public class OnlineSongActivity extends Activity {
     private int searchGeneration = 0;
 
     private FirebaseAuth auth;
+
     private DatabaseReference sessionRef;
     private ValueEventListener sessionListener;
 
@@ -249,6 +171,14 @@ public class OnlineSongActivity extends Activity {
         String channel;
     }
 
+    /*
+     * OnlineSongActivity is a PHONE activity.
+     *
+     * Android TV has its own Stage4TvActivity. This prevents the
+     * old Stage 1 search screen, phone keyboard panel, microphone
+     * controls, Firebase login, and advertisements from appearing
+     * as the TV interface.
+     */
     private boolean isAndroidTv() {
         if (getIntent() != null
                 && getIntent().getBooleanExtra(EXTRA_TV_MODE, false)) {
@@ -256,18 +186,7 @@ public class OnlineSongActivity extends Activity {
         }
 
         return getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_LEANBACK)
-                || (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_TYPE_MASK)
-                == Configuration.UI_MODE_TYPE_TELEVISION;
-    }
-
-    private boolean isTvStage1() {
-        return tvStage1Mode;
-    }
-
-    private boolean isTvPhoneControlled() {
-        return tvStage1Mode && tvPhoneControlled;
+                PackageManager.FEATURE_LEANBACK);
     }
 
     @Override
@@ -278,41 +197,20 @@ public class OnlineSongActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
 
         /*
-         * TV Stage 1 is handled before Firebase authentication.
-         *
-         * The TV is a display/playback device in phone-controlled
-         * mode. TV-only mode uses the TV's own keyboard.
-         */
-        if (isAndroidTv()
-                && getIntent() != null
-                && getIntent().getBooleanExtra(EXTRA_TV_STAGE1, false)) {
-
-            tvStage1Mode = true;
-
-            tvPhoneControlled = getIntent().getBooleanExtra(
-                    EXTRA_TV_PHONE_CONTROLLED,
-                    false
-            );
-
-            sessionValid = true;
-
-            AppUpdateChecker.checkForUpdates(this);
-
-            buildSearchScreen();
-            return;
-        }
-
-        /*
-         * Other Android TV launches continue to the TV songbook.
-         * They do not require a separate TV login.
+         * All Android TV launches belong to Stage4TvActivity.
+         * The TV activity provides the independent TV ONLY mode
+         * and the passive CONNECT PHONE display mode.
          */
         if (isAndroidTv()) {
             Intent tvIntent = new Intent(
                     OnlineSongActivity.this,
-                    Stage4TvActivity.class
-            );
+                    Stage4TvActivity.class);
 
             tvIntent.putExtra(EXTRA_TV_MODE, true);
+
+            tvIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
             startActivity(tvIntent);
             finish();
@@ -320,8 +218,8 @@ public class OnlineSongActivity extends Activity {
         }
 
         /*
-         * Ordinary phone operation retains the existing Firebase
-         * authentication and active-session verification.
+         * Ordinary phone operation retains Firebase authentication
+         * and active-session verification.
          */
         auth = FirebaseAuth.getInstance();
 
@@ -349,7 +247,10 @@ public class OnlineSongActivity extends Activity {
 
         if (id == null || id.trim().isEmpty()) {
             id = UUID.randomUUID().toString();
-            prefs.edit().putString(DEVICE_ID_KEY, id).apply();
+
+            prefs.edit()
+                    .putString(DEVICE_ID_KEY, id)
+                    .apply();
         }
 
         return id;
@@ -407,7 +308,8 @@ public class OnlineSongActivity extends Activity {
 
         buildSearchScreen();
 
-        toast("Offline mode: previously verified session. Connect to the internet to verify your account again.");
+        toast(
+                "Offline mode: previously verified session. Connect to the internet to verify your account again.");
     }
 
     private void listenForConnection(FirebaseUser user) {
@@ -422,7 +324,8 @@ public class OnlineSongActivity extends Activity {
                     return;
                 }
 
-                Boolean connected = snapshot.getValue(Boolean.class);
+                Boolean connected =
+                        snapshot.getValue(Boolean.class);
 
                 databaseConnected = Boolean.TRUE.equals(connected);
 
@@ -431,8 +334,12 @@ public class OnlineSongActivity extends Activity {
                         listenForActiveSession(user);
                     }
                 } else {
-                    if (sessionRef != null && sessionListener != null) {
-                        sessionRef.removeEventListener(sessionListener);
+                    if (sessionRef != null
+                            && sessionListener != null) {
+
+                        sessionRef.removeEventListener(
+                                sessionListener);
+
                         sessionListener = null;
                     }
 
@@ -537,7 +444,9 @@ public class OnlineSongActivity extends Activity {
 
         Button signOutButton = makeButton("SIGN OUT");
 
-        LinearLayout.LayoutParams signOutParams = fullWidth(dp(50));
+        LinearLayout.LayoutParams signOutParams =
+                fullWidth(dp(50));
+
         signOutParams.topMargin = dp(10);
         root.addView(signOutButton, signOutParams);
 
@@ -571,11 +480,13 @@ public class OnlineSongActivity extends Activity {
                 String activeId = snapshot.child("sessionId")
                         .getValue(String.class);
 
-                if (activeId == null || activeId.trim().isEmpty()
+                if (activeId == null
+                        || activeId.trim().isEmpty()
                         || !installationId.equals(activeId)) {
 
                     scheduleSessionMismatch(
-                            activeId == null || activeId.trim().isEmpty()
+                            activeId == null
+                                    || activeId.trim().isEmpty()
                                     ? "Your active session could not be found. Please sign in again."
                                     : "Your account was signed in on another phone. Please sign in again."
                     );
@@ -598,6 +509,7 @@ public class OnlineSongActivity extends Activity {
 
                     if (initialQuery != null
                             && !initialQuery.trim().isEmpty()) {
+
                         searchBox.setText(initialQuery);
                         searchVideos();
                     }
@@ -613,7 +525,8 @@ public class OnlineSongActivity extends Activity {
                 if (!sessionValid) {
                     allowOfflineAccess(user);
                 } else {
-                    toast("Live session verification was interrupted. Your previously verified offline session remains available.");
+                    toast(
+                            "Live session verification was interrupted. Your previously verified offline session remains available.");
                 }
             }
         };
@@ -634,12 +547,15 @@ public class OnlineSongActivity extends Activity {
             handleSessionLost(message);
         };
 
-        sessionHandler.postDelayed(pendingSessionMismatch, 3000);
+        sessionHandler.postDelayed(
+                pendingSessionMismatch, 3000);
     }
 
     private void cancelPendingSessionMismatch() {
         if (pendingSessionMismatch != null) {
-            sessionHandler.removeCallbacks(pendingSessionMismatch);
+            sessionHandler.removeCallbacks(
+                    pendingSessionMismatch);
+
             pendingSessionMismatch = null;
         }
     }
@@ -673,12 +589,17 @@ public class OnlineSongActivity extends Activity {
             auth.signOut();
         }
 
-        Toast.makeText(getApplicationContext(),
-                messageText, Toast.LENGTH_LONG).show();
+        Toast.makeText(
+                getApplicationContext(),
+                messageText,
+                Toast.LENGTH_LONG
+        ).show();
 
         Intent intent = new Intent(this, AuthActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
         startActivity(intent);
         finish();
@@ -687,12 +608,9 @@ public class OnlineSongActivity extends Activity {
     private void openAuthentication() {
         Intent intent = new Intent(this, AuthActivity.class);
 
-        if (isAndroidTv()) {
-            intent.putExtra(EXTRA_TV_MODE, true);
-        }
-
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
         startActivity(intent);
         finish();
@@ -727,12 +645,9 @@ public class OnlineSongActivity extends Activity {
 
         Intent intent = new Intent(this, AuthActivity.class);
 
-        if (isAndroidTv()) {
-            intent.putExtra(EXTRA_TV_MODE, true);
-        }
-
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
         startActivity(intent);
         finish();
@@ -741,7 +656,9 @@ public class OnlineSongActivity extends Activity {
     private void openFacebookFeedback() {
         try {
             startActivity(new Intent(
-                    Intent.ACTION_VIEW, Uri.parse(FACEBOOK_URL)));
+                    Intent.ACTION_VIEW,
+                    Uri.parse(FACEBOOK_URL)));
+
         } catch (Exception e) {
             toast("Unable to open Facebook. Please try again.");
         }
@@ -775,30 +692,25 @@ public class OnlineSongActivity extends Activity {
         subtitle.setPadding(0, 0, 0, dp(20));
         root.addView(subtitle, fullWidthWrap());
 
-        if (isTvPhoneControlled()) {
-            addTvPhoneKeyboardPanel(root);
-        } else if (!isTvStage1()) {
-            phoneKeyboardButton =
-                    makeButton("USE PHONE AS KEYBOARD");
+        phoneKeyboardButton =
+                makeButton("USE PHONE AS KEYBOARD");
 
-            LinearLayout.LayoutParams phoneKeyboardParams =
-                    fullWidth(dp(50));
+        LinearLayout.LayoutParams phoneKeyboardParams =
+                fullWidth(dp(50));
 
-            phoneKeyboardParams.bottomMargin = dp(10);
-            root.addView(phoneKeyboardButton, phoneKeyboardParams);
+        phoneKeyboardParams.bottomMargin = dp(10);
+        root.addView(phoneKeyboardButton, phoneKeyboardParams);
 
-            phoneKeyboardButton.setOnClickListener(v -> {
-                if (!sessionValid || closing) {
-                    toast("Please wait while your session is checked.");
-                    return;
-                }
+        phoneKeyboardButton.setOnClickListener(v -> {
+            if (!sessionValid || closing) {
+                toast("Please wait while your session is checked.");
+                return;
+            }
 
-                startActivity(new Intent(
-                        OnlineSongActivity.this,
-                        PhoneRemoteActivity.class
-                ));
-            });
-        }
+            startActivity(new Intent(
+                    OnlineSongActivity.this,
+                    PhoneRemoteActivity.class));
+        });
 
         searchBox = new EditText(this);
         searchBox.setSingleLine(true);
@@ -806,53 +718,26 @@ public class OnlineSongActivity extends Activity {
         searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         searchBox.setFocusable(true);
         searchBox.setFocusableInTouchMode(true);
-
-        /*
-         * TV ONLY: allow the Android TV on-screen keyboard.
-         * CONNECT PHONE: suppress the TV keyboard because the
-         * phone sends text through TvSessionController.
-         */
-        searchBox.setShowSoftInputOnFocus(!isTvPhoneControlled());
+        searchBox.setShowSoftInputOnFocus(true);
 
         styleEdit(searchBox);
 
-        if (isTvStage1()) {
-            searchBox.setBackground(createTvSearchBackground());
+        searchBox.setOnClickListener(v -> showSearchKeyboard());
 
-            searchBox.setFocusable(true);
-            searchBox.setFocusableInTouchMode(true);
-
-            searchBox.setShowSoftInputOnFocus(
-                    !isTvPhoneControlled()
-            );
-
-            searchBox.setOnKeyListener((view, keyCode, event) -> {
-                if (event.getAction() == KeyEvent.ACTION_UP
-                        && (keyCode == KeyEvent.KEYCODE_ENTER
-                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
-                    searchVideos();
-                    return true;
-                }
-
-                return false;
-            });
-
-        } else {
-            searchBox.setOnClickListener(v -> showSearchKeyboard());
-
-            searchBox.setOnFocusChangeListener((v, hasFocus) -> {
-                if (hasFocus) {
-                    searchBox.postDelayed(
-                            this::showSearchKeyboard, 150);
-                }
-            });
-        }
+        searchBox.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                searchBox.postDelayed(
+                        this::showSearchKeyboard, 150);
+            }
+        });
 
         root.addView(searchBox, fullWidth(dp(56)));
 
         searchButton = makeButton("FIND MY SONG");
 
-        LinearLayout.LayoutParams searchParams = fullWidth(dp(52));
+        LinearLayout.LayoutParams searchParams =
+                fullWidth(dp(52));
+
         searchParams.topMargin = dp(10);
         root.addView(searchButton, searchParams);
 
@@ -864,30 +749,44 @@ public class OnlineSongActivity extends Activity {
         donationCard.setPadding(dp(12), dp(8), dp(8), dp(8));
         donationCard.setBackground(round(PANEL, dp(12)));
 
-        LinearLayout.LayoutParams donationCardParams = fullWidthWrap();
+        LinearLayout.LayoutParams donationCardParams =
+                fullWidthWrap();
+
         donationCardParams.topMargin = dp(14);
         root.addView(donationCard, donationCardParams);
 
-        LinearLayout donationTextContainer = new LinearLayout(this);
-        donationTextContainer.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout donationTextContainer =
+                new LinearLayout(this);
 
-        donationCard.addView(donationTextContainer,
-                new LinearLayout.LayoutParams(0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        donationTextContainer.setOrientation(
+                LinearLayout.VERTICAL);
+
+        donationCard.addView(
+                donationTextContainer,
+                new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f));
 
         TextView donationTitle = new TextView(this);
         donationTitle.setText("SUPPORT DONUT4U KARAOKE");
         donationTitle.setTextColor(GREEN);
         donationTitle.setTextSize(12);
         donationTitle.setTypeface(null, Typeface.BOLD);
-        donationTextContainer.addView(donationTitle, fullWidthWrap());
+
+        donationTextContainer.addView(
+                donationTitle, fullWidthWrap());
 
         TextView donationSubtitle = new TextView(this);
-        donationSubtitle.setText("Help keep it running and growing!");
+        donationSubtitle.setText(
+                "Help keep it running and growing!");
+
         donationSubtitle.setTextColor(MUTED);
         donationSubtitle.setTextSize(10);
         donationSubtitle.setPadding(0, dp(3), 0, 0);
-        donationTextContainer.addView(donationSubtitle, fullWidthWrap());
+
+        donationTextContainer.addView(
+                donationSubtitle, fullWidthWrap());
 
         Button donateNowButton = makeButton("DONATE NOW");
         donateNowButton.setTextSize(11);
@@ -895,16 +794,22 @@ public class OnlineSongActivity extends Activity {
 
         LinearLayout.LayoutParams donateButtonParams =
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT, dp(42));
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(42));
 
         donateButtonParams.leftMargin = dp(8);
-        donationCard.addView(donateNowButton, donateButtonParams);
+        donationCard.addView(
+                donateNowButton, donateButtonParams);
 
-        donateNowButton.setOnClickListener(v -> showDonationScreen());
+        donateNowButton.setOnClickListener(
+                v -> showDonationScreen());
 
-        Button studioButton = makeButton("🎤 KARAOKE STUDIO — PAGE 2");
+        Button studioButton =
+                makeButton("🎤 KARAOKE STUDIO — PAGE 2");
 
-        LinearLayout.LayoutParams studioParams = fullWidth(dp(50));
+        LinearLayout.LayoutParams studioParams =
+                fullWidth(dp(50));
+
         studioParams.topMargin = dp(12);
         root.addView(studioButton, studioParams);
 
@@ -916,17 +821,17 @@ public class OnlineSongActivity extends Activity {
 
             Intent intent = new Intent(
                     OnlineSongActivity.this,
-                    KaraokeStudioActivity.class
-            );
-
-            addTvStageExtras(intent, 2);
+                    KaraokeStudioActivity.class);
 
             startActivity(intent);
         });
 
-        Button stage3Button = makeButton("🎤 STAGE 3 — SONGBOOK");
+        Button stage3Button =
+                makeButton("🎤 STAGE 3 — SONGBOOK");
 
-        LinearLayout.LayoutParams stage3Params = fullWidth(dp(50));
+        LinearLayout.LayoutParams stage3Params =
+                fullWidth(dp(50));
+
         stage3Params.topMargin = dp(10);
         root.addView(stage3Button, stage3Params);
 
@@ -938,36 +843,37 @@ public class OnlineSongActivity extends Activity {
 
             Intent intent = new Intent(
                     OnlineSongActivity.this,
-                    Stage3SongbookActivity.class
-            );
-
-            addTvStageExtras(intent, 3);
+                    Stage3SongbookActivity.class);
 
             startActivity(intent);
         });
 
-        if (!isTvStage1()) {
-            Button switchAccountButton =
-                    makeButton("LOG OUT / SWITCH ACCOUNT");
+        Button switchAccountButton =
+                makeButton("LOG OUT / SWITCH ACCOUNT");
 
-            LinearLayout.LayoutParams switchParams = fullWidth(dp(50));
-            switchParams.topMargin = dp(10);
-            root.addView(switchAccountButton, switchParams);
+        LinearLayout.LayoutParams switchParams =
+                fullWidth(dp(50));
 
-            switchAccountButton.setOnClickListener(
-                    v -> signOutAndSwitchAccount());
-        }
+        switchParams.topMargin = dp(10);
+        root.addView(switchAccountButton, switchParams);
+
+        switchAccountButton.setOnClickListener(
+                v -> signOutAndSwitchAccount());
 
         Button feedbackButton =
                 makeButton("💬 QUESTIONS & SUGGESTIONS");
 
-        LinearLayout.LayoutParams feedbackParams = fullWidth(dp(50));
+        LinearLayout.LayoutParams feedbackParams =
+                fullWidth(dp(50));
+
         feedbackParams.topMargin = dp(10);
         root.addView(feedbackButton, feedbackParams);
 
-        feedbackButton.setOnClickListener(v -> openFacebookFeedback());
+        feedbackButton.setOnClickListener(
+                v -> openFacebookFeedback());
 
         status = new TextView(this);
+
         status.setText(offlineAccess
                 ? "Offline mode: saved songs and local features may be available."
                 : "Search for a song to see karaoke videos.");
@@ -975,289 +881,55 @@ public class OnlineSongActivity extends Activity {
         status.setTextColor(MUTED);
         status.setTextSize(14);
         status.setPadding(0, dp(16), 0, dp(12));
+
         root.addView(status, fullWidthWrap());
 
         resultsContainer = new LinearLayout(this);
-        resultsContainer.setOrientation(LinearLayout.VERTICAL);
+        resultsContainer.setOrientation(
+                LinearLayout.VERTICAL);
+
         root.addView(resultsContainer, fullWidthWrap());
 
         LinearLayout pageLayout = new LinearLayout(this);
         pageLayout.setOrientation(LinearLayout.VERTICAL);
         pageLayout.setBackgroundColor(BG);
 
-        pageLayout.addView(outer, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        pageLayout.addView(
+                outer,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f));
 
         addAdMobBanner(pageLayout);
 
         searchScreen = pageLayout;
         setContentView(searchScreen);
 
-        searchBox.setOnEditorActionListener((view, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_SEARCH
-                    || (event != null
-                    && event.getAction() == KeyEvent.ACTION_UP
-                    && (event.getKeyCode() == KeyEvent.KEYCODE_ENTER
-                    || event.getKeyCode()
-                    == KeyEvent.KEYCODE_NUMPAD_ENTER))) {
-                searchVideos();
-                return true;
-            }
+        searchBox.setOnEditorActionListener(
+                (view, actionId, event) -> {
 
-            return false;
-        });
+                    if (actionId == EditorInfo.IME_ACTION_SEARCH
+                            || (event != null
+                            && event.getAction()
+                            == KeyEvent.ACTION_UP
+                            && (event.getKeyCode()
+                            == KeyEvent.KEYCODE_ENTER
+                            || event.getKeyCode()
+                            == KeyEvent.KEYCODE_NUMPAD_ENTER))) {
 
-        if (isTvStage1()) {
-            if (isTvPhoneControlled()) {
-                searchBox.clearFocus();
-            } else {
-                searchBox.requestFocus();
-            }
-        } else {
-            searchBox.requestFocus();
-        }
-    }
+                        searchVideos();
+                        return true;
+                    }
 
-    private void addTvStageExtras(Intent intent, int stage) {
-        if (intent == null || !tvStage1Mode) {
-            return;
-        }
+                    return false;
+                });
 
-        intent.putExtra(EXTRA_TV_MODE, true);
-        intent.putExtra(EXTRA_TV_PHONE_CONTROLLED, tvPhoneControlled);
-
-        if (stage == 1) {
-            intent.putExtra(EXTRA_TV_STAGE1, true);
-        }
-    }
-
-    private StateListDrawable createTvSearchBackground() {
-        GradientDrawable focused = new GradientDrawable();
-        focused.setColor(Color.rgb(0, 0, 0));
-        focused.setCornerRadius(dp(8));
-        focused.setStroke(dp(3), GREEN);
-
-        GradientDrawable normal = new GradientDrawable();
-        normal.setColor(Color.rgb(15, 18, 20));
-        normal.setCornerRadius(dp(8));
-        normal.setStroke(dp(2), Color.rgb(80, 100, 90));
-
-        StateListDrawable states = new StateListDrawable();
-
-        states.addState(
-                new int[]{android.R.attr.state_focused},
-                focused
-        );
-
-        states.addState(
-                new int[]{android.R.attr.state_selected},
-                focused
-        );
-
-        states.addState(
-                new int[]{},
-                normal
-        );
-
-        return states;
-    }
-
-    private void addTvPhoneKeyboardPanel(LinearLayout root) {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setGravity(Gravity.CENTER);
-        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
-        panel.setBackground(round(PANEL, dp(12)));
-
-        LinearLayout.LayoutParams panelParams = fullWidthWrap();
-        panelParams.bottomMargin = dp(14);
-        root.addView(panel, panelParams);
-
-        TextView instruction = new TextView(this);
-        instruction.setText(
-                "PHONE CONTROL ACTIVE\n"
-                        + "Use your phone to search, type, and control "
-                        + "Stage 1. The TV keyboard is disabled."
-        );
-        instruction.setTextColor(WHITE);
-        instruction.setTextSize(14);
-        instruction.setGravity(Gravity.CENTER);
-        panel.addView(instruction, fullWidthWrap());
-
-        tvPairingCodeText = new TextView(this);
-        tvPairingCodeText.setText("PHONE CONTROLLER");
-        tvPairingCodeText.setTextColor(GREEN);
-        tvPairingCodeText.setTextSize(23);
-        tvPairingCodeText.setTypeface(null, Typeface.BOLD);
-        tvPairingCodeText.setGravity(Gravity.CENTER);
-        tvPairingCodeText.setPadding(0, dp(12), 0, dp(8));
-        panel.addView(tvPairingCodeText, fullWidthWrap());
-
-        tvKeyboardStatusText = new TextView(this);
-        tvKeyboardStatusText.setText(
-                "Waiting for phone commands..."
-        );
-        tvKeyboardStatusText.setTextColor(MUTED);
-        tvKeyboardStatusText.setTextSize(12);
-        tvKeyboardStatusText.setGravity(Gravity.CENTER);
-        panel.addView(tvKeyboardStatusText, fullWidthWrap());
-    }
-
-    private void updateTvKeyboardStatus(String message) {
-        if (!isTvPhoneControlled() || closing) {
-            return;
-        }
-
-        runOnUiThread(() -> {
-            if (tvKeyboardStatusText != null && !closing) {
-                tvKeyboardStatusText.setText(
-                        message == null ? "" : message
-                );
-            }
-        });
-    }
-
-    private void applyPhoneTextInput(
-            String target,
-            String text,
-            String action
-    ) {
-        if (closing
-                || !isTvPhoneControlled()
-                || searchBox == null
-                || target == null
-                || action == null) {
-            return;
-        }
-
-        String requestedTarget = target.trim();
-
-        if (!requestedTarget.isEmpty()
-                && !"active".equalsIgnoreCase(requestedTarget)
-                && !"search".equalsIgnoreCase(requestedTarget)) {
-            return;
-        }
-
-        String requestedAction =
-                action.trim().toLowerCase(Locale.US);
-
-        String input = text == null ? "" : text;
-
-        Editable editable = searchBox.getText();
-
-        int length = editable.length();
-
-        int selectionStart = searchBox.getSelectionStart();
-        int selectionEnd = searchBox.getSelectionEnd();
-
-        if (selectionStart < 0 || selectionEnd < 0) {
-            selectionStart = length;
-            selectionEnd = length;
-        }
-
-        selectionStart = Math.max(
-                0, Math.min(selectionStart, length));
-
-        selectionEnd = Math.max(
-                0, Math.min(selectionEnd, length));
-
-        int start = Math.min(selectionStart, selectionEnd);
-        int end = Math.max(selectionStart, selectionEnd);
-
-        switch (requestedAction) {
-
-            case "replace":
-                searchBox.setText(input);
-                searchBox.setSelection(searchBox.length());
-                updateTvKeyboardStatus("Text received from phone.");
-                break;
-
-            case "append":
-                editable.replace(start, end, input);
-                searchBox.setSelection(
-                        Math.min(start + input.length(),
-                                searchBox.length()));
-                updateTvKeyboardStatus("Text received from phone.");
-                break;
-
-            case "backspace":
-                if (start != end) {
-                    editable.delete(start, end);
-                    searchBox.setSelection(start);
-
-                } else if (start > 0) {
-                    int deleteStart =
-                            Character.offsetByCodePoints(
-                                    editable,
-                                    start,
-                                    -1);
-
-                    editable.delete(deleteStart, start);
-                    searchBox.setSelection(deleteStart);
-                }
-
-                break;
-
-            case "clear":
-                searchBox.setText("");
-                searchBox.setSelection(0);
-                updateTvKeyboardStatus("Search field cleared.");
-                break;
-
-            case "submit":
-                updateTvKeyboardStatus("Phone submitted the search.");
-                searchVideos();
-                break;
-
-            default:
-                break;
-        }
-    }
-
-    private void registerTvStageHandler() {
-        if (!isTvPhoneControlled() || closing) {
-            return;
-        }
-
-        if (tvSessionController == null) {
-            tvSessionController =
-                    TvSessionController.getInstance(
-                            getApplicationContext()
-                    );
-        }
-
-        tvSessionController.setActiveStage(1);
-
-        tvSessionController.registerStageHandler(
-                tvCommandHandler
-        );
-
-        String pairingCode =
-                tvSessionController.getPairingCode();
-
-        if (tvPairingCodeText != null
-                && pairingCode != null
-                && !pairingCode.trim().isEmpty()) {
-            tvPairingCodeText.setText("PHONE CONTROLLER");
-        }
-
-        updateTvKeyboardStatus(
-                tvSessionController.isSessionStarted()
-                        ? "Shared TV session is active. Waiting for phone commands."
-                        : "Waiting for the shared TV session..."
-        );
-    }
-
-    private void unregisterTvStageHandler() {
-        if (tvSessionController != null) {
-            tvSessionController.unregisterStageHandler(
-                    tvCommandHandler
-            );
-        }
+        searchBox.requestFocus();
     }
 
     private void showSearchKeyboard() {
-        if (searchBox == null || isTvPhoneControlled()) {
+        if (searchBox == null || closing) {
             return;
         }
 
@@ -1271,19 +943,15 @@ public class OnlineSongActivity extends Activity {
             searchBox.post(() ->
                     keyboard.showSoftInput(
                             searchBox,
-                            InputMethodManager.SHOW_IMPLICIT
-                    )
-            );
+                            InputMethodManager.SHOW_IMPLICIT));
         }
     }
 
     private void addAdMobBanner(LinearLayout parent) {
-        if (isAndroidTv()) {
-            return;
-        }
-
         try {
-            MobileAds.initialize(this, initializationStatus -> {});
+            MobileAds.initialize(
+                    this,
+                    initializationStatus -> {});
 
             AdView view = new AdView(this);
             adView = view;
@@ -1299,7 +967,9 @@ public class OnlineSongActivity extends Activity {
             params.gravity = Gravity.CENTER_HORIZONTAL;
 
             parent.addView(adView, params);
-            adView.loadAd(new AdRequest.Builder().build());
+
+            adView.loadAd(
+                    new AdRequest.Builder().build());
 
         } catch (Exception e) {
             if (adView != null) {
@@ -1337,11 +1007,14 @@ public class OnlineSongActivity extends Activity {
         root.addView(heading, fullWidthWrap());
 
         TextView message = new TextView(this);
-        message.setText("Help keep Donut4U Karaoke running and growing!");
+        message.setText(
+                "Help keep Donut4U Karaoke running and growing!");
+
         message.setTextColor(WHITE);
         message.setTextSize(15);
         message.setGravity(Gravity.CENTER);
         message.setPadding(0, 0, 0, dp(18));
+
         root.addView(message, fullWidthWrap());
 
         TextView scanHeading = new TextView(this);
@@ -1351,6 +1024,7 @@ public class OnlineSongActivity extends Activity {
         scanHeading.setTypeface(null, Typeface.BOLD);
         scanHeading.setGravity(Gravity.CENTER);
         scanHeading.setPadding(0, dp(8), 0, dp(12));
+
         root.addView(scanHeading, fullWidthWrap());
 
         ImageView qrImage = new ImageView(this);
@@ -1359,13 +1033,17 @@ public class OnlineSongActivity extends Activity {
         qrImage.setAdjustViewBounds(true);
         qrImage.setBackgroundColor(Color.WHITE);
         qrImage.setPadding(dp(6), dp(6), dp(6), dp(6));
-        qrImage.setContentDescription("GCash donation QR code");
+        qrImage.setContentDescription(
+                "GCash donation QR code");
 
-        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(300));
+        LinearLayout.LayoutParams qrParams =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(300));
 
         qrParams.gravity = Gravity.CENTER_HORIZONTAL;
         qrParams.bottomMargin = dp(18);
+
         root.addView(qrImage, qrParams);
 
         TextView instruction = new TextView(this);
@@ -1376,15 +1054,19 @@ public class OnlineSongActivity extends Activity {
         instruction.setTextSize(13);
         instruction.setGravity(Gravity.CENTER);
         instruction.setPadding(0, 0, 0, dp(18));
+
         root.addView(instruction, fullWidthWrap());
 
         Button backButton = makeButton("BACK TO KARAOKE");
 
-        LinearLayout.LayoutParams backParams = fullWidth(dp(50));
+        LinearLayout.LayoutParams backParams =
+                fullWidth(dp(50));
+
         backParams.topMargin = dp(6);
         root.addView(backButton, backParams);
 
-        backButton.setOnClickListener(v -> returnFromDonation());
+        backButton.setOnClickListener(
+                v -> returnFromDonation());
 
         setContentView(outer);
     }
@@ -1408,10 +1090,14 @@ public class OnlineSongActivity extends Activity {
         return result;
     }
 
-    private void saveSearchCache(String query, ArrayList<Video> videos) {
+    private void saveSearchCache(
+            String query,
+            ArrayList<Video> videos) {
+
         try {
             SharedPreferences prefs =
-                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
+                    getSharedPreferences(
+                            CACHE_NAME, MODE_PRIVATE);
 
             JSONObject root = new JSONObject();
             JSONArray array = new JSONArray();
@@ -1429,7 +1115,9 @@ public class OnlineSongActivity extends Activity {
             root.put("time", System.currentTimeMillis());
             root.put("videos", array);
 
-            prefs.edit().putString(query, root.toString()).apply();
+            prefs.edit()
+                    .putString(query, root.toString())
+                    .apply();
 
         } catch (Exception ignored) {
         }
@@ -1438,7 +1126,8 @@ public class OnlineSongActivity extends Activity {
     private ArrayList<Video> loadSearchCache(String query) {
         try {
             SharedPreferences prefs =
-                    getSharedPreferences(CACHE_NAME, MODE_PRIVATE);
+                    getSharedPreferences(
+                            CACHE_NAME, MODE_PRIVATE);
 
             String saved = prefs.getString(query, null);
 
@@ -1451,7 +1140,8 @@ public class OnlineSongActivity extends Activity {
             long savedTime = root.optLong("time", 0);
             long now = System.currentTimeMillis();
 
-            if (savedTime <= 0 || now < savedTime
+            if (savedTime <= 0
+                    || now < savedTime
                     || now - savedTime > CACHE_DURATION) {
 
                 prefs.edit().remove(query).apply();
@@ -1476,11 +1166,14 @@ public class OnlineSongActivity extends Activity {
                 Video video = new Video();
 
                 video.id = item.optString("id", "");
+
                 video.title = item.optString(
-                        "title", "YouTube karaoke video");
+                        "title",
+                        "YouTube karaoke video");
 
                 video.channel = item.optString(
-                        "channel", "YouTube channel");
+                        "channel",
+                        "YouTube channel");
 
                 if (!video.id.isEmpty()) {
                     videos.add(video);
@@ -1500,7 +1193,8 @@ public class OnlineSongActivity extends Activity {
         }
 
         if (offlineAccess) {
-            toast("YouTube search requires an internet connection. Your downloaded songs may still be available in Stage 3.");
+            toast(
+                    "YouTube search requires an internet connection. Your downloaded songs may still be available in Stage 3.");
             return;
         }
 
@@ -1511,30 +1205,37 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        String query = searchBox.getText().toString().trim();
+        String query =
+                searchBox.getText().toString().trim();
 
         if (query.isEmpty()) {
             toast("Enter a song title or artist.");
             return;
         }
 
-        Object service = getSystemService(Context.INPUT_METHOD_SERVICE);
+        Object service = getSystemService(
+                Context.INPUT_METHOD_SERVICE);
 
         if (service instanceof InputMethodManager) {
-            ((InputMethodManager) service).hideSoftInputFromWindow(
-                    searchBox.getWindowToken(), 0);
+            ((InputMethodManager) service)
+                    .hideSoftInputFromWindow(
+                            searchBox.getWindowToken(), 0);
         }
 
         final int generation = ++searchGeneration;
-        final String searchQuery = normalizedQuery(query);
+
+        final String searchQuery =
+                normalizedQuery(query);
 
         searchButton.setEnabled(false);
         resultsContainer.removeAllViews();
 
-        ArrayList<Video> cached = loadSearchCache(searchQuery);
+        ArrayList<Video> cached =
+                loadSearchCache(searchQuery);
 
         if (cached != null && !cached.isEmpty()) {
             status.setText("Showing saved search results.");
+
             displayVideos(cached, generation, true);
             return;
         }
@@ -1556,8 +1257,11 @@ public class OnlineSongActivity extends Activity {
         final String encodedKey;
 
         try {
-            encodedQuery = URLEncoder.encode(searchQuery, "UTF-8");
-            encodedKey = URLEncoder.encode(apiKey, "UTF-8");
+            encodedQuery =
+                    URLEncoder.encode(searchQuery, "UTF-8");
+
+            encodedKey =
+                    URLEncoder.encode(apiKey, "UTF-8");
 
         } catch (Exception e) {
             searchButton.setEnabled(true);
@@ -1586,27 +1290,36 @@ public class OnlineSongActivity extends Activity {
                 connection.setConnectTimeout(15000);
                 connection.setReadTimeout(15000);
 
-                int responseCode = connection.getResponseCode();
+                int responseCode =
+                        connection.getResponseCode();
 
                 InputStream stream =
-                        responseCode >= 200 && responseCode < 300
+                        responseCode >= 200
+                                && responseCode < 300
                                 ? connection.getInputStream()
                                 : connection.getErrorStream();
 
                 String response = readAll(stream);
 
-                if (responseCode < 200 || responseCode >= 300) {
-                    JSONObject errorJson = new JSONObject(response);
+                if (responseCode < 200
+                        || responseCode >= 300) {
+
+                    JSONObject errorJson =
+                            new JSONObject(response);
 
                     JSONObject errorObject =
                             errorJson.optJSONObject("error");
 
-                    String message = errorObject == null ? ""
-                            : errorObject.optString("message", "");
+                    String message = errorObject == null
+                            ? ""
+                            : errorObject.optString(
+                                    "message", "");
 
-                    throw new Exception(message.isEmpty()
-                            ? "YouTube API error: HTTP " + responseCode
-                            : message);
+                    throw new Exception(
+                            message.isEmpty()
+                                    ? "YouTube API error: HTTP "
+                                    + responseCode
+                                    : message);
                 }
 
                 JSONObject json = new JSONObject(response);
@@ -1615,20 +1328,26 @@ public class OnlineSongActivity extends Activity {
 
                 if (items != null) {
                     for (int i = 0; i < items.length(); i++) {
-                        JSONObject item = items.optJSONObject(i);
+                        JSONObject item =
+                                items.optJSONObject(i);
 
                         if (item == null) {
                             continue;
                         }
 
-                        JSONObject idObject = item.optJSONObject("id");
-                        JSONObject snippet = item.optJSONObject("snippet");
+                        JSONObject idObject =
+                                item.optJSONObject("id");
+
+                        JSONObject snippet =
+                                item.optJSONObject("snippet");
 
                         if (idObject == null || snippet == null) {
                             continue;
                         }
 
-                        String videoId = idObject.optString("videoId", "");
+                        String videoId =
+                                idObject.optString(
+                                        "videoId", "");
 
                         if (videoId.isEmpty()) {
                             continue;
@@ -1637,11 +1356,14 @@ public class OnlineSongActivity extends Activity {
                         Video video = new Video();
 
                         video.id = videoId;
+
                         video.title = snippet.optString(
-                                "title", "YouTube karaoke video");
+                                "title",
+                                "YouTube karaoke video");
 
                         video.channel = snippet.optString(
-                                "channelTitle", "YouTube channel");
+                                "channelTitle",
+                                "YouTube channel");
 
                         videos.add(video);
                     }
@@ -1653,7 +1375,8 @@ public class OnlineSongActivity extends Activity {
 
             } catch (Exception e) {
                 error = e.getMessage() == null
-                        ? "Unable to search YouTube." : e.getMessage();
+                        ? "Unable to search YouTube."
+                        : e.getMessage();
 
             } finally {
                 if (connection != null) {
@@ -1665,7 +1388,9 @@ public class OnlineSongActivity extends Activity {
             final ArrayList<Video> found = videos;
 
             runOnUiThread(() -> {
-                if (closing || isFinishing() || !sessionValid
+                if (closing
+                        || isFinishing()
+                        || !sessionValid
                         || generation != searchGeneration) {
                     return;
                 }
@@ -1673,7 +1398,9 @@ public class OnlineSongActivity extends Activity {
                 searchButton.setEnabled(true);
 
                 if (finalError != null) {
-                    status.setText("YouTube search failed: " + finalError);
+                    status.setText(
+                            "YouTube search failed: "
+                                    + finalError);
                     return;
                 }
 
@@ -1690,10 +1417,14 @@ public class OnlineSongActivity extends Activity {
         });
     }
 
-    private void displayVideos(ArrayList<Video> videos,
-                               int generation, boolean fromCache) {
+    private void displayVideos(
+            ArrayList<Video> videos,
+            int generation,
+            boolean fromCache) {
 
-        if (closing || isFinishing() || !sessionValid
+        if (closing
+                || isFinishing()
+                || !sessionValid
                 || generation != searchGeneration) {
             return;
         }
@@ -1701,9 +1432,10 @@ public class OnlineSongActivity extends Activity {
         searchButton.setEnabled(true);
         resultsContainer.removeAllViews();
 
-        status.setText("Found " + videos.size() + " videos. "
-                + (fromCache ? "Saved results. " : "")
-                + "Tap a song to play.");
+        status.setText(
+                "Found " + videos.size() + " videos. "
+                        + (fromCache ? "Saved results. " : "")
+                        + "Tap a song to play.");
 
         for (Video video : videos) {
             addVideoResult(video);
@@ -1719,7 +1451,9 @@ public class OnlineSongActivity extends Activity {
         card.setClickable(true);
         card.setFocusable(true);
 
-        LinearLayout.LayoutParams cardParams = fullWidthWrap();
+        LinearLayout.LayoutParams cardParams =
+                fullWidthWrap();
+
         cardParams.bottomMargin = dp(10);
 
         resultsContainer.addView(card, cardParams);
@@ -1772,9 +1506,11 @@ public class OnlineSongActivity extends Activity {
         playerHost = new FrameLayout(this);
         playerHost.setBackgroundColor(Color.BLACK);
 
-        playbackScreen.addView(playerHost, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
+        playbackScreen.addView(
+                playerHost,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = new TextView(this);
         title.setText(video.title);
@@ -1784,30 +1520,40 @@ public class OnlineSongActivity extends Activity {
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setPadding(dp(12), dp(8), dp(12), dp(8));
         title.setMaxLines(2);
-        title.setBackground(round(Color.argb(205, 10, 12, 15), dp(8)));
+        title.setBackground(
+                round(Color.argb(205, 10, 12, 15), dp(8)));
 
-        FrameLayout.LayoutParams titleParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        FrameLayout.LayoutParams titleParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP);
 
-        titleParams.setMargins(dp(10), dp(10), dp(10), 0);
+        titleParams.setMargins(
+                dp(10), dp(10), dp(10), 0);
 
         playbackScreen.addView(title, titleParams);
 
         addMicrophonePanel();
 
-        Button backButton = makeButton("‹  BACK TO SONGS");
+        Button backButton =
+                makeButton("‹  BACK TO SONGS");
+
         backButton.setTextSize(13);
 
-        FrameLayout.LayoutParams backParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(46),
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        FrameLayout.LayoutParams backParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(46),
+                        Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
 
-        backParams.setMargins(dp(12), 0, dp(12), dp(12));
+        backParams.setMargins(
+                dp(12), 0, dp(12), dp(12));
 
         playbackScreen.addView(backButton, backParams);
 
-        backButton.setOnClickListener(v -> returnToResults());
+        backButton.setOnClickListener(
+                v -> returnToResults());
 
         setContentView(playbackScreen);
 
@@ -1826,9 +1572,11 @@ public class OnlineSongActivity extends Activity {
         player.setWebChromeClient(new WebChromeClient());
         player.setWebViewClient(new WebViewClient());
 
-        playerHost.addView(player, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
+        playerHost.addView(
+                player,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
 
         String html = "<!doctype html><html><head>"
                 + "<meta name=\"viewport\" content=\"width=device-width,"
@@ -1848,27 +1596,29 @@ public class OnlineSongActivity extends Activity {
 
         player.loadDataWithBaseURL(
                 "https://com.donut4u.karaoke/",
-                html, "text/html", "UTF-8", null);
+                html,
+                "text/html",
+                "UTF-8",
+                null);
 
-        // Send the selected song to the paired TV monitor.
         publishPhoneTvState(video, "playing", "");
     }
 
     /**
      * Publishes Stage 1 playback information to the paired TV.
      *
-     * This method is phone-side only. The TV does not receive
-     * microphone controls, score information, or advertisements.
+     * This runs on the phone. The TV receives song information
+     * and playback state only, not microphone controls, score
+     * information, or advertisements.
      *
-     * Network communication runs on a background thread so
-     * phone playback and the user interface are not blocked.
+     * Network communication runs on a background thread.
      */
     private void publishPhoneTvState(
             Video video,
             String playback,
-            String action
-    ) {
-        if (isAndroidTv() || closing) {
+            String action) {
+
+        if (closing) {
             return;
         }
 
@@ -1882,14 +1632,17 @@ public class OnlineSongActivity extends Activity {
         JSONObject state = new JSONObject();
 
         try {
-            String title = video == null || video.title == null
-                    ? "" : video.title;
+            String title =
+                    video == null || video.title == null
+                            ? "" : video.title;
 
-            String channel = video == null || video.channel == null
-                    ? "" : video.channel;
+            String channel =
+                    video == null || video.channel == null
+                            ? "" : video.channel;
 
-            String videoId = video == null || video.id == null
-                    ? "" : video.id;
+            String videoId =
+                    video == null || video.id == null
+                            ? "" : video.id;
 
             state.put("stage", 1);
             state.put("songTitle", title);
@@ -1899,8 +1652,12 @@ public class OnlineSongActivity extends Activity {
             state.put("videoId", videoId);
             state.put("mediaUrl", "");
             state.put("lyrics", "");
-            state.put("playback", playback == null ? "" : playback);
-            state.put("action", action == null ? "" : action);
+            state.put(
+                    "playback",
+                    playback == null ? "" : playback);
+            state.put(
+                    "action",
+                    action == null ? "" : action);
 
         } catch (Exception ignored) {
             return;
@@ -1909,9 +1666,10 @@ public class OnlineSongActivity extends Activity {
         Thread sender = new Thread(() -> {
             try {
                 manager.publishState(state);
+
             } catch (Exception ignored) {
-                // A temporary TV connection problem must not
-                // interrupt playback on the phone.
+                // TV connection failures must not interrupt
+                // playback on the phone.
             }
         }, "Donut4U-TV-Stage1-State");
 
@@ -1923,8 +1681,8 @@ public class OnlineSongActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(10), dp(12), dp(10));
-        panel.setBackground(round(
-                Color.argb(235, 10, 20, 16), dp(14)));
+        panel.setBackground(
+                round(Color.argb(235, 10, 20, 16), dp(14)));
 
         FrameLayout.LayoutParams panelParams =
                 new FrameLayout.LayoutParams(
@@ -1943,11 +1701,17 @@ public class OnlineSongActivity extends Activity {
         heading.setTextSize(14);
         heading.setTypeface(null, Typeface.BOLD);
         heading.setGravity(Gravity.CENTER);
+
         panel.addView(heading, fullWidthWrap());
 
-        microphoneButton = makeButton("🎤 TURN MICROPHONE ON");
-        LinearLayout.LayoutParams buttonParams = fullWidth(dp(44));
+        microphoneButton =
+                makeButton("🎤 TURN MICROPHONE ON");
+
+        LinearLayout.LayoutParams buttonParams =
+                fullWidth(dp(44));
+
         buttonParams.topMargin = dp(7);
+
         panel.addView(microphoneButton, buttonParams);
 
         microphoneButton.setOnClickListener(
@@ -1959,37 +1723,51 @@ public class OnlineSongActivity extends Activity {
         microphoneStatus.setTextSize(12);
         microphoneStatus.setGravity(Gravity.CENTER);
         microphoneStatus.setPadding(0, dp(6), 0, dp(4));
-        panel.addView(microphoneStatus, fullWidthWrap());
+
+        panel.addView(
+                microphoneStatus, fullWidthWrap());
 
         microphoneLevelText = new TextView(this);
         microphoneLevelText.setText("MIC LEVEL: 0%");
         microphoneLevelText.setTextColor(MUTED);
         microphoneLevelText.setTextSize(11);
-        panel.addView(microphoneLevelText, fullWidthWrap());
+
+        panel.addView(
+                microphoneLevelText, fullWidthWrap());
 
         FrameLayout meter = new FrameLayout(this);
         meter.setBackground(round(Color.DKGRAY, dp(8)));
 
-        LinearLayout.LayoutParams meterParams = fullWidth(dp(9));
+        LinearLayout.LayoutParams meterParams =
+                fullWidth(dp(9));
+
         meterParams.topMargin = dp(4);
+
         panel.addView(meter, meterParams);
 
         microphoneLevelFill = new View(this);
-        microphoneLevelFill.setBackground(round(GREEN, dp(8)));
+        microphoneLevelFill.setBackground(
+                round(GREEN, dp(8)));
 
         FrameLayout.LayoutParams fillParams =
-                new FrameLayout.LayoutParams(0,
+                new FrameLayout.LayoutParams(
+                        0,
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         Gravity.LEFT);
 
-        meter.addView(microphoneLevelFill, fillParams);
+        meter.addView(
+                microphoneLevelFill, fillParams);
 
         microphonePitchText = new TextView(this);
-        microphonePitchText.setText("PITCH: Waiting for singing");
+        microphonePitchText.setText(
+                "PITCH: Waiting for singing");
+
         microphonePitchText.setTextColor(WHITE);
         microphonePitchText.setTextSize(11);
         microphonePitchText.setPadding(0, dp(5), 0, 0);
-        panel.addView(microphonePitchText, fullWidthWrap());
+
+        panel.addView(
+                microphonePitchText, fullWidthWrap());
 
         microphoneScoreText = new TextView(this);
         microphoneScoreText.setText("SCORE: 0%");
@@ -1998,14 +1776,18 @@ public class OnlineSongActivity extends Activity {
         microphoneScoreText.setTypeface(null, Typeface.BOLD);
         microphoneScoreText.setGravity(Gravity.CENTER);
         microphoneScoreText.setPadding(0, dp(5), 0, 0);
-        panel.addView(microphoneScoreText, fullWidthWrap());
+
+        panel.addView(
+                microphoneScoreText, fullWidthWrap());
 
         microphoneStreakText = new TextView(this);
         microphoneStreakText.setText("BEST STREAK: 0");
         microphoneStreakText.setTextColor(WHITE);
         microphoneStreakText.setTextSize(11);
         microphoneStreakText.setGravity(Gravity.CENTER);
-        panel.addView(microphoneStreakText, fullWidthWrap());
+
+        panel.addView(
+                microphoneStreakText, fullWidthWrap());
 
         microphoneRatingText = new TextView(this);
         microphoneRatingText.setText("WAITING FOR SINGING");
@@ -2014,7 +1796,9 @@ public class OnlineSongActivity extends Activity {
         microphoneRatingText.setTypeface(null, Typeface.BOLD);
         microphoneRatingText.setGravity(Gravity.CENTER);
         microphoneRatingText.setPadding(0, dp(3), 0, 0);
-        panel.addView(microphoneRatingText, fullWidthWrap());
+
+        panel.addView(
+                microphoneRatingText, fullWidthWrap());
     }
 
     private void toggleMicrophoneMonitoring() {
@@ -2024,17 +1808,19 @@ public class OnlineSongActivity extends Activity {
 
         if (microphoneMonitor != null
                 && microphoneMonitor.isRunning()) {
+
             stopMicrophoneMonitoring(true);
             return;
         }
 
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+        if (checkSelfPermission(
+                Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
 
-            microphonePermissionPending = true;
-
             requestPermissions(
-                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    new String[]{
+                            Manifest.permission.RECORD_AUDIO
+                    },
                     REQUEST_STAGE12_MICROPHONE);
 
             return;
@@ -2048,8 +1834,10 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+        if (checkSelfPermission(
+                Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
+
             toast("Microphone permission is required.");
             return;
         }
@@ -2064,8 +1852,11 @@ public class OnlineSongActivity extends Activity {
 
         updateMicrophoneDisplay(0, -1, 0.0);
 
-        microphoneStatus.setText("Starting microphone...");
-        microphoneButton.setText("🎤 TURN MICROPHONE OFF");
+        microphoneStatus.setText(
+                "Starting microphone...");
+
+        microphoneButton.setText(
+                "🎤 TURN MICROPHONE OFF");
 
         microphoneMonitor = new Stage3MicrophoneMonitor(
                 new Stage3MicrophoneMonitor.Listener() {
@@ -2112,13 +1903,16 @@ public class OnlineSongActivity extends Activity {
 
         if (!started) {
             microphoneMonitor = null;
+
             microphoneButton.setText(
                     "🎤 TURN MICROPHONE ON");
 
             microphoneStatus.setText(
                     "Unable to start microphone.");
 
-            toast("Please check microphone permission and try again.");
+            toast(
+                    "Please check microphone permission and try again.");
+
         } else {
             microphoneStatus.setText(
                     "MICROPHONE ON — START SINGING");
@@ -2132,7 +1926,8 @@ public class OnlineSongActivity extends Activity {
 
         if (Looper.myLooper() != Looper.getMainLooper()) {
             runOnUiThread(() ->
-                    updateMicrophoneDisplay(level, note, confidence));
+                    updateMicrophoneDisplay(
+                            level, note, confidence));
             return;
         }
 
@@ -2154,7 +1949,8 @@ public class OnlineSongActivity extends Activity {
             int availableWidth = dp(300);
 
             if (microphoneLevelFill.getParent() instanceof View) {
-                View parent = (View) microphoneLevelFill.getParent();
+                View parent =
+                        (View) microphoneLevelFill.getParent();
 
                 if (parent.getWidth() > 0) {
                     availableWidth = parent.getWidth();
@@ -2162,8 +1958,9 @@ public class OnlineSongActivity extends Activity {
             }
 
             params.width = Math.max(
-                    0, availableWidth * Math.max(0,
-                            Math.min(100, level)) / 100);
+                    0,
+                    availableWidth * Math.max(
+                            0, Math.min(100, level)) / 100);
 
             microphoneLevelFill.setLayoutParams(params);
         }
@@ -2171,13 +1968,16 @@ public class OnlineSongActivity extends Activity {
         if (note >= 0 && confidence >= 0.72) {
             microphonePitchText.setText(
                     "PITCH NOTE: " + midiNoteName(note));
+
         } else {
             microphonePitchText.setText(
                     "PITCH: Listening for a clear voice");
         }
 
         microphoneScoreText.setText(
-                "SCORE: " + performanceScorer.getScorePercent() + "%");
+                "SCORE: "
+                        + performanceScorer.getScorePercent()
+                        + "%");
 
         microphoneStreakText.setText(
                 "BEST STREAK: "
@@ -2227,7 +2027,8 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        int score = performanceScorer.getScorePercent();
+        int score =
+                performanceScorer.getScorePercent();
 
         microphoneScoreText.setText(
                 "FINAL SCORE: " + score + "%");
@@ -2242,6 +2043,7 @@ public class OnlineSongActivity extends Activity {
         if (!performanceScorer.hasScored()) {
             microphoneStatus.setText(
                     "No reliable singing pitch was recorded.");
+
         } else {
             microphoneStatus.setText(
                     "Performance finished. Tap microphone to sing again.");
@@ -2267,9 +2069,9 @@ public class OnlineSongActivity extends Activity {
         new android.app.AlertDialog.Builder(this)
                 .setTitle("💚 YOUR KARAOKE RESULT")
                 .setMessage(details)
-                .setPositiveButton("CONTINUE", (dialog, which) -> {
-                    dialog.dismiss();
-                })
+                .setPositiveButton(
+                        "CONTINUE",
+                        (dialog, which) -> dialog.dismiss())
                 .show();
     }
 
@@ -2280,16 +2082,17 @@ public class OnlineSongActivity extends Activity {
             int[] grantResults) {
 
         super.onRequestPermissionsResult(
-                requestCode, permissions, grantResults);
+                requestCode,
+                permissions,
+                grantResults);
 
         if (requestCode != REQUEST_STAGE12_MICROPHONE) {
             return;
         }
 
-        microphonePermissionPending = false;
-
         if (grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                && grantResults[0]
+                == PackageManager.PERMISSION_GRANTED) {
 
             if (playbackVisible && !closing) {
                 startMicrophoneMonitoring();
@@ -2306,12 +2109,12 @@ public class OnlineSongActivity extends Activity {
                         "Microphone permission denied.");
             }
 
-            toast("Allow microphone access to use singing score.");
+            toast(
+                    "Allow microphone access to use singing score.");
         }
     }
 
     private void returnToResults() {
-        // Tell the paired TV to stop Stage 1 playback and return.
         publishPhoneTvState(null, "stop", "back");
 
         stopMicrophoneMonitoring(false);
@@ -2339,14 +2142,14 @@ public class OnlineSongActivity extends Activity {
         microphonePitchText = null;
         microphoneStreakText = null;
         microphoneRatingText = null;
-        microphoneLevelBar = null;
         microphoneLevelFill = null;
     }
 
     private void hideSystemBars() {
         Window window = getWindow();
 
-        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        window.addFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
         window.getDecorView().setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -2358,7 +2161,8 @@ public class OnlineSongActivity extends Activity {
     private void showSystemBars() {
         Window window = getWindow();
 
-        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        window.clearFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
         window.getDecorView().setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
@@ -2391,7 +2195,8 @@ public class OnlineSongActivity extends Activity {
         StringBuilder result = new StringBuilder();
 
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                new InputStreamReader(
+                        input, StandardCharsets.UTF_8))) {
 
             String line;
 
@@ -2428,7 +2233,8 @@ public class OnlineSongActivity extends Activity {
     }
 
     private GradientDrawable round(int color, int radius) {
-        GradientDrawable drawable = new GradientDrawable();
+        GradientDrawable drawable =
+                new GradientDrawable();
 
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
@@ -2438,7 +2244,8 @@ public class OnlineSongActivity extends Activity {
 
     private LinearLayout.LayoutParams fullWidth(int height) {
         return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, height);
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                height);
     }
 
     private LinearLayout.LayoutParams fullWidthWrap() {
@@ -2453,7 +2260,10 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void toast(String message) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_LONG).show();
     }
 
     @Override
@@ -2462,15 +2272,11 @@ public class OnlineSongActivity extends Activity {
             adView.pause();
         }
 
-        /*
-         * Stage 1 releases only its own command handler.
-         * The application-wide TV session remains active.
-         */
-        unregisterTvStageHandler();
-
         if (microphoneMonitor != null
                 && microphoneMonitor.isRunning()) {
+
             microphoneWasStoppedByLifecycle = true;
+
             stopMicrophoneMonitoring(false);
         }
 
@@ -2485,44 +2291,12 @@ public class OnlineSongActivity extends Activity {
             adView.resume();
         }
 
-        if (isTvPhoneControlled()
-                && searchScreen != null
-                && searchBox != null
-                && !playbackVisible
-                && !donationScreenVisible
-                && !closing) {
-
-            registerTvStageHandler();
-
-            searchBox.post(() -> {
-                if (searchBox != null && !closing) {
-                    searchBox.clearFocus();
-                }
-            });
-
-        } else if (isTvStage1()
-                && !isTvPhoneControlled()
-                && searchScreen != null
-                && searchBox != null
-                && !playbackVisible
-                && !donationScreenVisible
-                && !closing) {
-
-            /*
-             * TV ONLY: keep the search field ready for the
-             * TV remote and allow the TV's own keyboard.
-             */
-            searchBox.post(() -> {
-                if (searchBox != null && !closing) {
-                    searchBox.requestFocus();
-                }
-            });
-        }
-
         if (microphoneWasStoppedByLifecycle) {
             microphoneWasStoppedByLifecycle = false;
 
-            if (playbackVisible && microphoneStatus != null) {
+            if (playbackVisible
+                    && microphoneStatus != null) {
+
                 microphoneStatus.setText(
                         "Microphone stopped. Tap ON to resume.");
             }
@@ -2541,7 +2315,7 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        if (searchBox != null && !isTvPhoneControlled()) {
+        if (searchBox != null) {
             Object service = getSystemService(
                     Context.INPUT_METHOD_SERVICE);
 
@@ -2561,13 +2335,8 @@ public class OnlineSongActivity extends Activity {
             }
         }
 
-        if (isTvStage1()) {
-            unregisterTvStageHandler();
-            finish();
-            return;
-        }
-
-        toast("You're in Donut4U Karaoke. Search for another song!");
+        toast(
+                "You're in Donut4U Karaoke. Search for another song!");
     }
 
     @Override
@@ -2577,17 +2346,23 @@ public class OnlineSongActivity extends Activity {
 
         cancelPendingSessionMismatch();
 
-        unregisterTvStageHandler();
-
         stopMicrophoneMonitoring(false);
 
-        if (connectionRef != null && connectionListener != null) {
-            connectionRef.removeEventListener(connectionListener);
+        if (connectionRef != null
+                && connectionListener != null) {
+
+            connectionRef.removeEventListener(
+                    connectionListener);
+
             connectionListener = null;
         }
 
-        if (sessionRef != null && sessionListener != null) {
-            sessionRef.removeEventListener(sessionListener);
+        if (sessionRef != null
+                && sessionListener != null) {
+
+            sessionRef.removeEventListener(
+                    sessionListener);
+
             sessionListener = null;
         }
 
