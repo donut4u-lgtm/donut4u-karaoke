@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -18,8 +19,10 @@ import android.os.Looper;
 import android.text.Editable;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.ConsoleMessage;
@@ -111,50 +114,13 @@ public class KaraokeStudioActivity extends Activity {
     private WebView videoWebView;
     private AdView adView;
 
-    // SHARED PHONE-TO-TV SESSION
+    // TV ONLY MODE
+    // TV mode is independent. It does not use the phone keyboard,
+    // phone-TV command receiver, login, microphone, singing score,
+    // or advertisements.
     private boolean tvMode;
-    private TvSessionController tvSessionController;
-    private TextView tvKeyboardCodeText;
-    private TextView tvKeyboardStatusText;
 
-    private final TvSessionController.TvCommandHandler tvCommandHandler =
-            new TvSessionController.TvCommandHandler() {
-
-        @Override
-        public void onPhoneSearchRequested(String songTitle) {
-            mainHandler.post(() -> {
-                if (activityDestroyed || searchInput == null) {
-                    return;
-                }
-
-                showSearchScreen();
-
-                searchInput.setText(songTitle);
-                searchInput.setSelection(
-                        searchInput.getText().length()
-                );
-
-                searchSongs();
-            });
-        }
-
-        @Override
-        public void onPhoneTextInput(
-                String target,
-                String text,
-                String action
-        ) {
-            mainHandler.post(() -> {
-                if (activityDestroyed || searchInput == null) {
-                    return;
-                }
-
-                applyTvTextInput(target, text, action);
-            });
-        }
-    };
-
-    // STAGE 2 MICROPHONE AND SINGING SCORE
+    // STAGE 2 MICROPHONE AND SINGING SCORE (PHONE MODE ONLY)
     private Stage3MicrophoneMonitor microphoneMonitor;
 
     private final Stage12PerformanceScorer performanceScorer =
@@ -214,19 +180,24 @@ public class KaraokeStudioActivity extends Activity {
                 false
         );
 
-        FirebaseUser user =
-                FirebaseAuth.getInstance().getCurrentUser();
+        // TV ONLY must work without a Firebase account.
+        // Phone Stage 2 keeps its existing verified-account requirement.
+        if (!tvMode) {
 
-        if (user == null || !user.isEmailVerified()) {
+            FirebaseUser user =
+                    FirebaseAuth.getInstance().getCurrentUser();
 
-            Toast.makeText(
-                    this,
-                    "Please sign in with a verified account first.",
-                    Toast.LENGTH_LONG
-            ).show();
+            if (user == null || !user.isEmailVerified()) {
 
-            finish();
-            return;
+                Toast.makeText(
+                        this,
+                        "Please sign in with a verified account first.",
+                        Toast.LENGTH_LONG
+                ).show();
+
+                finish();
+                return;
+            }
         }
 
         buildInterface();
@@ -250,40 +221,44 @@ public class KaraokeStudioActivity extends Activity {
             );
         }
 
-        try {
+        // TV ONLY must never initialize or load AdMob.
+        if (!tvMode) {
 
-            MobileAds.initialize(this, initializationStatus -> {
+            try {
 
-                if (activityDestroyed || adView == null) {
-                    return;
-                }
-
-                adView.post(() -> {
+                MobileAds.initialize(this, initializationStatus -> {
 
                     if (activityDestroyed || adView == null) {
                         return;
                     }
 
-                    if (adStatusText != null) {
-                        adStatusText.setText(
-                                "Loading advertisement..."
+                    adView.post(() -> {
+
+                        if (activityDestroyed || adView == null) {
+                            return;
+                        }
+
+                        if (adStatusText != null) {
+                            adStatusText.setText(
+                                    "Loading advertisement..."
+                            );
+                        }
+
+                        adView.loadAd(
+                                new AdRequest.Builder().build()
                         );
-                    }
-
-                    adView.loadAd(
-                            new AdRequest.Builder().build()
-                    );
+                    });
                 });
-            });
 
-        } catch (Exception e) {
+            } catch (Exception e) {
 
-            Log.e(TAG, "AdMob initialization failed", e);
+                Log.e(TAG, "AdMob initialization failed", e);
 
-            if (adStatusText != null) {
-                adStatusText.setText(
-                        "AdMob initialization failed."
-                );
+                if (adStatusText != null) {
+                    adStatusText.setText(
+                            "AdMob initialization failed."
+                    );
+                }
             }
         }
     }
@@ -316,7 +291,9 @@ public class KaraokeStudioActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = text(
-                "Find a song. Play. Sing.",
+                tvMode
+                        ? "TV KARAOKE PLAYER"
+                        : "Find a song. Play. Sing.",
                 15, MUTED, false
         );
 
@@ -361,18 +338,49 @@ public class KaraokeStudioActivity extends Activity {
         searchInput.setPadding(
                 dp(12), dp(8), dp(12), dp(8)
         );
+        searchInput.setImeOptions(
+                EditorInfo.IME_ACTION_SEARCH
+        );
 
         if (tvMode) {
+
             searchInput.setBackground(
                     createTvSearchBackground()
             );
+
             searchInput.setFocusable(true);
             searchInput.setFocusableInTouchMode(true);
-            searchInput.setShowSoftInputOnFocus(false);
+
+            // Allow Android TV to display its native on-screen keyboard.
+            searchInput.setShowSoftInputOnFocus(true);
             searchInput.setSelectAllOnFocus(false);
+
         } else {
+
             searchInput.setBackgroundColor(PANEL);
         }
+
+        searchInput.setOnEditorActionListener(
+                (view, actionId, event) -> {
+
+                    boolean enterPressed =
+                            event != null
+                                    && event.getKeyCode()
+                                    == KeyEvent.KEYCODE_ENTER
+                                    && event.getAction()
+                                    == KeyEvent.ACTION_DOWN;
+
+                    if (actionId == EditorInfo.IME_ACTION_SEARCH
+                            || actionId == EditorInfo.IME_ACTION_DONE
+                            || enterPressed) {
+
+                        searchSongs();
+                        return true;
+                    }
+
+                    return false;
+                }
+        );
 
         searchPanel.addView(searchInput, matchWrap());
 
@@ -387,11 +395,8 @@ public class KaraokeStudioActivity extends Activity {
 
         searchButton.setOnClickListener(v -> searchSongs());
 
-        if (tvMode) {
-
-            addTvPhoneKeyboardPanel();
-
-        } else {
+        // The phone remote button belongs only to the phone app.
+        if (!tvMode) {
 
             Button phoneRemoteButton =
                     button("USE PHONE AS KEYBOARD");
@@ -678,33 +683,37 @@ public class KaraokeStudioActivity extends Activity {
                 v -> stopPlayback()
         );
 
-        addStage2MicrophonePanel();
+        // Singing controls exist only in the phone version.
+        if (!tvMode) {
 
-        addSectionTitle("SUPPORT DONUT4U KARAOKE");
+            addStage2MicrophonePanel();
 
-        TextView donationText = text(
-                "Help keep running and growing DONATE",
-                15, MUTED, false
-        );
+            addSectionTitle("SUPPORT DONUT4U KARAOKE");
 
-        playerPanel.addView(donationText, matchWrap());
+            TextView donationText = text(
+                    "Help keep running and growing DONATE",
+                    15, MUTED, false
+            );
 
-        Button donateButton = button("DONATE");
+            playerPanel.addView(donationText, matchWrap());
 
-        playerPanel.addView(donateButton, matchWrap());
+            Button donateButton = button("DONATE");
 
-        donateButton.setOnClickListener(
-                v -> showDonationQr()
-        );
+            playerPanel.addView(donateButton, matchWrap());
 
-        Button questionButton =
-                button("QUESTION AND ANSWER");
+            donateButton.setOnClickListener(
+                    v -> showDonationQr()
+            );
 
-        playerPanel.addView(questionButton, matchWrap());
+            Button questionButton =
+                    button("QUESTION AND ANSWER");
 
-        questionButton.setOnClickListener(
-                v -> openQuestionsFacebook()
-        );
+            playerPanel.addView(questionButton, matchWrap());
+
+            questionButton.setOnClickListener(
+                    v -> openQuestionsFacebook()
+            );
+        }
 
         Button backButton = button("BACK TO STAGE");
 
@@ -715,118 +724,125 @@ public class KaraokeStudioActivity extends Activity {
             finish();
         });
 
-        Button logoutButton = button("LOG OUT");
+        // Logout is not available in TV ONLY mode.
+        if (!tvMode) {
 
-        playerPanel.addView(logoutButton, matchWrap());
+            Button logoutButton = button("LOG OUT");
 
-        logoutButton.setOnClickListener(v -> {
+            playerPanel.addView(logoutButton, matchWrap());
 
-            stopPlayback();
-            stopStage2Microphone(false);
-            stopTvPhoneKeyboardReceiver();
+            logoutButton.setOnClickListener(v -> {
 
-            FirebaseAuth.getInstance().signOut();
+                stopPlayback();
+                stopStage2Microphone(false);
 
-            Intent intent = new Intent();
+                FirebaseAuth.getInstance().signOut();
 
-            intent.setClassName(
-                    this,
-                    "com.donut4u.karaoke.AuthActivity"
-            );
+                Intent intent = new Intent();
 
-            intent.addFlags(
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            | Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TASK
-            );
-
-            startActivity(intent);
-            finish();
-        });
-
-        TextView adLabel = text(
-                "Advertisement", 12, MUTED, false
-        );
-
-        adLabel.setGravity(Gravity.CENTER);
-
-        LinearLayout.LayoutParams adLabelParams =
-                matchWrap();
-
-        adLabelParams.topMargin = dp(16);
-
-        playerPanel.addView(adLabel, adLabelParams);
-
-        adStatusText = text(
-                "Loading advertisement...",
-                12, MUTED, false
-        );
-
-        adStatusText.setGravity(Gravity.CENTER);
-
-        playerPanel.addView(adStatusText, matchWrap());
-
-        adView = new AdView(this);
-
-        adView.setAdSize(
-                AdSize.MEDIUM_RECTANGLE
-        );
-
-        adView.setAdUnitId(AD_UNIT_ID);
-
-        adView.setAdListener(new AdListener() {
-
-            @Override
-            public void onAdLoaded() {
-
-                runOnUiThread(() -> {
-
-                    if (adStatusText != null) {
-                        adStatusText.setText(
-                                "Advertisement loaded."
-                        );
-                    }
-                });
-
-                Log.i(
-                        TAG,
-                        "Real Stage 2 banner loaded."
-                );
-            }
-
-            @Override
-            public void onAdFailedToLoad(
-                    LoadAdError error
-            ) {
-
-                String message =
-                        "Advertisement unavailable. Code "
-                                + error.getCode()
-                                + ": "
-                                + error.getMessage();
-
-                runOnUiThread(() -> {
-
-                    if (adStatusText != null) {
-                        adStatusText.setText(message);
-                    }
-                });
-
-                Log.e(TAG, message);
-            }
-        });
-
-        LinearLayout.LayoutParams adParams =
-                new LinearLayout.LayoutParams(
-                        dp(300), dp(250)
+                intent.setClassName(
+                        this,
+                        "com.donut4u.karaoke.AuthActivity"
                 );
 
-        adParams.gravity =
-                Gravity.CENTER_HORIZONTAL;
+                intent.addFlags(
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                | Intent.FLAG_ACTIVITY_NEW_TASK
+                                | Intent.FLAG_ACTIVITY_CLEAR_TASK
+                );
 
-        adParams.topMargin = dp(6);
+                startActivity(intent);
+                finish();
+            });
+        }
 
-        playerPanel.addView(adView, adParams);
+        // Ad views are created only for the signed-in phone version.
+        if (!tvMode) {
+
+            TextView adLabel = text(
+                    "Advertisement", 12, MUTED, false
+            );
+
+            adLabel.setGravity(Gravity.CENTER);
+
+            LinearLayout.LayoutParams adLabelParams =
+                    matchWrap();
+
+            adLabelParams.topMargin = dp(16);
+
+            playerPanel.addView(adLabel, adLabelParams);
+
+            adStatusText = text(
+                    "Loading advertisement...",
+                    12, MUTED, false
+            );
+
+            adStatusText.setGravity(Gravity.CENTER);
+
+            playerPanel.addView(adStatusText, matchWrap());
+
+            adView = new AdView(this);
+
+            adView.setAdSize(
+                    AdSize.MEDIUM_RECTANGLE
+            );
+
+            adView.setAdUnitId(AD_UNIT_ID);
+
+            adView.setAdListener(new AdListener() {
+
+                @Override
+                public void onAdLoaded() {
+
+                    runOnUiThread(() -> {
+
+                        if (adStatusText != null) {
+                            adStatusText.setText(
+                                    "Advertisement loaded."
+                            );
+                        }
+                    });
+
+                    Log.i(
+                            TAG,
+                            "Real Stage 2 banner loaded."
+                    );
+                }
+
+                @Override
+                public void onAdFailedToLoad(
+                        LoadAdError error
+                ) {
+
+                    String message =
+                            "Advertisement unavailable. Code "
+                                    + error.getCode()
+                                    + ": "
+                                    + error.getMessage();
+
+                    runOnUiThread(() -> {
+
+                        if (adStatusText != null) {
+                            adStatusText.setText(message);
+                        }
+                    });
+
+                    Log.e(TAG, message);
+                }
+            });
+
+            LinearLayout.LayoutParams adParams =
+                    new LinearLayout.LayoutParams(
+                            dp(300), dp(250)
+                    );
+
+            adParams.gravity =
+                    Gravity.CENTER_HORIZONTAL;
+
+            adParams.topMargin = dp(6);
+
+            playerPanel.addView(adView, adParams);
+        }
 
         showSearchScreen();
     }
@@ -894,14 +910,8 @@ public class KaraokeStudioActivity extends Activity {
     // ------------------------------------------------
 
     /**
-     * Publishes the currently selected Stage 2 song and playback
-     * state to the paired TV monitor.
-     *
-     * This method is intentionally disabled on the TV itself.
-     * The phone remains responsible for microphone, score and ads.
-     *
-     * Network communication runs on a background thread so it
-     * cannot block the phone's playback or user interface.
+     * Publishes Stage 2 phone playback state to the paired TV.
+     * This is disabled when this Activity is running in TV ONLY mode.
      */
     private void publishStage2TvState(
             String playback,
@@ -959,8 +969,6 @@ public class KaraokeStudioActivity extends Activity {
 
             } catch (Exception e) {
 
-                // A TV connection problem must never stop
-                // playback or interfere with the phone app.
                 Log.w(
                         TAG,
                         "Stage 2 TV state could not be sent.",
@@ -975,7 +983,7 @@ public class KaraokeStudioActivity extends Activity {
     }
 
     // ------------------------------------------------
-    // TV PHONE KEYBOARD
+    // TV SEARCH FIELD
     // ------------------------------------------------
 
     private GradientDrawable createSearchDrawable(
@@ -983,6 +991,7 @@ public class KaraokeStudioActivity extends Activity {
             int strokeColor,
             int strokeWidth
     ) {
+
         GradientDrawable drawable =
                 new GradientDrawable();
 
@@ -1034,363 +1043,6 @@ public class KaraokeStudioActivity extends Activity {
         );
 
         return states;
-    }
-
-    private void addTvPhoneKeyboardPanel() {
-
-        addSectionTitle("PHONE KEYBOARD");
-
-        LinearLayout panel =
-                new LinearLayout(this);
-
-        panel.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        panel.setPadding(
-                dp(14), dp(12), dp(14), dp(12)
-        );
-
-        panel.setBackground(
-                createSearchDrawable(
-                        Color.rgb(24, 48, 37),
-                        GREEN,
-                        1
-                )
-        );
-
-        LinearLayout.LayoutParams panelParams =
-                matchWrap();
-
-        panelParams.topMargin = dp(8);
-
-        activePanel.addView(panel, panelParams);
-
-        TextView instruction = text(
-                "Connect your phone and TV to the same Wi-Fi "
-                        + "or phone hotspot. Open Donut4U Phone Remote "
-                        + "on your phone and enter this code.",
-                14, WHITE, false
-        );
-
-        panel.addView(
-                instruction,
-                matchWrap()
-        );
-
-        tvKeyboardCodeText = text(
-                "------",
-                32, GREEN, true
-        );
-
-        tvKeyboardCodeText.setGravity(
-                Gravity.CENTER
-        );
-
-        tvKeyboardCodeText.setLetterSpacing(0.15f);
-
-        LinearLayout.LayoutParams codeParams =
-                matchWrap();
-
-        codeParams.topMargin = dp(8);
-        codeParams.bottomMargin = dp(4);
-
-        panel.addView(
-                tvKeyboardCodeText,
-                codeParams
-        );
-
-        tvKeyboardStatusText = text(
-                "Preparing phone connection...",
-                13, MUTED, false
-        );
-
-        tvKeyboardStatusText.setGravity(
-                Gravity.CENTER
-        );
-
-        panel.addView(
-                tvKeyboardStatusText,
-                matchWrap()
-        );
-    }
-
-    /**
-     * Stage 2 registers as a handler with the existing
-     * application-wide phone-TV session.
-     *
-     * The TV menu owns and starts the shared session.
-     * This Activity must never create or stop a receiver.
-     */
-    private void startTvPhoneKeyboardReceiver() {
-
-        if (!tvMode || activityDestroyed) {
-            return;
-        }
-
-        if (tvKeyboardCodeText == null
-                || tvKeyboardStatusText == null) {
-            return;
-        }
-
-        tvSessionController =
-                TvSessionController.getInstance(
-                        getApplicationContext()
-                );
-
-        tvSessionController.setActiveStage(2);
-
-        tvSessionController.registerStageHandler(
-                tvCommandHandler
-        );
-
-        String code =
-                tvSessionController.getPairingCode();
-
-        if (code != null && !code.isEmpty()) {
-
-            tvKeyboardCodeText.setText(code);
-
-            tvKeyboardStatusText.setText(
-                    "Use the code above in Donut4U Phone Remote."
-            );
-
-        } else {
-
-            tvKeyboardStatusText.setText(
-                    "Waiting for the shared phone-TV session..."
-            );
-
-            Log.w(
-                    TAG,
-                    "Stage 2 registered, but the shared TV session "
-                            + "has not supplied a pairing code."
-            );
-        }
-    }
-
-    /**
-     * Unregisters Stage 2 only.
-     *
-     * It deliberately does not call endSession(),
-     * disableSession(), or stop() on the shared receiver.
-     */
-    private void stopTvPhoneKeyboardReceiver() {
-
-        if (tvSessionController != null) {
-
-            tvSessionController.unregisterStageHandler(
-                    tvCommandHandler
-            );
-
-            tvSessionController = null;
-        }
-
-        if (tvKeyboardStatusText != null
-                && !activityDestroyed) {
-
-            tvKeyboardStatusText.setText(
-                    "Stage 2 phone keyboard handler disconnected."
-            );
-        }
-    }
-
-    /**
-     * Applies phone keyboard commands to the Stage 2 TV search field.
-     *
-     * Supported targets:
-     * active, search, searchInput
-     *
-     * Supported actions:
-     * replace, append, backspace, clear, submit
-     */
-    private void applyTvTextInput(
-            String target,
-            String incomingText,
-            String action
-    ) {
-
-        if (!tvMode
-                || activityDestroyed
-                || searchInput == null) {
-            return;
-        }
-
-        String safeTarget =
-                target == null
-                        ? ""
-                        : target.trim();
-
-        if (!"active".equalsIgnoreCase(safeTarget)
-                && !"search".equalsIgnoreCase(safeTarget)
-                && !"searchInput".equalsIgnoreCase(safeTarget)) {
-
-            Log.w(
-                    TAG,
-                    "Ignoring unsupported Stage 2 keyboard target: "
-                            + safeTarget
-            );
-
-            return;
-        }
-
-        String safeAction =
-                action == null
-                        ? "replace"
-                        : action.trim().toLowerCase(Locale.ROOT);
-
-        String safeText =
-                incomingText == null
-                        ? ""
-                        : incomingText;
-
-        if (safeText.length() > 2000) {
-            safeText = safeText.substring(0, 2000);
-        }
-
-        searchInput.requestFocus();
-
-        switch (safeAction) {
-
-            case "replace":
-
-                searchInput.setText(safeText);
-
-                searchInput.setSelection(
-                        searchInput.getText().length()
-                );
-
-                break;
-
-            case "append": {
-
-                Editable editable =
-                        searchInput.getText();
-
-                int start =
-                        searchInput.getSelectionStart();
-
-                int end =
-                        searchInput.getSelectionEnd();
-
-                if (start < 0 || end < 0) {
-                    start = editable.length();
-                    end = editable.length();
-                }
-
-                int lower =
-                        Math.min(start, end);
-
-                int upper =
-                        Math.max(start, end);
-
-                editable.replace(
-                        lower,
-                        upper,
-                        safeText
-                );
-
-                int cursor =
-                        lower + safeText.length();
-
-                searchInput.setSelection(
-                        Math.min(cursor, editable.length())
-                );
-
-                break;
-            }
-
-            case "backspace": {
-
-                Editable editable =
-                        searchInput.getText();
-
-                int start =
-                        searchInput.getSelectionStart();
-
-                int end =
-                        searchInput.getSelectionEnd();
-
-                if (start < 0 || end < 0) {
-                    start = editable.length();
-                    end = editable.length();
-                }
-
-                int lower =
-                        Math.min(start, end);
-
-                int upper =
-                        Math.max(start, end);
-
-                if (lower != upper) {
-
-                    editable.delete(lower, upper);
-
-                    searchInput.setSelection(lower);
-
-                } else if (lower > 0) {
-
-                    int deleteStart =
-                            lower - 1;
-
-                    if (deleteStart > 0
-                            && Character.isLowSurrogate(
-                                    editable.charAt(deleteStart)
-                            )
-                            && Character.isHighSurrogate(
-                                    editable.charAt(deleteStart - 1)
-                            )) {
-
-                        deleteStart--;
-                    }
-
-                    editable.delete(
-                            deleteStart,
-                            lower
-                    );
-
-                    searchInput.setSelection(deleteStart);
-                }
-
-                break;
-            }
-
-            case "clear":
-
-                searchInput.setText("");
-
-                searchInput.setSelection(0);
-
-                break;
-
-            case "submit":
-
-                showSearchScreen();
-
-                searchInput.setSelection(
-                        searchInput.getText().length()
-                );
-
-                searchSongs();
-
-                return;
-
-            default:
-
-                Log.w(
-                        TAG,
-                        "Unsupported Stage 2 keyboard action: "
-                                + safeAction
-                );
-
-                return;
-        }
-
-        if (tvKeyboardStatusText != null) {
-            tvKeyboardStatusText.setText(
-                    "Phone keyboard connected. Text received."
-            );
-        }
     }
 
     // ------------------------------------------------
@@ -1590,7 +1242,7 @@ public class KaraokeStudioActivity extends Activity {
 
     private void toggleStage2Microphone() {
 
-        if (activityDestroyed) return;
+        if (tvMode || activityDestroyed) return;
 
         if (microphoneMonitor != null
                 && microphoneMonitor.isRunning()) {
@@ -1624,7 +1276,11 @@ public class KaraokeStudioActivity extends Activity {
 
     private void startStage2Microphone() {
 
-        if (activityDestroyed) return;
+        if (tvMode || activityDestroyed
+                || microphoneButton == null
+                || microphoneStatus == null) {
+            return;
+        }
 
         if (microphoneMonitor != null) {
             microphoneMonitor.stop();
@@ -1739,7 +1395,7 @@ public class KaraokeStudioActivity extends Activity {
             double confidence
     ) {
 
-        if (activityDestroyed) return;
+        if (tvMode || activityDestroyed) return;
 
         if (microphoneLevelText != null) {
 
@@ -1870,7 +1526,9 @@ public class KaraokeStudioActivity extends Activity {
             );
         }
 
-        if (showResult && !activityDestroyed) {
+        if (showResult
+                && !tvMode
+                && !activityDestroyed) {
 
             int score =
                     performanceScorer.getScorePercent();
@@ -1915,7 +1573,8 @@ public class KaraokeStudioActivity extends Activity {
                 grantResults
         );
 
-        if (requestCode == REQUEST_STAGE2_MICROPHONE) {
+        if (requestCode == REQUEST_STAGE2_MICROPHONE
+                && !tvMode) {
 
             if (grantResults.length > 0
                     && grantResults[0]
@@ -1945,6 +1604,8 @@ public class KaraokeStudioActivity extends Activity {
     // ------------------------------------------------
 
     private void showDonationQr() {
+
+        if (tvMode) return;
 
         LinearLayout content =
                 new LinearLayout(this);
@@ -2018,6 +1679,8 @@ public class KaraokeStudioActivity extends Activity {
     }
 
     private void openQuestionsFacebook() {
+
+        if (tvMode) return;
 
         String facebookUrl =
                 "https://www.facebook.com/share/17zkgf3o8j/";
@@ -2141,7 +1804,7 @@ public class KaraokeStudioActivity extends Activity {
 
     private void searchSongs() {
 
-        if (searching) return;
+        if (searching || activityDestroyed) return;
 
         String query =
                 searchInput.getText().toString().trim();
@@ -2452,7 +2115,6 @@ public class KaraokeStudioActivity extends Activity {
 
         setStatus("Opening YouTube player...");
 
-        // Send the selected song to the paired TV.
         publishStage2TvState("playing", "");
 
         String html =
@@ -2687,6 +2349,9 @@ public class KaraokeStudioActivity extends Activity {
 
     private void hideKeyboard() {
 
+        // TV search uses Android TV's native input method.
+        // Do not dismiss it here; the native IME handles its
+        // own search/submit action.
         if (tvMode) {
             return;
         }
@@ -2733,35 +2398,47 @@ public class KaraokeStudioActivity extends Activity {
             videoWebView.onResume();
         }
 
-        if (adView != null) {
+        if (!tvMode && adView != null) {
             adView.resume();
         }
 
-        if (tvMode) {
+        if (tvMode && searchInput != null) {
 
-            startTvPhoneKeyboardReceiver();
+            searchInput.post(() -> {
 
-            if (searchInput != null) {
-                searchInput.post(() -> {
-                    if (!activityDestroyed
-                            && searchInput != null) {
-                        searchInput.requestFocus();
-                    }
-                });
-            }
+                if (activityDestroyed || searchInput == null) {
+                    return;
+                }
+
+                searchInput.requestFocus();
+
+                // Show the device's native TV keyboard.
+                InputMethodManager manager =
+                        (InputMethodManager)
+                                getSystemService(
+                                        Context.INPUT_METHOD_SERVICE
+                                );
+
+                if (manager != null) {
+                    manager.showSoftInput(
+                            searchInput,
+                            InputMethodManager.SHOW_IMPLICIT
+                    );
+                }
+            });
         }
     }
 
     @Override
     protected void onPause() {
 
-        // Unregister Stage 2 only.
-        // The shared phone-TV receiver remains alive.
-        stopTvPhoneKeyboardReceiver();
+        // The TV ONLY Activity has no phone keyboard receiver.
+        // Microphone shutdown applies only to phone Stage 2.
+        if (!tvMode) {
+            stopStage2Microphone(false);
+        }
 
-        stopStage2Microphone(false);
-
-        if (adView != null) {
+        if (!tvMode && adView != null) {
             adView.pause();
         }
 
@@ -2782,8 +2459,6 @@ public class KaraokeStudioActivity extends Activity {
     protected void onDestroy() {
 
         activityDestroyed = true;
-
-        stopTvPhoneKeyboardReceiver();
 
         if (microphoneMonitor != null) {
 
