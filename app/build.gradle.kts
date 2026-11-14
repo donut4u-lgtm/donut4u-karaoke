@@ -5,6 +5,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Keep the existing release signing credentials.
+// Debug builds must not require release signing credentials.
+val releaseKeystorePath = System.getenv("DONUT4U_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("DONUT4U_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("DONUT4U_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("DONUT4U_KEY_PASSWORD")
+
+val hasReleaseSigningCredentials =
+    !releaseKeystorePath.isNullOrBlank() &&
+    !releaseKeystorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "com.donut4u.karaoke"
     compileSdk = 35
@@ -41,32 +54,24 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = file(
-                System.getenv("DONUT4U_KEYSTORE_PATH")
-                    ?: error("DONUT4U_KEYSTORE_PATH is missing")
-            )
+        if (hasReleaseSigningCredentials) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword!!
+                keyAlias = releaseKeyAlias!!
+                keyPassword = releaseKeyPassword!!
 
-            storePassword =
-                System.getenv("DONUT4U_KEYSTORE_PASSWORD")
-                    ?: error("DONUT4U_KEYSTORE_PASSWORD is missing")
-
-            keyAlias =
-                System.getenv("DONUT4U_KEY_ALIAS")
-                    ?: error("DONUT4U_KEY_ALIAS is missing")
-
-            keyPassword =
-                System.getenv("DONUT4U_KEY_PASSWORD")
-                    ?: error("DONUT4U_KEY_PASSWORD is missing")
-
-            enableV1Signing = true
-            enableV2Signing = true
+                enableV1Signing = true
+                enableV2Signing = true
+            }
         }
     }
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigningCredentials) {
+                signingConfig = signingConfigs.getByName("release")
+            }
 
             isMinifyEnabled = true
             isShrinkResources = true
