@@ -9,14 +9,13 @@ import java.io.IOException;
 import java.net.Socket;
 
 /**
- * Keeps the paired phone-to-TV TCP connection independent
- * of PhoneRemoteActivity.
+ * Application-wide owner of the paired phone-to-TV connection.
  *
- * PhoneRemoteActivity transfers its paired socket to this
- * manager before finishing. Normal phone activities can then
- * send TV display and playback commands through this manager.
+ * The pairing Activity transfers its socket to this manager.
+ * The connection then remains available while the user navigates
+ * between normal phone activities.
  *
- * All request() calls must run on a background thread.
+ * All network methods must be called from a background thread.
  */
 public final class PhoneTvConnectionManager {
 
@@ -31,6 +30,7 @@ public final class PhoneTvConnectionManager {
     private boolean connected;
 
     private long lastSuccessfulCommunication;
+    private long stateSequence;
 
     private PhoneTvConnectionManager() {
     }
@@ -49,7 +49,7 @@ public final class PhoneTvConnectionManager {
     }
 
     /**
-     * Takes ownership of the already-paired socket.
+     * Takes ownership of an already-paired socket.
      *
      * The caller must stop using and closing the socket after
      * this method succeeds.
@@ -81,6 +81,7 @@ public final class PhoneTvConnectionManager {
             writer = newWriter;
 
             connected = true;
+            stateSequence = 0L;
 
             lastSuccessfulCommunication =
                     System.currentTimeMillis();
@@ -108,9 +109,7 @@ public final class PhoneTvConnectionManager {
     /**
      * Sends one JSON request and waits for its JSON response.
      *
-     * IMPORTANT:
-     * Call this method from an ExecutorService or another
-     * background thread, never from the Android main thread.
+     * Call only from a background thread.
      */
     public synchronized JSONObject request(
             JSONObject request
@@ -168,10 +167,71 @@ public final class PhoneTvConnectionManager {
     }
 
     /**
+     * Publishes the phone's current state to the TV.
+     *
+     * The existing TvKeyboardReceiver protocol requires:
+     * - type = state
+     * - version = STATE_PROTOCOL_VERSION
+     * - sequence = increasing positive number
+     * - state = supplied JSON object
+     *
+     * The TV sends an acknowledgement for every state update.
+     *
+     * Call only from a background thread.
+     */
+    public synchronized JSONObject publishState(
+            JSONObject state
+    ) throws Exception {
+
+        if (state == null) {
+            throw new IOException("TV display state is empty.");
+        }
+
+        if (state.toString().length() > 65000) {
+            throw new IOException(
+                    "TV display state is too large."
+            );
+        }
+
+        long nextSequence = stateSequence + 1L;
+
+        if (nextSequence <= 0L) {
+            nextSequence = 1L;
+        }
+
+        JSONObject request = new JSONObject();
+
+        request.put("type", "state");
+        request.put(
+                "version",
+                TvKeyboardReceiver.STATE_PROTOCOL_VERSION
+        );
+        request.put("sequence", nextSequence);
+        request.put("state", new JSONObject(state.toString()));
+
+        JSONObject response = request(request);
+
+        if (!response.optBoolean("ok", false)) {
+            throw new IOException(
+                    response.optString(
+                            "message",
+                            "TV rejected the display update."
+                    )
+            );
+        }
+
+        stateSequence = nextSequence;
+
+        return response;
+    }
+
+    /**
      * Sends a one-way JSON message.
      *
      * Use only for protocol messages that do not expect
      * a response from the TV.
+     *
+     * Do not use this method for state updates.
      */
     public synchronized void send(
             JSONObject message
@@ -211,6 +271,10 @@ public final class PhoneTvConnectionManager {
         return lastSuccessfulCommunication;
     }
 
+    public synchronized long getStateSequence() {
+        return stateSequence;
+    }
+
     /**
      * Gracefully tells the TV that the phone is disconnecting.
      */
@@ -235,8 +299,7 @@ public final class PhoneTvConnectionManager {
     }
 
     /**
-     * Closes the connection without sending a disconnect
-     * command. Used after an unexpected connection failure.
+     * Closes the connection without sending a disconnect command.
      */
     public synchronized void close() {
         closeInternal();
@@ -245,6 +308,7 @@ public final class PhoneTvConnectionManager {
     private void closeInternal() {
 
         connected = false;
+        stateSequence = 0L;
 
         if (socket != null) {
             try {
