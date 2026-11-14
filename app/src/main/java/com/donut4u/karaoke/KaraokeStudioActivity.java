@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -60,6 +59,8 @@ import org.schabi.newpipe.extractor.search.SearchExtractor;
 import org.schabi.newpipe.extractor.search.SearchInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.linkhandler.SearchQueryHandler;
+
+import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -472,9 +473,10 @@ public class KaraokeStudioActivity extends Activity {
                 returnParams
         );
 
-        backToSearchButton.setOnClickListener(
-                v -> showSearchScreen()
-        );
+        backToSearchButton.setOnClickListener(v -> {
+            publishStage2TvState("stop", "back");
+            showSearchScreen();
+        });
 
         addSectionTitle("KARAOKE PLAYER");
 
@@ -647,6 +649,8 @@ public class KaraokeStudioActivity extends Activity {
                         null
                 );
 
+                publishStage2TvState("playing", "");
+
                 setStatus("Play command sent.");
 
             } else {
@@ -665,6 +669,8 @@ public class KaraokeStudioActivity extends Activity {
                         "if(window.player){player.pauseVideo();}",
                         null
                 );
+
+                publishStage2TvState("paused", "");
             }
         });
 
@@ -704,7 +710,10 @@ public class KaraokeStudioActivity extends Activity {
 
         playerPanel.addView(backButton, matchWrap());
 
-        backButton.setOnClickListener(v -> finish());
+        backButton.setOnClickListener(v -> {
+            publishStage2TvState("stop", "back");
+            finish();
+        });
 
         Button logoutButton = button("LOG OUT");
 
@@ -872,11 +881,97 @@ public class KaraokeStudioActivity extends Activity {
         if (playerPanel != null
                 && playerPanel.getVisibility() == View.VISIBLE) {
 
+            publishStage2TvState("stop", "back");
             showSearchScreen();
             return;
         }
 
         super.onBackPressed();
+    }
+
+    // ------------------------------------------------
+    // PHONE-TO-TV STAGE 2 SYNCHRONIZATION
+    // ------------------------------------------------
+
+    /**
+     * Publishes the currently selected Stage 2 song and playback
+     * state to the paired TV monitor.
+     *
+     * This method is intentionally disabled on the TV itself.
+     * The phone remains responsible for microphone, score and ads.
+     *
+     * Network communication runs on a background thread so it
+     * cannot block the phone's playback or user interface.
+     */
+    private void publishStage2TvState(
+            String playback,
+            String action
+    ) {
+
+        if (tvMode || activityDestroyed) {
+            return;
+        }
+
+        final PhoneTvConnectionManager manager =
+                PhoneTvConnectionManager.getInstance();
+
+        if (manager == null || !manager.isConnected()) {
+            return;
+        }
+
+        final JSONObject state = new JSONObject();
+
+        try {
+
+            state.put("stage", 2);
+            state.put("songTitle", currentTitle);
+            state.put("title", currentTitle);
+            state.put("singer", currentArtist);
+            state.put("composer", "");
+            state.put("videoId", currentVideoId);
+            state.put("mediaUrl", "");
+            state.put("lyrics", "");
+            state.put(
+                    "playback",
+                    playback == null ? "" : playback
+            );
+            state.put(
+                    "action",
+                    action == null ? "" : action
+            );
+
+        } catch (Exception e) {
+
+            Log.w(
+                    TAG,
+                    "Could not prepare Stage 2 TV state.",
+                    e
+            );
+
+            return;
+        }
+
+        Thread sender = new Thread(() -> {
+
+            try {
+
+                manager.publishState(state);
+
+            } catch (Exception e) {
+
+                // A TV connection problem must never stop
+                // playback or interfere with the phone app.
+                Log.w(
+                        TAG,
+                        "Stage 2 TV state could not be sent.",
+                        e
+                );
+            }
+
+        }, "Donut4U-TV-Stage2-State");
+
+        sender.setDaemon(true);
+        sender.start();
     }
 
     // ------------------------------------------------
@@ -2008,13 +2103,19 @@ public class KaraokeStudioActivity extends Activity {
                             "Playing: " + currentTitle
                     );
 
+                    publishStage2TvState("playing", "");
+
                 } else if ("2".equals(state)) {
 
                     setStatus("Playback paused.");
 
+                    publishStage2TvState("paused", "");
+
                 } else if ("0".equals(state)) {
 
                     setStatus("Song finished.");
+
+                    publishStage2TvState("ended", "");
                 }
             });
         }
@@ -2351,6 +2452,9 @@ public class KaraokeStudioActivity extends Activity {
 
         setStatus("Opening YouTube player...");
 
+        // Send the selected song to the paired TV.
+        publishStage2TvState("playing", "");
+
         String html =
                 "<!DOCTYPE html><html><head>"
                 + "<meta name='viewport' content='width=device-width,"
@@ -2458,6 +2562,8 @@ public class KaraokeStudioActivity extends Activity {
     }
 
     private void stopPlayback() {
+
+        publishStage2TvState("stop", "");
 
         pageReady = false;
 
