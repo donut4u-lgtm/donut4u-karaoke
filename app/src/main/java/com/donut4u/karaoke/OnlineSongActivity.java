@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -23,6 +22,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -165,10 +165,56 @@ public class OnlineSongActivity extends Activity {
 
     private Runnable pendingSessionMismatch;
 
+    /*
+     * The currently selected Stage 1 video is retained so that
+     * actual YouTube player events can be relayed to the TV.
+     */
+    private Video currentPlayingVideo;
+
     private static class Video {
         String id;
         String title;
         String channel;
+    }
+
+    /*
+     * JavaScript bridge used by the YouTube IFrame Player API.
+     * YouTube player state values:
+     *  1 = playing
+     *  2 = paused
+     *  0 = ended
+     */
+    private final class Stage1PlayerBridge {
+
+        @JavascriptInterface
+        public void onPlayerStateChange(int state) {
+            sessionHandler.post(() -> {
+                if (closing
+                        || !playbackVisible
+                        || currentPlayingVideo == null) {
+                    return;
+                }
+
+                if (state == 1) {
+                    publishPhoneTvState(
+                            currentPlayingVideo,
+                            "playing",
+                            "play");
+
+                } else if (state == 2) {
+                    publishPhoneTvState(
+                            currentPlayingVideo,
+                            "paused",
+                            "pause");
+
+                } else if (state == 0) {
+                    publishPhoneTvState(
+                            currentPlayingVideo,
+                            "stopped",
+                            "ended");
+                }
+            });
+        }
     }
 
     /*
@@ -1175,7 +1221,7 @@ public class OnlineSongActivity extends Activity {
                         "channel",
                         "YouTube channel");
 
-                if (!video.id.isEmpty()) {
+                if (isValidYouTubeVideoId(video.id)) {
                     videos.add(video);
                 }
             }
@@ -1185,6 +1231,11 @@ public class OnlineSongActivity extends Activity {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private boolean isValidYouTubeVideoId(String videoId) {
+        return videoId != null
+                && videoId.matches("[A-Za-z0-9_-]{11}");
     }
 
     private void searchVideos() {
@@ -1349,7 +1400,7 @@ public class OnlineSongActivity extends Activity {
                                 idObject.optString(
                                         "videoId", "");
 
-                        if (videoId.isEmpty()) {
+                        if (!isValidYouTubeVideoId(videoId)) {
                             continue;
                         }
 
@@ -1492,10 +1543,22 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
+        if (video == null || !isValidYouTubeVideoId(video.id)) {
+            toast("This YouTube video has an invalid video ID.");
+            return;
+        }
+
         donationScreenVisible = false;
         playbackVisible = true;
 
         destroyPlayer();
+
+        /*
+         * Keep the selected song so actual YouTube player callbacks
+         * can publish the correct song information to the TV.
+         */
+        currentPlayingVideo = video;
+
         hideSystemBars();
 
         performanceScorer.reset();
@@ -1572,36 +1635,76 @@ public class OnlineSongActivity extends Activity {
         player.setWebChromeClient(new WebChromeClient());
         player.setWebViewClient(new WebViewClient());
 
+        /*
+         * Register the JavaScript bridge before loading the player.
+         * The bridge sends only YouTube playback state to the TV.
+         */
+        player.addJavascriptInterface(
+                new Stage1PlayerBridge(),
+                "DonutStage1");
+
         playerHost.addView(
                 player,
                 new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
-        String html = "<!doctype html><html><head>"
+        /*
+         * Use the official YouTube IFrame Player API rather than a
+         * static iframe. This lets the phone detect real play,
+         * pause, and ended events.
+         */
+        String html = "<!doctype html>"
+                + "<html><head>"
                 + "<meta name=\"viewport\" content=\"width=device-width,"
                 + " initial-scale=1, maximum-scale=1, user-scalable=no\">"
                 + "<meta name=\"referrer\" content=\"strict-origin-when-cross-origin\">"
-                + "<style>html,body{margin:0;padding:0;background:#000;"
+                + "<style>"
+                + "html,body{margin:0;padding:0;background:#000;"
                 + "width:100%;height:100%;overflow:hidden;}"
-                + "iframe{position:absolute;top:0;left:0;width:100%;"
-                + "height:100%;border:0;}</style></head><body><iframe "
-                + "src=\"https://www.youtube.com/embed/" + video.id
-                + "?playsinline=1&controls=1&rel=0\" "
-                + "title=\"YouTube karaoke player\" "
-                + "allow=\"accelerometer; autoplay; clipboard-write; "
-                + "encrypted-media; gyroscope; picture-in-picture; web-share\" "
-                + "referrerpolicy=\"strict-origin-when-cross-origin\" "
-                + "allowfullscreen></iframe></body></html>";
+                + "#player{position:absolute;top:0;left:0;"
+                + "width:100%;height:100%;}"
+                + "</style>"
+                + "</head><body>"
+                + "<div id=\"player\"></div>"
+                + "<script>"
+                + "var donutPlayer;"
+                + "function onYouTubeIframeAPIReady(){"
+                + "donutPlayer=new YT.Player('player',{"
+                + "width:'100%',height:'100%',"
+                + "videoId:'" + video.id + "',"
+                + "playerVars:{"
+                + "playsinline:1,"
+                + "controls:1,"
+                + "rel:0,"
+                + "modestbranding:1"
+                + "},"
+                + "events:{"
+                + "onStateChange:function(event){"
+                + "if(window.DonutStage1){"
+                + "window.DonutStage1.onPlayerStateChange(event.data);"
+                + "}"
+                + "}"
+                + "}"
+                + "});"
+                + "}"
+                + "</script>"
+                + "<script src=\"https://www.youtube.com/iframe_api\"></script>"
+                + "</body></html>";
 
         player.loadDataWithBaseURL(
-                "https://com.donut4u.karaoke/",
+                "https://www.youtube.com/",
                 html,
                 "text/html",
                 "UTF-8",
                 null);
 
-        publishPhoneTvState(video, "playing", "");
+        /*
+         * Do not claim that playback has started here.
+         * The IFrame Player API will publish "playing" only after
+         * YouTube reports its actual PLAYING state.
+         */
+        publishPhoneTvState(video, "loading", "load");
     }
 
     /**
@@ -2082,9 +2185,7 @@ public class OnlineSongActivity extends Activity {
             int[] grantResults) {
 
         super.onRequestPermissionsResult(
-                requestCode,
-                permissions,
-                grantResults);
+                requestCode, permissions, grantResults);
 
         if (requestCode != REQUEST_STAGE12_MICROPHONE) {
             return;
@@ -2115,7 +2216,13 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void returnToResults() {
+        /*
+         * Tell the TV to stop showing the selected song.
+         * Clear the selected video so late JavaScript callbacks
+         * cannot publish stale playback states.
+         */
         publishPhoneTvState(null, "stop", "back");
+        currentPlayingVideo = null;
 
         stopMicrophoneMonitoring(false);
 
@@ -2174,15 +2281,27 @@ public class OnlineSongActivity extends Activity {
     private void destroyPlayer() {
         stopMicrophoneMonitoring(false);
 
-        if (player != null) {
-            player.stopLoading();
-            player.loadUrl("about:blank");
+        /*
+         * Clear the active song before destroying the WebView.
+         * Any delayed JavaScript callback will then be ignored.
+         */
+        currentPlayingVideo = null;
 
-            if (playerHost != null) {
-                playerHost.removeView(player);
+        if (player != null) {
+            try {
+                player.removeJavascriptInterface("DonutStage1");
+                player.stopLoading();
+                player.loadUrl("about:blank");
+
+                if (playerHost != null) {
+                    playerHost.removeView(player);
+                }
+
+                player.destroy();
+
+            } catch (Exception ignored) {
             }
 
-            player.destroy();
             player = null;
         }
     }
