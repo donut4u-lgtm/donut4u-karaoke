@@ -1849,6 +1849,74 @@ public class OnlineSongActivity extends Activity {
         player.loadDataWithBaseURL(
                 "https://com.donut4u.karaoke/",
                 html, "text/html", "UTF-8", null);
+
+        // Send the selected song to the paired TV monitor.
+        publishPhoneTvState(video, "playing", "");
+    }
+
+    /**
+     * Publishes Stage 1 playback information to the paired TV.
+     *
+     * This method is phone-side only. The TV does not receive
+     * microphone controls, score information, or advertisements.
+     *
+     * Network communication runs on a background thread so
+     * phone playback and the user interface are not blocked.
+     */
+    private void publishPhoneTvState(
+            Video video,
+            String playback,
+            String action
+    ) {
+        if (isAndroidTv() || closing) {
+            return;
+        }
+
+        PhoneTvConnectionManager manager =
+                PhoneTvConnectionManager.getInstance();
+
+        if (manager == null || !manager.isConnected()) {
+            return;
+        }
+
+        JSONObject state = new JSONObject();
+
+        try {
+            String title = video == null || video.title == null
+                    ? "" : video.title;
+
+            String channel = video == null || video.channel == null
+                    ? "" : video.channel;
+
+            String videoId = video == null || video.id == null
+                    ? "" : video.id;
+
+            state.put("stage", 1);
+            state.put("songTitle", title);
+            state.put("title", title);
+            state.put("singer", channel);
+            state.put("composer", "");
+            state.put("videoId", videoId);
+            state.put("mediaUrl", "");
+            state.put("lyrics", "");
+            state.put("playback", playback == null ? "" : playback);
+            state.put("action", action == null ? "" : action);
+
+        } catch (Exception ignored) {
+            return;
+        }
+
+        Thread sender = new Thread(() -> {
+            try {
+                manager.publishState(state);
+            } catch (Exception ignored) {
+                // A temporary TV connection problem must not
+                // interrupt playback on the phone.
+            }
+        }, "Donut4U-TV-Stage1-State");
+
+        sender.setDaemon(true);
+        sender.start();
     }
 
     private void addMicrophonePanel() {
@@ -2243,6 +2311,9 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void returnToResults() {
+        // Tell the paired TV to stop Stage 1 playback and return.
+        publishPhoneTvState(null, "stop", "back");
+
         stopMicrophoneMonitoring(false);
 
         destroyPlayer();
