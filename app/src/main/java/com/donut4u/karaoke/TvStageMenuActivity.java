@@ -194,7 +194,26 @@ public class TvStageMenuActivity extends Activity {
         lastOpenedStage = stage;
         openingStage = true;
 
-        openStage(stage, true);
+        /*
+         * Phone-controlled mode uses the dedicated monitor.
+         * The phone owns song selection and karaoke controls.
+         */
+        if (sessionController != null) {
+            sessionController.setActiveStage(stage);
+        }
+
+        Intent monitorIntent = new Intent(
+                TvStageMenuActivity.this,
+                TvMonitorActivity.class
+        );
+
+        monitorIntent.putExtra(
+                TvMonitorActivity.EXTRA_TV_MODE,
+                true
+        );
+
+        waitingForStageReturn = true;
+        startActivity(monitorIntent);
     }
 
     private void updateStageMenuVisibility() {
