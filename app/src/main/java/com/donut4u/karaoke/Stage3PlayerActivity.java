@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -50,6 +51,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class Stage3PlayerActivity extends Activity {
 
@@ -108,6 +111,141 @@ public class Stage3PlayerActivity extends Activity {
             "ca-app-pub-5625332026157890/2970292504";
 
     private AdView stage3AdView;
+
+    // ---------------------------------------------------------
+    // PHONE-TO-TV STATE PUBLISHING
+    // ---------------------------------------------------------
+
+    /*
+     * All TV socket operations run on this dedicated executor.
+     * The player UI thread only creates a snapshot of the current
+     * song state and submits that snapshot to this executor.
+     */
+    private final ExecutorService tvStateExecutor =
+            Executors.newSingleThreadExecutor(r -> {
+                Thread thread = new Thread(
+                        r, "Stage3TvState");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    private void publishStage3TvState(
+            String playback,
+            String action,
+            int activeLine) {
+
+        if (released && !"back".equals(action)) {
+            return;
+        }
+
+        final JSONObject state;
+
+        try {
+            String title = "";
+
+            if (currentSong != null
+                    && currentSong.title != null) {
+                title = currentSong.title.trim();
+            }
+
+            if (title.isEmpty()
+                    && songTitleLabel != null
+                    && songTitleLabel.getText() != null) {
+                title = songTitleLabel.getText().toString();
+            }
+
+            String singer = "";
+
+            if (currentMidiLyrics != null) {
+                singer = currentMidiLyrics.getSinger();
+            }
+
+            if ((singer == null || singer.trim().isEmpty())
+                    && singerLabel != null
+                    && singerLabel.getText() != null) {
+                singer = singerLabel.getText().toString();
+            }
+
+            if (singer == null) {
+                singer = "";
+            }
+
+            String lyrics = "";
+
+            if (currentMidiLyrics != null
+                    && currentMidiLyrics.hasLyrics()) {
+
+                long tick = 0L;
+
+                if (midiMode && midiReady
+                        && midiEngine != null) {
+                    tick = midiEngine.getCurrentTick();
+                }
+
+                CharSequence fullLyrics =
+                        currentMidiLyrics.styledFullTextAtTick(
+                                tick,
+                                getEffectiveMidiDurationTicks());
+
+                if (fullLyrics != null) {
+                    lyrics = fullLyrics.toString();
+                }
+            }
+
+            state = new JSONObject();
+
+            state.put("stage", 3);
+            state.put("songTitle", title);
+            state.put("title", title);
+            state.put("singer", singer);
+            state.put("composer", "");
+            state.put("lyrics", lyrics);
+            state.put("lyricText", lyrics);
+            state.put("playback",
+                    playback == null ? "stopped" : playback);
+            state.put("action",
+                    action == null ? "update" : action);
+
+            if (activeLine >= 0) {
+                state.put("activeLine", activeLine);
+            }
+
+        } catch (Exception error) {
+            Log.w(
+                    "Stage3Tv",
+                    "Could not create TV playback state.",
+                    error);
+            return;
+        }
+
+        try {
+            tvStateExecutor.execute(() -> {
+
+                try {
+                    PhoneTvConnectionManager manager =
+                            PhoneTvConnectionManager.getInstance();
+
+                    if (manager == null || !manager.isConnected()) {
+                        return;
+                    }
+
+                    manager.publishState(state);
+
+                } catch (Exception error) {
+                    Log.w(
+                            "Stage3Tv",
+                            "Could not publish Stage 3 state to TV.",
+                            error);
+                }
+            });
+
+        } catch (Exception error) {
+            Log.w(
+                    "Stage3Tv",
+                    "TV state executor is unavailable.",
+                    error);
+        }
+    }
 
     // ---------------------------------------------------------
     // STAGE 3 LAUNCH DIAGNOSTICS
@@ -1644,12 +1782,18 @@ public class Stage3PlayerActivity extends Activity {
                         this,
                         "Cannot resume MIDI song.",
                         Toast.LENGTH_SHORT).show();
+                return;
             }
 
         } else if (player != null) {
 
             player.play();
+
+        } else {
+            return;
         }
+
+        publishStage3TvState("playing", "play", -1);
     }
 
     private void pauseCurrentSong() {
@@ -1677,12 +1821,18 @@ public class Stage3PlayerActivity extends Activity {
                         this,
                         "Cannot pause MIDI song.",
                         Toast.LENGTH_SHORT).show();
+                return;
             }
 
         } else if (player != null) {
 
             player.pause();
+
+        } else {
+            return;
         }
+
+        publishStage3TvState("paused", "pause", -1);
     }
 
     private void stopCurrentSong() {
@@ -1719,6 +1869,7 @@ public class Stage3PlayerActivity extends Activity {
                         this,
                         "Cannot stop MIDI song.",
                         Toast.LENGTH_SHORT).show();
+                return;
             }
 
         } else if (player != null) {
@@ -1726,7 +1877,12 @@ public class Stage3PlayerActivity extends Activity {
             player.pause();
             player.seekTo(0L);
             updateMediaControls();
+
+        } else {
+            return;
         }
+
+        publishStage3TvState("stopped", "stop", -1);
     }
 
     private String formatPlaybackTime(long millis) {
@@ -1780,6 +1936,9 @@ public class Stage3PlayerActivity extends Activity {
             songTitleLabel.setText("Donut4U Karaoke");
             updatePlaybackTime(0L, 0L);
             setControlsEnabled(false);
+
+            publishStage3TvState(
+                    "stopped", "stop", -1);
             return;
         }
 
@@ -1864,6 +2023,9 @@ public class Stage3PlayerActivity extends Activity {
                         : title);
 
         updatePlaybackTime(0L, 0L);
+
+        // Immediately tell a connected TV which song is loading.
+        publishStage3TvState("loading", "update", -1);
 
         if (isMidiSong(song)) {
             initializeMidiPlayer(song);
@@ -1955,6 +2117,9 @@ public class Stage3PlayerActivity extends Activity {
                             scoreLabel.setText(
                                     "SCORING UNAVAILABLE");
                         }
+
+                        publishStage3TvState(
+                                "stopped", "stop", -1);
 
                         Toast.makeText(
                                 this,
@@ -2079,6 +2244,14 @@ public class Stage3PlayerActivity extends Activity {
 
                         updateMidiControls(
                                 midiEngine.getCurrentTick());
+
+                        // Send the complete lyrics and singer metadata
+                        // after the MIDI lyric reader has loaded.
+                        publishStage3TvState(
+                                "playing",
+                                "update",
+                                currentMidiLyrics.activeLineNumberAtTick(
+                                        midiEngine.getCurrentTick()));
                     }
 
                     @Override
@@ -2106,6 +2279,9 @@ public class Stage3PlayerActivity extends Activity {
                         }
 
                         countdownLabel.setVisibility(View.GONE);
+
+                        publishStage3TvState(
+                                "stopped", "stop", -1);
 
                         Toast.makeText(
                                 Stage3PlayerActivity.this,
@@ -2165,6 +2341,9 @@ public class Stage3PlayerActivity extends Activity {
         if (returningToSongbook || released) {
             return;
         }
+
+        // Publish before releasing the song and player state.
+        publishStage3TvState("stopped", "back", -1);
 
         returningToSongbook = true;
 
@@ -2267,6 +2446,12 @@ public class Stage3PlayerActivity extends Activity {
                 updateMidiControls(
                         midiEngine.getCurrentTick());
 
+                publishStage3TvState(
+                        wasPlaying ? "playing" : "paused",
+                        "seek",
+                        currentMidiLyrics.activeLineNumberAtTick(
+                                targetTick));
+
             } catch (Exception e) {
 
                 Toast.makeText(
@@ -2292,6 +2477,11 @@ public class Stage3PlayerActivity extends Activity {
                         0L, Math.min(target, duration)));
 
                 updateMediaControls();
+
+                publishStage3TvState(
+                        player.isPlaying() ? "playing" : "paused",
+                        "seek",
+                        -1);
             }
         }
     }
@@ -2472,6 +2662,14 @@ public class Stage3PlayerActivity extends Activity {
         }
 
         lastScrolledLyricLine = activeLine;
+
+        // Publish only when the active lyric line changes.
+        // This avoids sending a network update every 100 ms.
+        publishStage3TvState(
+                midiEngine != null && midiEngine.isPlaying()
+                        ? "playing" : "paused",
+                "lyrics",
+                activeLine);
 
         lyricsLabel.post(() -> {
 
@@ -2815,9 +3013,15 @@ public class Stage3PlayerActivity extends Activity {
 
             setControlsEnabled(true);
 
+            publishStage3TvState(
+                    "playing", "update", -1);
+
         } catch (Exception e) {
 
             setControlsEnabled(false);
+
+            publishStage3TvState(
+                    "stopped", "stop", -1);
 
             Toast.makeText(
                     this,
@@ -2831,6 +3035,9 @@ public class Stage3PlayerActivity extends Activity {
         if (released || returningToSongbook) {
             return;
         }
+
+        // Publish before clearing the song information.
+        publishStage3TvState("stopped", "stop", -1);
 
         // Save the result before releasing the MIDI player.
         String finalScoreText;
@@ -3002,6 +3209,8 @@ public class Stage3PlayerActivity extends Activity {
 
             if (midiPausedByLifecycle) {
                 midiEngine.pause();
+                publishStage3TvState(
+                        "paused", "pause", -1);
             }
 
             if (backgroundPlayer != null) {
@@ -3011,6 +3220,9 @@ public class Stage3PlayerActivity extends Activity {
         } else if (player != null) {
 
             player.pause();
+
+            publishStage3TvState(
+                    "paused", "pause", -1);
         }
     }
 
@@ -3039,6 +3251,9 @@ public class Stage3PlayerActivity extends Activity {
             if (backgroundPlayer != null) {
                 backgroundPlayer.play();
             }
+
+            publishStage3TvState(
+                    "playing", "play", -1);
         }
 
         handler.removeCallbacks(progressUpdater);
@@ -3103,6 +3318,10 @@ public class Stage3PlayerActivity extends Activity {
             }
             stage3AdView = null;
         }
+
+        // shutdown() lets already-submitted TV updates finish.
+        // It does not interrupt an in-progress socket operation.
+        tvStateExecutor.shutdown();
 
         super.onDestroy();
     }
