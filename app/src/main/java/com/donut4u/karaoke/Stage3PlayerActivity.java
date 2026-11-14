@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -42,14 +41,12 @@ import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
 import com.google.android.gms.ads.MobileAds;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.text.Normalizer;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,8 +55,6 @@ public class Stage3PlayerActivity extends Activity {
 
     private static final String SONGBOOK_PREFS =
             "donut4u_stage3_songbook";
-
-    private static final String SONGS_KEY = "songs_json";
 
     private static final String DEFAULT_SOUNDFONT =
             "builtin://default";
@@ -117,9 +112,11 @@ public class Stage3PlayerActivity extends Activity {
     // ---------------------------------------------------------
 
     /*
+     * The phone publishes song and playback information to the TV.
+     * Microphone input, microphone controls and singing scores stay
+     * on this phone and are never included in the TV state.
+     *
      * All TV socket operations run on this dedicated executor.
-     * The player UI thread only creates a snapshot of the current
-     * song state and submits that snapshot to this executor.
      */
     private final ExecutorService tvStateExecutor =
             Executors.newSingleThreadExecutor(r -> {
@@ -172,6 +169,10 @@ public class Stage3PlayerActivity extends Activity {
 
             String lyrics = "";
 
+            // NEW: Character offset of the active lyric line
+            // within the exact lyrics text sent to the TV.
+            int activeLineOffset = -1;
+
             if (currentMidiLyrics != null
                     && currentMidiLyrics.hasLyrics()) {
 
@@ -190,6 +191,12 @@ public class Stage3PlayerActivity extends Activity {
                 if (fullLyrics != null) {
                     lyrics = fullLyrics.toString();
                 }
+
+                // Calculate the offset using the SAME tick used
+                // to generate the lyrics text above.
+                activeLineOffset =
+                        currentMidiLyrics
+                                .activeLineStartOffsetAtTick(tick);
             }
 
             state = new JSONObject();
@@ -208,6 +215,12 @@ public class Stage3PlayerActivity extends Activity {
 
             if (activeLine >= 0) {
                 state.put("activeLine", activeLine);
+            }
+
+            // NEW: The TV must use this character offset to find
+            // the active lyric in the displayed lyrics text.
+            if (activeLineOffset >= 0) {
+                state.put("activeLineOffset", activeLineOffset);
             }
 
         } catch (Exception error) {
@@ -390,12 +403,13 @@ public class Stage3PlayerActivity extends Activity {
     private Button stopButton;
     private Button backgroundButton;
 
-    // Microphone monitor controls
+    // PHONE MICROPHONE MONITOR CONTROLS.
+    // These controls are not sent to or displayed by the TV.
     private Stage3MicrophoneMonitor microphoneMonitor;
     private Button microphoneButton;
     private TextView microphoneStatusLabel;
 
-    // Karaoke scoring
+    // PHONE KARAOKE SCORING.
     private Stage3MidiNoteReader currentMidiNoteReader;
 
     private final Stage3KaraokeScorer karaokeScorer =
@@ -670,7 +684,6 @@ public class Stage3PlayerActivity extends Activity {
 
         buildPlaybackControls();
 
-        // Put the existing player above a dedicated ad area.
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(DARK_GREEN);
@@ -860,10 +873,7 @@ public class Stage3PlayerActivity extends Activity {
         pauseButton.setOnClickListener(v -> pauseCurrentSong());
         stopButton.setOnClickListener(v -> stopCurrentSong());
 
-        // -----------------------------------------------------
-        // MICROPHONE MONITOR ROW
-        // -----------------------------------------------------
-
+        // PHONE MICROPHONE MONITOR ROW.
         LinearLayout microphoneRow = new LinearLayout(this);
         microphoneRow.setOrientation(LinearLayout.HORIZONTAL);
         microphoneRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -903,10 +913,7 @@ public class Stage3PlayerActivity extends Activity {
 
         controls.addView(microphoneRow);
 
-        // -----------------------------------------------------
-        // KARAOKE SCORE DISPLAY
-        // -----------------------------------------------------
-
+        // PHONE KARAOKE SCORE DISPLAY.
         scoreLabel = new TextView(this);
         scoreLabel.setText("SCORE: 0% | WAITING FOR MIDI SONG");
         scoreLabel.setTextColor(ACTIVE_GREEN);
@@ -923,10 +930,6 @@ public class Stage3PlayerActivity extends Activity {
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         dp(38)));
-
-        // -----------------------------------------------------
-        // BACKGROUND AND SONGBOOK CONTROLS
-        // -----------------------------------------------------
 
         backgroundButton = createControlButton("BACKGROUND");
         backgroundButton.setTextSize(14);
@@ -997,7 +1000,7 @@ public class Stage3PlayerActivity extends Activity {
     }
 
     // ---------------------------------------------------------
-    // MICROPHONE MONITOR AND KARAOKE SCORING
+    // PHONE MICROPHONE MONITOR AND KARAOKE SCORING
     // ---------------------------------------------------------
 
     private void toggleMicrophoneMonitoring() {
@@ -1102,8 +1105,6 @@ public class Stage3PlayerActivity extends Activity {
                 microphoneStatusLabel.setText(
                         "MIC " + levelPercent + "%  |  " + pitch);
 
-                // Only score while a MIDI song is actually playing.
-                // This prevents scoring while paused or stopped.
                 if (midiMode
                         && midiReady
                         && midiEngine != null
@@ -1348,7 +1349,6 @@ public class Stage3PlayerActivity extends Activity {
                     flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
         } catch (Exception ignored) {
-            // Some document providers do not offer persistable access.
         }
 
         boolean video =
@@ -2024,7 +2024,6 @@ public class Stage3PlayerActivity extends Activity {
 
         updatePlaybackTime(0L, 0L);
 
-        // Immediately tell a connected TV which song is loading.
         publishStage3TvState("loading", "update", -1);
 
         if (isMidiSong(song)) {
@@ -2163,7 +2162,6 @@ public class Stage3PlayerActivity extends Activity {
                         currentMidiLyrics =
                                 Stage3MidiLyrics.read(midiFile);
 
-                        // Read the melody notes for scoring.
                         try {
                             currentMidiNoteReader =
                                     Stage3MidiNoteReader.read(midiFile);
@@ -2245,8 +2243,6 @@ public class Stage3PlayerActivity extends Activity {
                         updateMidiControls(
                                 midiEngine.getCurrentTick());
 
-                        // Send the complete lyrics and singer metadata
-                        // after the MIDI lyric reader has loaded.
                         publishStage3TvState(
                                 "playing",
                                 "update",
@@ -2342,7 +2338,6 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        // Publish before releasing the song and player state.
         publishStage3TvState("stopped", "back", -1);
 
         returningToSongbook = true;
@@ -2664,7 +2659,6 @@ public class Stage3PlayerActivity extends Activity {
         lastScrolledLyricLine = activeLine;
 
         // Publish only when the active lyric line changes.
-        // This avoids sending a network update every 100 ms.
         publishStage3TvState(
                 midiEngine != null && midiEngine.isPlaying()
                         ? "playing" : "paused",
@@ -3036,10 +3030,8 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        // Publish before clearing the song information.
         publishStage3TvState("stopped", "stop", -1);
 
-        // Save the result before releasing the MIDI player.
         String finalScoreText;
 
         if (karaokeScorer.hasScored()) {
@@ -3195,7 +3187,6 @@ public class Stage3PlayerActivity extends Activity {
 
         super.onStop();
 
-        // Stop microphone capture whenever Stage 3 leaves foreground.
         stopMicrophoneMonitoring();
 
         if (returningToSongbook || released) {
@@ -3232,7 +3223,6 @@ public class Stage3PlayerActivity extends Activity {
 
         markPlayerLaunchCheckpoint("LIFECYCLE_ON_RESUME");
 
-        // Resume the ad view before any early return.
         if (stage3AdView != null) {
             stage3AdView.resume();
         }
@@ -3319,8 +3309,6 @@ public class Stage3PlayerActivity extends Activity {
             stage3AdView = null;
         }
 
-        // shutdown() lets already-submitted TV updates finish.
-        // It does not interrupt an in-progress socket operation.
         tvStateExecutor.shutdown();
 
         super.onDestroy();
