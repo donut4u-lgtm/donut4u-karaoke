@@ -158,10 +158,18 @@ public class TvStageMenuActivity extends Activity {
                 "Phone controller connected."
         )) {
             phonePaired = true;
-            openingStage = false;
             lastOpenedStage = -1;
 
             updateStageMenuVisibility();
+
+            /*
+             * Pairing is complete.
+             * Open the passive TV monitor immediately.
+             * Do not wait for the phone to publish its first
+             * stage state; the monitor displays a waiting screen
+             * until the phone sends the selected song/stage.
+             */
+            openPhoneMonitor();
             return;
         }
 
@@ -176,31 +184,13 @@ public class TvStageMenuActivity extends Activity {
         }
     }
 
-    private void handlePhoneState(JSONObject state) {
-        if (state == null || !phonePaired) {
+    private void openPhoneMonitor() {
+        if (openingStage || isFinishing()) {
             return;
         }
 
-        int stage = state.optInt("stage", -1);
-
-        if (stage < 1 || stage > 4) {
-            return;
-        }
-
-        if (openingStage || lastOpenedStage == stage) {
-            return;
-        }
-
-        lastOpenedStage = stage;
         openingStage = true;
-
-        /*
-         * Phone-controlled mode uses the dedicated monitor.
-         * The phone owns song selection and karaoke controls.
-         */
-        if (sessionController != null) {
-            sessionController.setActiveStage(stage);
-        }
+        waitingForStageReturn = true;
 
         Intent monitorIntent = new Intent(
                 TvStageMenuActivity.this,
@@ -212,8 +202,35 @@ public class TvStageMenuActivity extends Activity {
                 true
         );
 
-        waitingForStageReturn = true;
         startActivity(monitorIntent);
+    }
+
+    private void handlePhoneState(JSONObject state) {
+        if (state == null || !phonePaired) {
+            return;
+        }
+
+        int stage = state.optInt("stage", -1);
+
+        if (stage < 1 || stage > 4) {
+            return;
+        }
+
+        /*
+         * The phone monitor is already open after pairing.
+         * TvMonitorActivity receives subsequent phone states
+         * directly through the shared session observer.
+         * Never open another monitor for the same connection.
+         */
+        if (openingStage || lastOpenedStage == stage) {
+            return;
+        }
+
+        lastOpenedStage = stage;
+
+        if (sessionController != null) {
+            sessionController.setActiveStage(stage);
+        }
     }
 
     private void updateStageMenuVisibility() {
