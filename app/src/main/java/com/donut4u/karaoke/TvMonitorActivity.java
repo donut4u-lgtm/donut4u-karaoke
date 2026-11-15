@@ -1,6 +1,9 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -17,11 +20,16 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
+
+import java.io.File;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class TvMonitorActivity extends Activity
         implements TvSessionController.Observer {
@@ -40,6 +48,7 @@ public class TvMonitorActivity extends Activity
 
     private FrameLayout root;
     private FrameLayout videoContainer;
+    private ImageView backgroundImageView;
     private WebView videoView;
 
     private LinearLayout informationPanel;
@@ -49,6 +58,11 @@ public class TvMonitorActivity extends Activity
     private TextView lyricsView;
     private ScrollView lyricsScroll;
     private TextView statusView;
+
+    private final ExecutorService imageExecutor =
+            Executors.newSingleThreadExecutor();
+
+    private volatile String currentBackgroundTransferId = "";
 
     private String currentVideoId = "";
     private String currentMediaUrl = "";
@@ -96,6 +110,26 @@ public class TvMonitorActivity extends Activity
 
         videoContainer = new FrameLayout(this);
         videoContainer.setBackgroundColor(BLACK);
+
+        /*
+         * The transferred phone image is the bottom layer.
+         * Video playback is added above this ImageView.
+         */
+        backgroundImageView = new ImageView(this);
+        backgroundImageView.setBackgroundColor(BLACK);
+        backgroundImageView.setScaleType(
+                ImageView.ScaleType.CENTER_CROP
+        );
+        backgroundImageView.setAdjustViewBounds(false);
+        backgroundImageView.setVisibility(View.GONE);
+
+        videoContainer.addView(
+                backgroundImageView,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                )
+        );
 
         root.addView(
                 videoContainer,
@@ -350,10 +384,6 @@ public class TvMonitorActivity extends Activity
         int targetStart = -1;
         int targetEnd = -1;
 
-        /*
-         * Preferred method:
-         * Use the exact character offset supplied by Stage 3.
-         */
         if (activeLineOffset >= 0
                 && activeLineOffset < lyrics.length()) {
 
@@ -372,10 +402,6 @@ public class TvMonitorActivity extends Activity
             }
 
         } else {
-            /*
-             * Compatibility fallback:
-             * Older phone state sends only activeLine.
-             */
             String[] lines = lyrics.split("\n", -1);
 
             int lineStart = 0;
@@ -465,6 +491,145 @@ public class TvMonitorActivity extends Activity
         view.setText(prefix + value.trim());
         view.setVisibility(View.VISIBLE);
     }
+
+    // ------------------------------------------------
+    // TV BACKGROUND IMAGE
+    // ------------------------------------------------
+
+    @Override
+    public void onPhoneMediaFileReceived(
+            File file,
+            String mimeType,
+            String transferId
+    ) {
+
+        if (destroyed
+                || file == null
+                || !file.isFile()
+                || !file.exists()
+                || transferId == null
+                || transferId.trim().isEmpty()) {
+            return;
+        }
+
+        if (!"image/jpeg".equalsIgnoreCase(mimeType)
+                && !"image/png".equalsIgnoreCase(mimeType)
+                && !"image/webp".equalsIgnoreCase(mimeType)) {
+            return;
+        }
+
+        /*
+         * Ignore duplicate delivery of the same transfer.
+         */
+        if (transferId.equals(currentBackgroundTransferId)) {
+            return;
+        }
+
+        currentBackgroundTransferId = transferId;
+
+        final String receivedTransferId = transferId;
+        final String receivedMimeType = mimeType;
+        final String receivedPath = file.getAbsolutePath();
+
+        imageExecutor.execute(() -> {
+
+            Bitmap bitmap = null;
+
+            try {
+                File receivedFile = new File(receivedPath);
+
+                if (!receivedFile.isFile()
+                        || !receivedFile.exists()
+                        || receivedFile.length() <= 0L
+                        || receivedFile.length()
+                        > 12L * 1024L * 1024L) {
+                    throw new IllegalArgumentException(
+                            "Invalid TV background image file."
+                    );
+                }
+
+                BitmapFactory.Options options =
+                        new BitmapFactory.Options();
+
+                options.inPreferredConfig =
+                        Bitmap.Config.RGB_565;
+
+                bitmap = BitmapFactory.decodeFile(
+                        receivedFile.getAbsolutePath(),
+                        options
+                );
+
+                if (bitmap == null) {
+                    throw new IllegalArgumentException(
+                            "TV could not decode the received image."
+                    );
+                }
+
+            } catch (Exception e) {
+
+                android.util.Log.e(
+                        "TvMonitorActivity",
+                        "Could not load transferred TV background.",
+                        e
+                );
+
+                if (bitmap != null && !bitmap.isRecycled()) {
+                    bitmap.recycle();
+                }
+
+                runOnUiThread(() -> {
+                    if (!destroyed
+                            && statusView != null
+                            && receivedTransferId.equals(
+                                    currentBackgroundTransferId
+                            )) {
+                        statusView.setText(
+                                "TV BACKGROUND IMAGE COULD NOT LOAD"
+                        );
+                    }
+                });
+
+                return;
+            }
+
+            final Bitmap loadedBitmap = bitmap;
+
+            runOnUiThread(() -> {
+
+                if (destroyed
+                        || backgroundImageView == null
+                        || !receivedTransferId.equals(
+                                currentBackgroundTransferId
+                        )) {
+
+                    if (!loadedBitmap.isRecycled()) {
+                        loadedBitmap.recycle();
+                    }
+
+                    return;
+                }
+
+                backgroundImageView.setImageBitmap(
+                        loadedBitmap
+                );
+
+                backgroundImageView.setVisibility(
+                        View.VISIBLE
+                );
+
+                if (statusView != null) {
+                    statusView.setText(
+                            "PHONE BACKGROUND RECEIVED  •  "
+                                    + receivedMimeType.toUpperCase()
+                    );
+                }
+            });
+        });
+    }
+
+    // ------------------------------------------------
+    // VIDEO PLAYBACK
+    // ------------------------------------------------
 
     private void playYouTube(String videoId) {
         if (videoId == null || videoId.trim().isEmpty()) {
@@ -656,6 +821,11 @@ public class TvMonitorActivity extends Activity
         lyricsScroll.scrollTo(0, 0);
 
         statusView.setText("PHONE CONNECTED");
+
+        /*
+         * Keep the transferred background image.
+         * Stopping a song must not remove the user's image.
+         */
     }
 
     private void destroyVideoView() {
@@ -672,6 +842,10 @@ public class TvMonitorActivity extends Activity
             videoView = null;
         }
     }
+
+    // ------------------------------------------------
+    // GENERAL HELPERS
+    // ------------------------------------------------
 
     private String firstNonEmpty(String... values) {
         for (String value : values) {
@@ -707,6 +881,10 @@ public class TvMonitorActivity extends Activity
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         );
     }
+
+    // ------------------------------------------------
+    // SESSION CALLBACKS
+    // ------------------------------------------------
 
     @Override
     public void onPhoneStateReceived(
@@ -754,7 +932,13 @@ public class TvMonitorActivity extends Activity
             sessionController.setObserver(null);
         }
 
+        imageExecutor.shutdownNow();
+
         destroyVideoView();
+
+        if (backgroundImageView != null) {
+            backgroundImageView.setImageDrawable(null);
+        }
 
         getWindow().clearFlags(
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
