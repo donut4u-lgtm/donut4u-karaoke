@@ -101,6 +101,19 @@ public class OnlineSongActivity extends Activity {
     private static final String AD_UNIT_ID =
             "ca-app-pub-5625332026157890/2970292504";
 
+    /*
+     * YouTube requires an app identifier as the Referer when
+     * its IFrame Player API is loaded inside an Android WebView.
+     *
+     * This is the reverse-DNS application identifier, not the
+     * YouTube website domain.
+     */
+    private static final String YOUTUBE_APP_ORIGIN =
+            "https://com.donut4u.karaoke";
+
+    private static final String YOUTUBE_APP_BASE_URL =
+            YOUTUBE_APP_ORIGIN + "/";
+
     private static final long CACHE_DURATION =
             24L * 60L * 60L * 1000L;
 
@@ -133,6 +146,13 @@ public class OnlineSongActivity extends Activity {
     private FrameLayout playbackScreen;
     private FrameLayout playerHost;
     private WebView player;
+
+    /*
+     * This message is displayed while the YouTube IFrame API
+     * initializes, and when YouTube reports a playback error.
+     */
+    private TextView playerMessage;
+
     private AdView adView;
 
     private boolean donationScreenVisible = false;
@@ -165,10 +185,6 @@ public class OnlineSongActivity extends Activity {
 
     private Runnable pendingSessionMismatch;
 
-    /*
-     * The currently selected Stage 1 video is retained so that
-     * actual YouTube player events can be relayed to the TV.
-     */
     private Video currentPlayingVideo;
 
     private static class Video {
@@ -179,12 +195,42 @@ public class OnlineSongActivity extends Activity {
 
     /*
      * JavaScript bridge used by the YouTube IFrame Player API.
-     * YouTube player state values:
+     *
+     * YouTube player states:
      *  1 = playing
      *  2 = paused
      *  0 = ended
+     *
+     * The bridge also receives player-ready and player-error
+     * callbacks so a failed player does not remain a black screen.
      */
     private final class Stage1PlayerBridge {
+
+        @JavascriptInterface
+        public void onPlayerReady() {
+            sessionHandler.post(() -> {
+                if (closing || !playbackVisible) {
+                    return;
+                }
+
+                showPlayerLoadingMessage(
+                        "YouTube player ready. Loading video...",
+                        false);
+            });
+        }
+
+        @JavascriptInterface
+        public void onPlayerError(int errorCode) {
+            sessionHandler.post(() -> {
+                if (closing
+                        || !playbackVisible
+                        || currentPlayingVideo == null) {
+                    return;
+                }
+
+                showPlayerError(errorCode);
+            });
+        }
 
         @JavascriptInterface
         public void onPlayerStateChange(int state) {
@@ -196,6 +242,8 @@ public class OnlineSongActivity extends Activity {
                 }
 
                 if (state == 1) {
+                    showPlayerLoadingMessage("", false);
+
                     publishPhoneTvState(
                             currentPlayingVideo,
                             "playing",
@@ -242,11 +290,6 @@ public class OnlineSongActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
-        /*
-         * All Android TV launches belong to Stage4TvActivity.
-         * The TV activity provides the independent TV ONLY mode
-         * and the passive CONNECT PHONE display mode.
-         */
         if (isAndroidTv()) {
             Intent tvIntent = new Intent(
                     OnlineSongActivity.this,
@@ -263,10 +306,6 @@ public class OnlineSongActivity extends Activity {
             return;
         }
 
-        /*
-         * Ordinary phone operation retains Firebase authentication
-         * and active-session verification.
-         */
         auth = FirebaseAuth.getInstance();
 
         FirebaseUser user = auth.getCurrentUser();
@@ -1553,10 +1592,6 @@ public class OnlineSongActivity extends Activity {
 
         destroyPlayer();
 
-        /*
-         * Keep the selected song so actual YouTube player callbacks
-         * can publish the correct song information to the TV.
-         */
         currentPlayingVideo = video;
 
         hideSystemBars();
@@ -1627,18 +1662,65 @@ public class OnlineSongActivity extends Activity {
 
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
-        settings.setMediaPlaybackRequiresUserGesture(true);
+
+        /*
+         * The user has already tapped a song in the native app.
+         * Allow the YouTube player to begin playback from its
+         * onReady callback instead of being blocked by WebView's
+         * separate media-gesture requirement.
+         */
+        settings.setMediaPlaybackRequiresUserGesture(false);
+
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
 
         player.setWebChromeClient(new WebChromeClient());
-        player.setWebViewClient(new WebViewClient());
 
-        /*
-         * Register the JavaScript bridge before loading the player.
-         * The bridge sends only YouTube playback state to the TV.
-         */
+        player.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(
+                    WebView view,
+                    String url,
+                    android.graphics.Bitmap favicon) {
+
+                super.onPageStarted(view, url, favicon);
+
+                if (!closing && playbackVisible) {
+                    showPlayerLoadingMessage(
+                            "Connecting to YouTube...",
+                            true);
+                }
+            }
+
+            @Override
+            public void onPageFinished(
+                    WebView view,
+                    String url) {
+
+                super.onPageFinished(view, url);
+            }
+
+            @Override
+            public void onReceivedError(
+                    WebView view,
+                    android.webkit.WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+
+                super.onReceivedError(view, request, error);
+
+                if (request != null && request.isForMainFrame()) {
+                    sessionHandler.post(() -> {
+                        if (!closing && playbackVisible) {
+                            showPlayerLoadingMessage(
+                                    "Unable to load the YouTube player. Check your internet connection and try again.",
+                                    true);
+                        }
+                    });
+                }
+            }
+        });
+
         player.addJavascriptInterface(
                 new Stage1PlayerBridge(),
                 "DonutStage1");
@@ -1649,10 +1731,17 @@ public class OnlineSongActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
 
+        showPlayerLoadingMessage(
+                "Connecting to YouTube...",
+                true);
+
         /*
-         * Use the official YouTube IFrame Player API rather than a
-         * static iframe. This lets the phone detect real play,
-         * pause, and ended events.
+         * The app origin is explicitly supplied to the IFrame API.
+         * The WebView base URL below also identifies the app as the
+         * Referer, as required for Android WebView playback.
+         *
+         * autoplay is enabled because the user selected the song
+         * by tapping its result card in the native application.
          */
         String html = "<!doctype html>"
                 + "<html><head>"
@@ -1675,11 +1764,25 @@ public class OnlineSongActivity extends Activity {
                 + "videoId:'" + video.id + "',"
                 + "playerVars:{"
                 + "playsinline:1,"
+                + "autoplay:1,"
                 + "controls:1,"
                 + "rel:0,"
-                + "modestbranding:1"
+                + "modestbranding:1,"
+                + "enablejsapi:1,"
+                + "origin:'" + YOUTUBE_APP_ORIGIN + "'"
                 + "},"
                 + "events:{"
+                + "onReady:function(event){"
+                + "if(window.DonutStage1){"
+                + "window.DonutStage1.onPlayerReady();"
+                + "}"
+                + "event.target.playVideo();"
+                + "},"
+                + "onError:function(event){"
+                + "if(window.DonutStage1){"
+                + "window.DonutStage1.onPlayerError(event.data);"
+                + "}"
+                + "},"
                 + "onStateChange:function(event){"
                 + "if(window.DonutStage1){"
                 + "window.DonutStage1.onPlayerStateChange(event.data);"
@@ -1693,18 +1796,108 @@ public class OnlineSongActivity extends Activity {
                 + "</body></html>";
 
         player.loadDataWithBaseURL(
-                "https://www.youtube.com/",
+                YOUTUBE_APP_BASE_URL,
                 html,
                 "text/html",
                 "UTF-8",
                 null);
 
-        /*
-         * Do not claim that playback has started here.
-         * The IFrame Player API will publish "playing" only after
-         * YouTube reports its actual PLAYING state.
-         */
         publishPhoneTvState(video, "loading", "load");
+    }
+
+    /*
+     * Shows player loading information or a playback error
+     * over the black player background.
+     */
+    private void showPlayerLoadingMessage(
+            String message,
+            boolean visible) {
+
+        if (playerHost == null || closing) {
+            return;
+        }
+
+        if (!visible) {
+            if (playerMessage != null) {
+                playerHost.removeView(playerMessage);
+                playerMessage = null;
+            }
+            return;
+        }
+
+        if (playerMessage == null) {
+            playerMessage = new TextView(this);
+
+            playerMessage.setTextColor(WHITE);
+            playerMessage.setTextSize(15);
+            playerMessage.setGravity(Gravity.CENTER);
+            playerMessage.setPadding(
+                    dp(28), dp(18), dp(28), dp(18));
+
+            playerMessage.setBackground(
+                    round(Color.argb(225, 10, 12, 15), dp(12)));
+
+            FrameLayout.LayoutParams params =
+                    new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            Gravity.CENTER);
+
+            params.setMargins(
+                    dp(28), dp(60), dp(28), dp(100));
+
+            playerHost.addView(playerMessage, params);
+        }
+
+        playerMessage.setText(message);
+        playerMessage.setVisibility(View.VISIBLE);
+        playerMessage.bringToFront();
+    }
+
+    private void showPlayerError(int errorCode) {
+        String message;
+
+        switch (errorCode) {
+            case 2:
+                message =
+                        "YouTube rejected this video ID. Go back and choose another video.";
+                break;
+
+            case 5:
+                message =
+                        "This video cannot be played by the HTML5 player on this device.";
+                break;
+
+            case 100:
+                message =
+                        "This video is unavailable, private, or has been removed. Choose another video.";
+                break;
+
+            case 101:
+            case 150:
+                message =
+                        "The owner does not allow this video to play inside Donut4U Karaoke. Choose another karaoke video.";
+                break;
+
+            case 153:
+                message =
+                        "YouTube could not verify the app's playback identity. Check the app version and internet connection.";
+                break;
+
+            default:
+                message =
+                        "YouTube playback failed (error "
+                                + errorCode
+                                + "). Go back and try another video.";
+                break;
+        }
+
+        showPlayerLoadingMessage(message, true);
+
+        publishPhoneTvState(
+                currentPlayingVideo,
+                "error",
+                "error_" + errorCode);
     }
 
     /**
@@ -2216,11 +2409,6 @@ public class OnlineSongActivity extends Activity {
     }
 
     private void returnToResults() {
-        /*
-         * Tell the TV to stop showing the selected song.
-         * Clear the selected video so late JavaScript callbacks
-         * cannot publish stale playback states.
-         */
         publishPhoneTvState(null, "stop", "back");
         currentPlayingVideo = null;
 
@@ -2230,6 +2418,7 @@ public class OnlineSongActivity extends Activity {
 
         playbackScreen = null;
         playerHost = null;
+        playerMessage = null;
         playbackVisible = false;
 
         clearMicrophoneViews();
@@ -2281,10 +2470,6 @@ public class OnlineSongActivity extends Activity {
     private void destroyPlayer() {
         stopMicrophoneMonitoring(false);
 
-        /*
-         * Clear the active song before destroying the WebView.
-         * Any delayed JavaScript callback will then be ignored.
-         */
         currentPlayingVideo = null;
 
         if (player != null) {
@@ -2304,6 +2489,12 @@ public class OnlineSongActivity extends Activity {
 
             player = null;
         }
+
+        if (playerHost != null && playerMessage != null) {
+            playerHost.removeView(playerMessage);
+        }
+
+        playerMessage = null;
     }
 
     private String readAll(InputStream input) throws Exception {
