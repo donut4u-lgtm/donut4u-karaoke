@@ -1,12 +1,17 @@
 
 package com.donut4u.karaoke;
 
+import android.util.Base64;
+
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.util.UUID;
 
 /**
  * Application-wide owner of the paired phone-to-TV connection.
@@ -20,6 +25,15 @@ import java.net.Socket;
 public final class PhoneTvConnectionManager {
 
     private static final int MAX_RESPONSE_LENGTH = 100000;
+
+    private static final long MAX_MEDIA_BYTES =
+            12L * 1024L * 1024L;
+
+    private static final int MEDIA_CHUNK_BYTES = 48000;
+
+    private static final String MIME_JPEG = "image/jpeg";
+    private static final String MIME_PNG = "image/png";
+    private static final String MIME_WEBP = "image/webp";
 
     private static volatile PhoneTvConnectionManager instance;
 
@@ -223,6 +237,238 @@ public final class PhoneTvConnectionManager {
         stateSequence = nextSequence;
 
         return response;
+    }
+
+    /**
+     * Transfers an image file to the paired TV.
+     *
+     * Protocol:
+     * 1. media_begin declares the transfer and expected file size.
+     * 2. media_chunk sends Base64-encoded data with its byte offset.
+     * 3. Every chunk waits for a TV acknowledgement.
+     * 4. media_end asks the TV to finalize the completed file.
+     *
+     * Supported image formats: JPEG, PNG and WebP.
+     *
+     * The TV receiver must implement the matching media protocol.
+     *
+     * Call only from a background thread.
+     *
+     * @return The TV's successful media_end response.
+     */
+    public synchronized JSONObject sendMediaFile(
+            File mediaFile,
+            String mimeType,
+            String transferId
+    ) throws Exception {
+
+        if (mediaFile == null || !mediaFile.isFile()) {
+            throw new IOException(
+                    "Background image file does not exist."
+            );
+        }
+
+        if (!mediaFile.canRead()) {
+            throw new IOException(
+                    "Background image cannot be read."
+            );
+        }
+
+        if (!isSupportedImageMimeType(mimeType)) {
+            throw new IOException(
+                    "Unsupported background image format."
+            );
+        }
+
+        long totalBytes = mediaFile.length();
+
+        if (totalBytes <= 0L || totalBytes > MAX_MEDIA_BYTES) {
+            throw new IOException(
+                    "Background image must be between 1 byte and 12 MB."
+            );
+        }
+
+        String safeTransferId = transferId;
+
+        if (safeTransferId == null
+                || !safeTransferId.matches(
+                        "[A-Za-z0-9_-]{1,64}"
+                )) {
+
+            safeTransferId = UUID.randomUUID().toString()
+                    .replace("-", "");
+        }
+
+        if (!isConnected()) {
+            closeInternal();
+
+            throw new IOException(
+                    "TV is disconnected. Pair again."
+            );
+        }
+
+        boolean transferStarted = false;
+
+        try (FileInputStream input =
+                     new FileInputStream(mediaFile)) {
+
+            JSONObject begin = new JSONObject();
+
+            begin.put("type", "media_begin");
+            begin.put("transferId", safeTransferId);
+            begin.put("mimeType", mimeType);
+            begin.put("totalBytes", totalBytes);
+
+            JSONObject beginResponse = request(begin);
+
+            requireSuccessfulResponse(
+                    beginResponse,
+                    "TV rejected the image transfer."
+            );
+
+            transferStarted = true;
+
+            byte[] buffer = new byte[MEDIA_CHUNK_BYTES];
+
+            long offset = 0L;
+
+            while (offset < totalBytes) {
+
+                int bytesToRead = (int) Math.min(
+                        buffer.length,
+                        totalBytes - offset
+                );
+
+                int bytesRead = input.read(
+                        buffer,
+                        0,
+                        bytesToRead
+                );
+
+                if (bytesRead <= 0) {
+                    throw new IOException(
+                            "Unexpected end of background image file."
+                    );
+                }
+
+                byte[] chunk;
+
+                if (bytesRead == buffer.length) {
+                    chunk = buffer;
+                } else {
+                    chunk = new byte[bytesRead];
+
+                    System.arraycopy(
+                            buffer,
+                            0,
+                            chunk,
+                            0,
+                            bytesRead
+                    );
+                }
+
+                String encodedData = Base64.encodeToString(
+                        chunk,
+                        Base64.NO_WRAP
+                );
+
+                JSONObject chunkRequest = new JSONObject();
+
+                chunkRequest.put("type", "media_chunk");
+                chunkRequest.put("transferId", safeTransferId);
+                chunkRequest.put("offset", offset);
+                chunkRequest.put("data", encodedData);
+
+                JSONObject chunkResponse =
+                        request(chunkRequest);
+
+                requireSuccessfulResponse(
+                        chunkResponse,
+                        "TV rejected an image data chunk."
+                );
+
+                long expectedReceivedBytes =
+                        offset + bytesRead;
+
+                long acknowledgedBytes =
+                        chunkResponse.optLong(
+                                "receivedBytes",
+                                -1L
+                        );
+
+                if (acknowledgedBytes != expectedReceivedBytes) {
+                    throw new IOException(
+                            "TV image transfer acknowledgement "
+                                    + "does not match the sent data."
+                    );
+                }
+
+                offset = expectedReceivedBytes;
+            }
+
+            JSONObject end = new JSONObject();
+
+            end.put("type", "media_end");
+            end.put("transferId", safeTransferId);
+
+            JSONObject endResponse = request(end);
+
+            requireSuccessfulResponse(
+                    endResponse,
+                    "TV could not finalize the background image."
+            );
+
+            return endResponse;
+
+        } catch (Exception e) {
+
+            if (transferStarted && isConnected()) {
+
+                try {
+                    JSONObject abort = new JSONObject();
+
+                    abort.put("type", "media_abort");
+                    abort.put("transferId", safeTransferId);
+
+                    JSONObject abortResponse = request(abort);
+
+                    // The abort acknowledgement is intentionally
+                    // not used to replace the original transfer error.
+
+                } catch (Exception ignored) {
+                }
+            }
+
+            throw e;
+        }
+    }
+
+    private boolean isSupportedImageMimeType(
+            String mimeType
+    ) {
+
+        return MIME_JPEG.equals(mimeType)
+                || MIME_PNG.equals(mimeType)
+                || MIME_WEBP.equals(mimeType);
+    }
+
+    private void requireSuccessfulResponse(
+            JSONObject response,
+            String fallbackMessage
+    ) throws IOException {
+
+        if (response == null
+                || !response.optBoolean("ok", false)) {
+
+            throw new IOException(
+                    response == null
+                            ? fallbackMessage
+                            : response.optString(
+                                    "message",
+                                    fallbackMessage
+                            )
+            );
+        }
     }
 
     /**
