@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.Manifest;
@@ -169,8 +170,6 @@ public class Stage3PlayerActivity extends Activity {
 
             String lyrics = "";
 
-            // NEW: Character offset of the active lyric line
-            // within the exact lyrics text sent to the TV.
             int activeLineOffset = -1;
 
             if (currentMidiLyrics != null
@@ -192,8 +191,6 @@ public class Stage3PlayerActivity extends Activity {
                     lyrics = fullLyrics.toString();
                 }
 
-                // Calculate the offset using the SAME tick used
-                // to generate the lyrics text above.
                 activeLineOffset =
                         currentMidiLyrics
                                 .activeLineStartOffsetAtTick(tick);
@@ -217,8 +214,6 @@ public class Stage3PlayerActivity extends Activity {
                 state.put("activeLine", activeLine);
             }
 
-            // NEW: The TV must use this character offset to find
-            // the active lyric in the displayed lyrics text.
             if (activeLineOffset >= 0) {
                 state.put("activeLineOffset", activeLineOffset);
             }
@@ -256,6 +251,111 @@ public class Stage3PlayerActivity extends Activity {
             Log.w(
                     "Stage3Tv",
                     "TV state executor is unavailable.",
+                    error);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // PERSONAL BACKGROUND IMAGE TRANSFER TO TV
+    // ---------------------------------------------------------
+
+    /*
+     * Sends only still pictures to the paired TV.
+     *
+     * Stage3TvBackgroundTransfer handles image conversion,
+     * compression, size limits, file transfer and acknowledgement.
+     *
+     * The transfer helper must return successfully before the
+     * transfer is reported as complete.
+     *
+     * MP4 backgrounds remain local to the phone.
+     *
+     * No sparse playback state is published here because doing so
+     * could overwrite the TV's current song and lyrics information.
+     */
+    private void sendBackgroundImageToTv(Uri imageUri) {
+
+        if (imageUri == null || released || returningToSongbook) {
+            return;
+        }
+
+        try {
+            tvStateExecutor.execute(() -> {
+
+                if (released || returningToSongbook) {
+                    return;
+                }
+
+                PhoneTvConnectionManager manager =
+                        PhoneTvConnectionManager.getInstance();
+
+                if (manager == null || !manager.isConnected()) {
+
+                    handler.post(() -> {
+                        if (!released && !returningToSongbook) {
+                            Toast.makeText(
+                                    Stage3PlayerActivity.this,
+                                    "Picture saved on phone. Connect to the TV to send it.",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+
+                    return;
+                }
+
+                try {
+                    Stage3TvBackgroundTransfer.Result result =
+                            Stage3TvBackgroundTransfer.send(
+                                    getApplicationContext(),
+                                    imageUri);
+
+                    Log.i(
+                            "Stage3Tv",
+                            "Background image acknowledged by TV. "
+                                    + "Transfer ID=" + result.transferId
+                                    + ", file=" + result.fileName);
+
+                    handler.post(() -> {
+                        if (!released && !returningToSongbook) {
+                            Toast.makeText(
+                                    Stage3PlayerActivity.this,
+                                    "Personal picture sent to the TV.",
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    });
+
+                } catch (Exception error) {
+
+                    Log.e(
+                            "Stage3Tv",
+                            "Could not transfer personal background image to TV.",
+                            error);
+
+                    handler.post(() -> {
+                        if (!released && !returningToSongbook) {
+
+                            String reason = error.getMessage();
+
+                            if (reason == null
+                                    || reason.trim().isEmpty()) {
+                                reason = "Transfer was not confirmed.";
+                            }
+
+                            Toast.makeText(
+                                    Stage3PlayerActivity.this,
+                                    "Picture saved on phone, but TV transfer failed: "
+                                            + reason,
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            });
+
+        } catch (Exception error) {
+
+            Log.e(
+                    "Stage3Tv",
+                    "TV background transfer task could not be queued.",
                     error);
         }
     }
@@ -403,13 +503,10 @@ public class Stage3PlayerActivity extends Activity {
     private Button stopButton;
     private Button backgroundButton;
 
-    // PHONE MICROPHONE MONITOR CONTROLS.
-    // These controls are not sent to or displayed by the TV.
     private Stage3MicrophoneMonitor microphoneMonitor;
     private Button microphoneButton;
     private TextView microphoneStatusLabel;
 
-    // PHONE KARAOKE SCORING.
     private Stage3MidiNoteReader currentMidiNoteReader;
 
     private final Stage3KaraokeScorer karaokeScorer =
@@ -873,7 +970,6 @@ public class Stage3PlayerActivity extends Activity {
         pauseButton.setOnClickListener(v -> pauseCurrentSong());
         stopButton.setOnClickListener(v -> stopCurrentSong());
 
-        // PHONE MICROPHONE MONITOR ROW.
         LinearLayout microphoneRow = new LinearLayout(this);
         microphoneRow.setOrientation(LinearLayout.HORIZONTAL);
         microphoneRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -913,7 +1009,6 @@ public class Stage3PlayerActivity extends Activity {
 
         controls.addView(microphoneRow);
 
-        // PHONE KARAOKE SCORE DISPLAY.
         scoreLabel = new TextView(this);
         scoreLabel.setText("SCORE: 0% | WAITING FOR MIDI SONG");
         scoreLabel.setTextColor(ACTIVE_GREEN);
@@ -1373,6 +1468,12 @@ public class Stage3PlayerActivity extends Activity {
                         ? "Your personal MP4 background is selected."
                         : "Your personal picture background is selected.",
                 Toast.LENGTH_SHORT).show();
+
+        // Send still pictures to the paired TV.
+        // MP4 backgrounds remain local to the phone.
+        if (!video) {
+            sendBackgroundImageToTv(uri);
+        }
     }
 
     private void useDefaultBackground() {
@@ -2658,7 +2759,6 @@ public class Stage3PlayerActivity extends Activity {
 
         lastScrolledLyricLine = activeLine;
 
-        // Publish only when the active lyric line changes.
         publishStage3TvState(
                 midiEngine != null && midiEngine.isPlaying()
                         ? "playing" : "paused",
