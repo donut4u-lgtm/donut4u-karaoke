@@ -60,7 +60,18 @@ jobs:
           gradle-version: "8.10.2"
 
       - name: Build debug APK
-        run: gradle assembleDebug
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$YOUTUBE_API_KEY" ]]; then
+            echo "ERROR: GitHub secret YOUTUBE_API_KEY is missing."
+            exit 1
+          fi
+
+          gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
