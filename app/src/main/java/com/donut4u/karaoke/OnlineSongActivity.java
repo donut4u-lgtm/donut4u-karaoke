@@ -1604,11 +1604,21 @@ public class OnlineSongActivity extends Activity {
         playerHost = new FrameLayout(this);
         playerHost.setBackgroundColor(Color.BLACK);
 
-        playbackScreen.addView(
-                playerHost,
+        FrameLayout.LayoutParams playerHostParams =
                 new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT));
+                        ViewGroup.LayoutParams.MATCH_PARENT);
+
+        /*
+         * Reserve space for the song title above and the compact
+         * microphone panel and back button below. This keeps the
+         * YouTube video centered in the usable playback area.
+         */
+        playerHostParams.setMargins(
+                0, dp(62), 0, dp(160));
+
+        playbackScreen.addView(
+                playerHost, playerHostParams);
 
         TextView title = new TextView(this);
         title.setText(video.title);
@@ -1973,12 +1983,19 @@ public class OnlineSongActivity extends Activity {
         sender.start();
     }
 
+    /*
+     * Compact microphone panel:
+     * - Microphone button and score share one horizontal row.
+     * - Detailed microphone information is hidden initially.
+     * - MIC DETAILS expands or collapses the diagnostic details.
+     * - Existing microphone scoring and monitoring remain intact.
+     */
     private void addMicrophonePanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        panel.setPadding(dp(10), dp(7), dp(10), dp(7));
         panel.setBackground(
-                round(Color.argb(235, 10, 20, 16), dp(14)));
+                round(Color.argb(235, 10, 20, 16), dp(12)));
 
         FrameLayout.LayoutParams panelParams =
                 new FrameLayout.LayoutParams(
@@ -1987,59 +2004,102 @@ public class OnlineSongActivity extends Activity {
                         Gravity.BOTTOM);
 
         panelParams.setMargins(
-                dp(10), 0, dp(10), dp(70));
+                dp(10), 0, dp(10), dp(68));
 
         playbackScreen.addView(panel, panelParams);
 
-        TextView heading = new TextView(this);
-        heading.setText("💚 SINGING PERFORMANCE");
-        heading.setTextColor(GREEN);
-        heading.setTextSize(14);
-        heading.setTypeface(null, Typeface.BOLD);
-        heading.setGravity(Gravity.CENTER);
+        LinearLayout mainRow = new LinearLayout(this);
+        mainRow.setOrientation(LinearLayout.HORIZONTAL);
+        mainRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        panel.addView(heading, fullWidthWrap());
+        panel.addView(mainRow, fullWidthWrap());
 
-        microphoneButton =
-                makeButton("🎤 TURN MICROPHONE ON");
+        microphoneButton = makeButton("🎤 MIC ON");
+        microphoneButton.setTextSize(12);
 
         LinearLayout.LayoutParams buttonParams =
-                fullWidth(dp(44));
+                new LinearLayout.LayoutParams(
+                        0, dp(42), 1f);
 
-        buttonParams.topMargin = dp(7);
+        buttonParams.rightMargin = dp(8);
 
-        panel.addView(microphoneButton, buttonParams);
+        mainRow.addView(
+                microphoneButton, buttonParams);
 
         microphoneButton.setOnClickListener(
                 v -> toggleMicrophoneMonitoring());
 
+        microphoneScoreText = new TextView(this);
+        microphoneScoreText.setText("0%");
+        microphoneScoreText.setTextColor(GREEN);
+        microphoneScoreText.setTextSize(23);
+        microphoneScoreText.setTypeface(null, Typeface.BOLD);
+        microphoneScoreText.setGravity(Gravity.CENTER);
+        microphoneScoreText.setMinWidth(dp(62));
+
+        mainRow.addView(
+                microphoneScoreText,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(42)));
+
+        TextView detailsToggle = new TextView(this);
+        detailsToggle.setText("MIC DETAILS  +");
+        detailsToggle.setTextColor(GREEN);
+        detailsToggle.setTextSize(11);
+        detailsToggle.setGravity(Gravity.CENTER);
+        detailsToggle.setPadding(0, dp(5), 0, dp(2));
+        detailsToggle.setClickable(true);
+
+        panel.addView(
+                detailsToggle, fullWidthWrap());
+
+        LinearLayout details = new LinearLayout(this);
+        details.setOrientation(LinearLayout.VERTICAL);
+        details.setVisibility(View.GONE);
+
+        panel.addView(
+                details, fullWidthWrap());
+
+        detailsToggle.setOnClickListener(v -> {
+            boolean show =
+                    details.getVisibility() != View.VISIBLE;
+
+            details.setVisibility(
+                    show ? View.VISIBLE : View.GONE);
+
+            detailsToggle.setText(
+                    show
+                            ? "MIC DETAILS  −"
+                            : "MIC DETAILS  +");
+        });
+
         microphoneStatus = new TextView(this);
         microphoneStatus.setText("Microphone is OFF");
         microphoneStatus.setTextColor(WHITE);
-        microphoneStatus.setTextSize(12);
+        microphoneStatus.setTextSize(11);
         microphoneStatus.setGravity(Gravity.CENTER);
-        microphoneStatus.setPadding(0, dp(6), 0, dp(4));
 
-        panel.addView(
+        details.addView(
                 microphoneStatus, fullWidthWrap());
 
         microphoneLevelText = new TextView(this);
         microphoneLevelText.setText("MIC LEVEL: 0%");
         microphoneLevelText.setTextColor(MUTED);
-        microphoneLevelText.setTextSize(11);
+        microphoneLevelText.setTextSize(10);
 
-        panel.addView(
+        details.addView(
                 microphoneLevelText, fullWidthWrap());
 
         FrameLayout meter = new FrameLayout(this);
         meter.setBackground(round(Color.DKGRAY, dp(8)));
 
         LinearLayout.LayoutParams meterParams =
-                fullWidth(dp(9));
+                fullWidth(dp(7));
 
-        meterParams.topMargin = dp(4);
+        meterParams.topMargin = dp(3);
 
-        panel.addView(meter, meterParams);
+        details.addView(meter, meterParams);
 
         microphoneLevelFill = new View(this);
         microphoneLevelFill.setBackground(
@@ -2059,41 +2119,29 @@ public class OnlineSongActivity extends Activity {
                 "PITCH: Waiting for singing");
 
         microphonePitchText.setTextColor(WHITE);
-        microphonePitchText.setTextSize(11);
-        microphonePitchText.setPadding(0, dp(5), 0, 0);
+        microphonePitchText.setTextSize(10);
+        microphonePitchText.setPadding(0, dp(4), 0, 0);
 
-        panel.addView(
+        details.addView(
                 microphonePitchText, fullWidthWrap());
-
-        microphoneScoreText = new TextView(this);
-        microphoneScoreText.setText("SCORE: 0%");
-        microphoneScoreText.setTextColor(GREEN);
-        microphoneScoreText.setTextSize(21);
-        microphoneScoreText.setTypeface(null, Typeface.BOLD);
-        microphoneScoreText.setGravity(Gravity.CENTER);
-        microphoneScoreText.setPadding(0, dp(5), 0, 0);
-
-        panel.addView(
-                microphoneScoreText, fullWidthWrap());
 
         microphoneStreakText = new TextView(this);
         microphoneStreakText.setText("BEST STREAK: 0");
         microphoneStreakText.setTextColor(WHITE);
-        microphoneStreakText.setTextSize(11);
+        microphoneStreakText.setTextSize(10);
         microphoneStreakText.setGravity(Gravity.CENTER);
 
-        panel.addView(
+        details.addView(
                 microphoneStreakText, fullWidthWrap());
 
         microphoneRatingText = new TextView(this);
         microphoneRatingText.setText("WAITING FOR SINGING");
         microphoneRatingText.setTextColor(GREEN);
-        microphoneRatingText.setTextSize(12);
+        microphoneRatingText.setTextSize(11);
         microphoneRatingText.setTypeface(null, Typeface.BOLD);
         microphoneRatingText.setGravity(Gravity.CENTER);
-        microphoneRatingText.setPadding(0, dp(3), 0, 0);
 
-        panel.addView(
+        details.addView(
                 microphoneRatingText, fullWidthWrap());
     }
 
@@ -2152,7 +2200,7 @@ public class OnlineSongActivity extends Activity {
                 "Starting microphone...");
 
         microphoneButton.setText(
-                "🎤 TURN MICROPHONE OFF");
+                "🎤 MIC OFF");
 
         microphoneMonitor = new Stage3MicrophoneMonitor(
                 new Stage3MicrophoneMonitor.Listener() {
@@ -2201,7 +2249,7 @@ public class OnlineSongActivity extends Activity {
             microphoneMonitor = null;
 
             microphoneButton.setText(
-                    "🎤 TURN MICROPHONE ON");
+                    "🎤 MIC ON");
 
             microphoneStatus.setText(
                     "Unable to start microphone.");
@@ -2271,9 +2319,7 @@ public class OnlineSongActivity extends Activity {
         }
 
         microphoneScoreText.setText(
-                "SCORE: "
-                        + performanceScorer.getScorePercent()
-                        + "%");
+                performanceScorer.getScorePercent() + "%");
 
         microphoneStreakText.setText(
                 "BEST STREAK: "
@@ -2305,7 +2351,7 @@ public class OnlineSongActivity extends Activity {
 
         if (microphoneButton != null) {
             microphoneButton.setText(
-                    "🎤 TURN MICROPHONE ON");
+                    "🎤 MIC ON");
         }
 
         if (microphoneStatus != null) {
@@ -2395,7 +2441,7 @@ public class OnlineSongActivity extends Activity {
         } else {
             if (microphoneButton != null) {
                 microphoneButton.setText(
-                        "🎤 TURN MICROPHONE ON");
+                        "🎤 MIC ON");
             }
 
             if (microphoneStatus != null) {
