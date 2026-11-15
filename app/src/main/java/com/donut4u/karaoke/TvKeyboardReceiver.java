@@ -6,11 +6,14 @@ import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
@@ -40,6 +43,15 @@ public final class TvKeyboardReceiver {
     private static final int MAX_MESSAGE_LENGTH = 100000;
     private static final int CALLBACK_TIMEOUT_SECONDS = 3;
 
+    private static final long MAX_MEDIA_BYTES =
+            12L * 1024L * 1024L;
+
+    private static final int MAX_MEDIA_CHUNK_BYTES = 48000;
+
+    private static final String MIME_JPEG = "image/jpeg";
+    private static final String MIME_PNG = "image/png";
+    private static final String MIME_WEBP = "image/webp";
+
     public interface Listener {
 
         void onPairingCodeReady(String code);
@@ -63,15 +75,15 @@ public final class TvKeyboardReceiver {
         ) {
         }
 
-        /**
-         * Handles phone requests that need a response from the active TV
-         * screen, such as retrieving song results or selecting a song.
-         *
-         * Return a JSONObject containing the requested data or result.
-         * Return null when the request cannot be handled.
-         */
         default JSONObject onRemoteRequest(JSONObject request) {
             return null;
+        }
+
+        default void onMediaFileReceived(
+                File file,
+                String mimeType,
+                String transferId
+        ) {
         }
     }
 
@@ -102,6 +114,32 @@ public final class TvKeyboardReceiver {
     private NsdManager.RegistrationListener registrationListener;
 
     private volatile String pairingCode = "";
+
+    private static final class MediaTransfer {
+
+        final String transferId;
+        final String mimeType;
+        final long totalBytes;
+        final File temporaryFile;
+        final FileOutputStream output;
+
+        long receivedBytes;
+
+        MediaTransfer(
+                String transferId,
+                String mimeType,
+                long totalBytes,
+                File temporaryFile,
+                FileOutputStream output
+        ) {
+            this.transferId = transferId;
+            this.mimeType = mimeType;
+            this.totalBytes = totalBytes;
+            this.temporaryFile = temporaryFile;
+            this.output = output;
+            this.receivedBytes = 0L;
+        }
+    }
 
     public TvKeyboardReceiver(
             Context context,
@@ -296,9 +334,6 @@ public final class TvKeyboardReceiver {
         return socket;
     }
 
-    /**
-     * Generates a random six-digit pairing code.
-     */
     private String generatePairingCode() {
 
         int number =
@@ -496,6 +531,8 @@ public final class TvKeyboardReceiver {
     }
 
     private void handlePhone(Socket socket) {
+        MediaTransfer transfer = null;
+
         try {
             BufferedReader reader =
                     new BufferedReader(
@@ -618,6 +655,38 @@ public final class TvKeyboardReceiver {
                             writer
                     );
 
+                } else if ("media_begin".equals(type)) {
+
+                    transfer = handleMediaBegin(
+                            request,
+                            writer,
+                            transfer
+                    );
+
+                } else if ("media_chunk".equals(type)) {
+
+                    handleMediaChunk(
+                            request,
+                            writer,
+                            transfer
+                    );
+
+                } else if ("media_end".equals(type)) {
+
+                    transfer = handleMediaEnd(
+                            request,
+                            writer,
+                            transfer
+                    );
+
+                } else if ("media_abort".equals(type)) {
+
+                    transfer = handleMediaAbort(
+                            request,
+                            writer,
+                            transfer
+                    );
+
                 } else if ("disconnect".equals(type)) {
 
                     notifyStatus(
@@ -639,7 +708,420 @@ public final class TvKeyboardReceiver {
             if (running) {
                 notifyStatus("Phone connection ended.");
             }
+
+        } finally {
+            cleanupTransfer(transfer);
         }
+    }
+
+    private MediaTransfer handleMediaBegin(
+            JSONObject request,
+            BufferedWriter writer,
+            MediaTransfer previous
+    ) throws Exception {
+
+        cleanupTransfer(previous);
+
+        String transferId =
+                request.optString("transferId", "").trim();
+
+        String mimeType =
+                request.optString("mimeType", "").trim();
+
+        long totalBytes =
+                request.optLong("totalBytes", -1L);
+
+        if (!transferId.matches("[A-Za-z0-9_-]{1,64}")) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Invalid media transfer ID"
+            );
+            return null;
+        }
+
+        if (!isSupportedImageMime(mimeType)) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unsupported image type"
+            );
+            return null;
+        }
+
+        if (totalBytes <= 0L
+                || totalBytes > MAX_MEDIA_BYTES) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Image size is invalid or exceeds 12 MB"
+            );
+            return null;
+        }
+
+        File mediaDirectory =
+                new File(
+                        appContext.getCacheDir(),
+                        "tv_media"
+                );
+
+        if (!mediaDirectory.exists()
+                && !mediaDirectory.mkdirs()) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unable to create TV media directory"
+            );
+            return null;
+        }
+
+        File temporaryFile =
+                new File(
+                        mediaDirectory,
+                        "background_" + transferId + ".part"
+                );
+
+        if (temporaryFile.exists()
+                && !temporaryFile.delete()) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unable to prepare image file"
+            );
+            return null;
+        }
+
+        FileOutputStream output = null;
+
+        try {
+            output = new FileOutputStream(temporaryFile);
+
+            MediaTransfer transfer =
+                    new MediaTransfer(
+                            transferId,
+                            mimeType,
+                            totalBytes,
+                            temporaryFile,
+                            output
+                    );
+
+            JSONObject response = new JSONObject();
+            response.put("ok", true);
+            response.put("message", "Media transfer started");
+            response.put("transferId", transferId);
+            response.put("receivedBytes", 0L);
+
+            writeResponse(writer, response);
+
+            return transfer;
+
+        } catch (Exception e) {
+            if (output != null) {
+                try {
+                    output.close();
+                } catch (Exception ignored) {
+                }
+            }
+
+            if (temporaryFile.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                temporaryFile.delete();
+            }
+
+            throw e;
+        }
+    }
+
+    private void handleMediaChunk(
+            JSONObject request,
+            BufferedWriter writer,
+            MediaTransfer transfer
+    ) throws Exception {
+
+        if (transfer == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "No active media transfer"
+            );
+            return;
+        }
+
+        String transferId =
+                request.optString("transferId", "");
+
+        if (!transfer.transferId.equals(transferId)) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Media transfer ID mismatch"
+            );
+            return;
+        }
+
+        long offset =
+                request.optLong("offset", -1L);
+
+        if (offset != transfer.receivedBytes) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Media chunk offset mismatch"
+            );
+            return;
+        }
+
+        String encoded =
+                request.optString("data", "");
+
+        if (encoded.isEmpty()) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Empty media chunk"
+            );
+            return;
+        }
+
+        final byte[] bytes;
+
+        try {
+            bytes = Base64.decode(
+                    encoded,
+                    Base64.DEFAULT
+            );
+        } catch (IllegalArgumentException e) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Invalid Base64 media chunk"
+            );
+            return;
+        }
+
+        if (bytes.length <= 0
+                || bytes.length > MAX_MEDIA_CHUNK_BYTES) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Media chunk size is invalid"
+            );
+            return;
+        }
+
+        if (transfer.receivedBytes + bytes.length
+                > transfer.totalBytes) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Media chunk exceeds expected image size"
+            );
+            return;
+        }
+
+        transfer.output.write(bytes);
+        transfer.output.flush();
+
+        transfer.receivedBytes += bytes.length;
+
+        JSONObject response = new JSONObject();
+        response.put("ok", true);
+        response.put("message", "Media chunk received");
+        response.put("transferId", transfer.transferId);
+        response.put("receivedBytes", transfer.receivedBytes);
+
+        writeResponse(writer, response);
+    }
+
+    private MediaTransfer handleMediaEnd(
+            JSONObject request,
+            BufferedWriter writer,
+            MediaTransfer transfer
+    ) throws Exception {
+
+        if (transfer == null) {
+            sendResponse(
+                    writer,
+                    false,
+                    "No active media transfer"
+            );
+            return null;
+        }
+
+        String transferId =
+                request.optString("transferId", "");
+
+        if (!transfer.transferId.equals(transferId)) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Media transfer ID mismatch"
+            );
+            return transfer;
+        }
+
+        if (transfer.receivedBytes != transfer.totalBytes) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Image transfer is incomplete"
+            );
+            return transfer;
+        }
+
+        transfer.output.flush();
+        transfer.output.getFD().sync();
+        transfer.output.close();
+
+        if (!transfer.temporaryFile.exists()
+                || transfer.temporaryFile.length()
+                != transfer.totalBytes) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Saved image size does not match"
+            );
+            cleanupTransfer(transfer);
+            return null;
+        }
+
+        String extension =
+                getImageExtension(transfer.mimeType);
+
+        File finalFile =
+                new File(
+                        transfer.temporaryFile.getParentFile(),
+                        "background_" + transfer.transferId + extension
+                );
+
+        if (finalFile.exists()
+                && !finalFile.delete()) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unable to replace previous TV image"
+            );
+            cleanupTransfer(transfer);
+            return null;
+        }
+
+        if (!transfer.temporaryFile.renameTo(finalFile)) {
+            sendResponse(
+                    writer,
+                    false,
+                    "Unable to finalize received image"
+            );
+            cleanupTransfer(transfer);
+            return null;
+        }
+
+        JSONObject response = new JSONObject();
+        response.put("ok", true);
+        response.put("message", "Media transfer completed");
+        response.put("transferId", transfer.transferId);
+        response.put("fileName", finalFile.getName());
+        response.put("mimeType", transfer.mimeType);
+        response.put("receivedBytes", transfer.receivedBytes);
+
+        writeResponse(writer, response);
+
+        notifyMediaFileReceived(
+                finalFile,
+                transfer.mimeType,
+                transfer.transferId
+        );
+
+        return null;
+    }
+
+    private MediaTransfer handleMediaAbort(
+            JSONObject request,
+            BufferedWriter writer,
+            MediaTransfer transfer
+    ) throws Exception {
+
+        String transferId =
+                request.optString("transferId", "");
+
+        if (transfer != null
+                && transfer.transferId.equals(transferId)) {
+            cleanupTransfer(transfer);
+            transfer = null;
+        }
+
+        sendResponse(
+                writer,
+                true,
+                "Media transfer aborted"
+        );
+
+        return transfer;
+    }
+
+    private void cleanupTransfer(MediaTransfer transfer) {
+        if (transfer == null) {
+            return;
+        }
+
+        try {
+            transfer.output.close();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            if (transfer.temporaryFile.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                transfer.temporaryFile.delete();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean isSupportedImageMime(String mimeType) {
+        return MIME_JPEG.equals(mimeType)
+                || MIME_PNG.equals(mimeType)
+                || MIME_WEBP.equals(mimeType);
+    }
+
+    private String getImageExtension(String mimeType) {
+        if (MIME_PNG.equals(mimeType)) {
+            return ".png";
+        }
+
+        if (MIME_WEBP.equals(mimeType)) {
+            return ".webp";
+        }
+
+        return ".jpg";
+    }
+
+    private void notifyMediaFileReceived(
+            File file,
+            String mimeType,
+            String transferId
+    ) {
+        mainHandler.post(() -> {
+            Listener listener = activeListener;
+
+            if (running
+                    && sessionEnabled
+                    && listener != null
+                    && file != null
+                    && file.exists()) {
+                try {
+                    listener.onMediaFileReceived(
+                            file,
+                            mimeType,
+                            transferId
+                    );
+                } catch (Exception e) {
+                    notifyError(
+                            "Unable to display received TV image: "
+                                    + safeMessage(e)
+                    );
+                }
+            }
+        });
     }
 
     private void handleSearchRequest(
@@ -820,16 +1302,6 @@ public final class TvKeyboardReceiver {
         );
     }
 
-    /**
-     * Handles requests that need data or an action result from the TV.
-     *
-     * Supported request types:
-     * - get_results
-     * - select_song
-     *
-     * The active screen returns a JSONObject. The receiver sends that
-     * object back to the phone inside the "data" property.
-     */
     private void handleRemoteRequest(
             JSONObject request,
             BufferedWriter writer
@@ -950,9 +1422,7 @@ public final class TvKeyboardReceiver {
             }
         }
 
-        writer.write(response.toString());
-        writer.newLine();
-        writer.flush();
+        writeResponse(writer, response);
     }
 
     private long handleStateRequest(
@@ -1093,6 +1563,14 @@ public final class TvKeyboardReceiver {
 
         response.put("ok", success);
         response.put("message", message);
+
+        writeResponse(writer, response);
+    }
+
+    private void writeResponse(
+            BufferedWriter writer,
+            JSONObject response
+    ) throws Exception {
 
         writer.write(response.toString());
         writer.newLine();
