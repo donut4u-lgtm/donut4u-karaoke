@@ -1,9 +1,11 @@
+
 name: Build Donut4U Signed Release APK
 
 on:
   push:
     branches:
       - main
+      - stage4-tv-isolated
   workflow_dispatch:
 
 permissions:
