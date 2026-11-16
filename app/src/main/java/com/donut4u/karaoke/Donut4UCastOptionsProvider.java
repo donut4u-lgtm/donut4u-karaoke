@@ -7,6 +7,8 @@ import com.google.android.gms.cast.CastMediaControlIntent;
 import com.google.android.gms.cast.framework.CastOptions;
 import com.google.android.gms.cast.framework.OptionsProvider;
 import com.google.android.gms.cast.framework.SessionProvider;
+import com.google.android.gms.cast.framework.media.CastMediaOptions;
+import com.google.android.gms.cast.framework.media.NotificationOptions;
 
 import java.util.Collections;
 import java.util.List;
@@ -14,9 +16,8 @@ import java.util.List;
 /**
  * Google Cast configuration for Donut4U Karaoke.
  *
- * This initial version uses Google's Default Media Receiver.
- * A dedicated Donut4U receiver application ID will replace it
- * when the custom receiver is registered.
+ * Uses Google's Default Media Receiver until a dedicated
+ * Donut4U receiver application ID is registered.
  */
 public final class Donut4UCastOptionsProvider
         implements OptionsProvider {
@@ -36,10 +37,30 @@ public final class Donut4UCastOptionsProvider
                         + RECEIVER_APPLICATION_ID
         );
 
+        NotificationOptions notificationOptions =
+                new NotificationOptions.Builder()
+                        .setTargetActivityClassName(
+                                Donut4UExpandedCastControllerActivity.class
+                                        .getName()
+                        )
+                        .build();
+
+        CastMediaOptions mediaOptions =
+                new CastMediaOptions.Builder()
+                        .setNotificationOptions(
+                                notificationOptions
+                        )
+                        .setExpandedControllerActivityClassName(
+                                Donut4UExpandedCastControllerActivity.class
+                                        .getName()
+                        )
+                        .build();
+
         return new CastOptions.Builder()
                 .setReceiverApplicationId(
                         RECEIVER_APPLICATION_ID
                 )
+                .setCastMediaOptions(mediaOptions)
                 .build();
     }
 
