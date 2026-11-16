@@ -3,6 +3,7 @@ package com.donut4u.karaoke;
 
 import android.content.Context;
 
+import com.google.android.gms.cast.CastMediaControlIntent;
 import com.google.android.gms.cast.framework.CastOptions;
 import com.google.android.gms.cast.framework.OptionsProvider;
 import com.google.android.gms.cast.framework.SessionProvider;
@@ -13,39 +14,27 @@ import java.util.List;
 /**
  * Google Cast configuration for Donut4U Karaoke.
  *
- * Replace RECEIVER_APPLICATION_ID after the Donut4U
- * receiver is registered in the Google Cast Developer Console.
+ * This initial version uses Google's Default Media Receiver.
+ * A dedicated Donut4U receiver application ID will replace it
+ * when the custom receiver is registered.
  */
 public final class Donut4UCastOptionsProvider
         implements OptionsProvider {
 
-    /*
-     * Configuration placeholder only.
-     * This is not a real Google Cast application ID.
-     */
     public static final String RECEIVER_APPLICATION_ID =
-            "YOUR_DONUT4U_CAST_APP_ID";
+            CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID;
 
     private static final String TAG =
             "Donut4UCastOptions";
 
-    public static boolean isReceiverConfigured() {
-        return RECEIVER_APPLICATION_ID != null
-                && !RECEIVER_APPLICATION_ID.trim().isEmpty()
-                && !"YOUR_DONUT4U_CAST_APP_ID".equals(
-                        RECEIVER_APPLICATION_ID
-                );
-    }
-
     @Override
     public CastOptions getCastOptions(Context context) {
 
-        if (!isReceiverConfigured()) {
-            android.util.Log.w(
-                    TAG,
-                    "Donut4U Cast receiver is not registered yet."
-            );
-        }
+        android.util.Log.i(
+                TAG,
+                "Initializing Google Cast with receiver: "
+                        + RECEIVER_APPLICATION_ID
+        );
 
         return new CastOptions.Builder()
                 .setReceiverApplicationId(
