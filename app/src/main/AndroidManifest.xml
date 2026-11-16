@@ -17,6 +17,7 @@
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
     <application
+        android:name=".Donut4UKaraokeApplication"
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:label="Donut4U Karaoke"
