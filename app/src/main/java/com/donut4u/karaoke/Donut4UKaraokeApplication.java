@@ -3,7 +3,9 @@ package com.donut4u.karaoke;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -12,6 +14,12 @@ import androidx.mediarouter.app.MediaRouteButton;
 
 public final class Donut4UKaraokeApplication
         extends Application {
+
+    private static final String TAG =
+            "Donut4UCast";
+
+    private static final String STAGE1_ACTIVITY =
+            "com.donut4u.karaoke.OnlineSongActivity";
 
     private static final String STAGE2_ACTIVITY =
             "com.donut4u.karaoke.KaraokeStudioActivity";
@@ -30,12 +38,6 @@ public final class Donut4UKaraokeApplication
                 new ActivityLifecycleCallbacks() {
 
             @Override
-            public void onActivityResumed(Activity activity) {
-
-                addCastButton(activity);
-            }
-
-            @Override
             public void onActivityCreated(
                     Activity activity,
                     Bundle savedInstanceState
@@ -44,6 +46,11 @@ public final class Donut4UKaraokeApplication
 
             @Override
             public void onActivityStarted(Activity activity) {
+            }
+
+            @Override
+            public void onActivityResumed(Activity activity) {
+                addCastButton(activity);
             }
 
             @Override
@@ -69,19 +76,34 @@ public final class Donut4UKaraokeApplication
 
     private void addCastButton(Activity activity) {
 
-        if (activity == null
-                || !STAGE2_ACTIVITY.equals(
-                        activity.getClass().getName()
-                )) {
+        if (activity == null) {
             return;
         }
 
-        // Never show the phone Cast control in TV ONLY mode.
+        String activityName =
+                activity.getClass().getName();
+
+        boolean supportedActivity =
+                STAGE1_ACTIVITY.equals(activityName)
+                        || STAGE2_ACTIVITY.equals(activityName);
+
+        if (!supportedActivity) {
+            return;
+        }
+
+        // Keep Cast controls out of TV ONLY mode.
         if (activity.getIntent() != null
                 && activity.getIntent().getBooleanExtra(
                         EXTRA_TV_MODE,
                         false
                 )) {
+            return;
+        }
+
+        // Do not add a phone sender control on Android TV.
+        if (activity.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_LEANBACK
+        )) {
             return;
         }
 
@@ -97,12 +119,9 @@ public final class Donut4UKaraokeApplication
             FrameLayout decorLayout =
                     (FrameLayout) decor;
 
-            View existing =
-                    decorLayout.findViewWithTag(
-                            CAST_BUTTON_TAG
-                    );
-
-            if (existing != null) {
+            if (decorLayout.findViewWithTag(
+                    CAST_BUTTON_TAG
+            ) != null) {
                 return;
             }
 
@@ -115,7 +134,8 @@ public final class Donut4UKaraokeApplication
                     "Cast to TV"
             );
 
-            int buttonSize = dp(activity, 48);
+            int buttonSize =
+                    dp(activity, 48);
 
             FrameLayout.LayoutParams params =
                     new FrameLayout.LayoutParams(
@@ -136,17 +156,26 @@ public final class Donut4UKaraokeApplication
                     params
             );
 
+            Log.i(
+                    TAG,
+                    "Google Cast button added to "
+                            + activityName
+            );
+
         } catch (Exception e) {
 
-            android.util.Log.e(
-                    "Donut4UCast",
+            Log.e(
+                    TAG,
                     "Could not add Google Cast button.",
                     e
             );
         }
     }
 
-    private int dp(Activity activity, float value) {
+    private int dp(
+            Activity activity,
+            float value
+    ) {
 
         return (int) (
                 value
