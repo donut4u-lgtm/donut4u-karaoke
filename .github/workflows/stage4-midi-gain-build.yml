@@ -2,9 +2,6 @@
 name: Stage 4 - MIDI Gain 1.0 Signed Release Build and Verify
 
 on:
-  push:
-    branches:
-      - stage4-tv-isolated
   workflow_dispatch:
 
 permissions:
@@ -373,7 +370,7 @@ jobs:
           }
 
           test -n "$DONUT4U_KEY_PASSWORD" || {
-            echo "FAIL: DONUT4U_KEY_PASSWORD secret is missing."
+            echo "FAIL: DONUT4U_KEY_PASSWORD is missing."
             exit 1
           }
 
