@@ -2,10 +2,6 @@
 name: Build donut4u karaoke APK
 
 on:
-  push:
-    branches:
-      - main
-      - stage4-tv-isolated
   workflow_dispatch:
 
 permissions:
