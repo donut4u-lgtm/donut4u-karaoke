@@ -116,6 +116,11 @@ dependencies {
 
     implementation("com.google.android.gms:play-services-ads:25.5.0")
 
+    // Google Cast Sender and Cast Connect Receiver.
+    implementation("com.google.android.gms:play-services-cast:23.0.0")
+    implementation("com.google.android.gms:play-services-cast-framework:23.0.0")
+    implementation("com.google.android.gms:play-services-cast-tv:21.1.1")
+
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-common:1.8.0")
 
