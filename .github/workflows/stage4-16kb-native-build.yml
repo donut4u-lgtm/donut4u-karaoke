@@ -1,9 +1,7 @@
+
 name: Stage 4 - Verify 16 KB FluidSynth
 
 on:
-  push:
-    branches:
-      - stage4-tv-isolated
   workflow_dispatch:
 
 permissions:
