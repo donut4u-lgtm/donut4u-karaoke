@@ -1,0 +1,52 @@
+
+name: Deploy Donut4U Cast Receiver
+
+on:
+  push:
+    branches:
+      - stage4-tv-isolated
+    paths:
+      - "cast-receiver/**"
+      - ".github/workflows/deploy-cast-receiver.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: cast-receiver-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Cast receiver files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s cast-receiver/index.html
+          echo "Cast receiver HTML verified."
+          find cast-receiver -maxdepth 2 -type f -print
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Cast receiver
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: cast-receiver
+
+      - name: Deploy Cast receiver
+        id: deployment
+        uses: actions/deploy-pages@v4
