@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -477,15 +476,6 @@ public class TvMonitorActivity extends Activity
 
         currentLyrics = lyrics;
 
-        /*
-         * IMPORTANT FIX:
-         * Stages 1 and 2 must replace the initial waiting message
-         * even when the phone's current lyrics value is empty.
-         * Previously, an empty lyrics value could leave the
-         * waiting message visible because both values were empty.
-         *
-         * Stage 3 keeps its existing timed lyric highlighting.
-         */
         if (stage == 3) {
 
             displayHighlightedLyrics(
@@ -496,7 +486,13 @@ public class TvMonitorActivity extends Activity
 
         } else {
 
-            lyricsView.setText(lyrics);
+            /*
+             * Stage 1 and Stage 2 do not send timed lyrics.
+             * Always clear the lyrics area for these stages.
+             * Never restore the waiting message during playback.
+             */
+            lyricsView.setText("");
+            lyricsScroll.scrollTo(0, 0);
         }
 
         String videoId = state.optString("videoId", "");
@@ -1184,9 +1180,16 @@ public class TvMonitorActivity extends Activity
         singerView.setVisibility(View.GONE);
         composerView.setVisibility(View.GONE);
 
-        lyricsView.setText(
-                "Waiting for a song from your phone..."
-        );
+        /*
+         * Do not restore the waiting message here.
+         * Stage 1 and Stage 2 can send repeated state updates
+         * while changing playback screens. Restoring the
+         * placeholder here makes it flash over active playback.
+         *
+         * The initial waiting message is still shown when the
+         * TV screen first opens and before the first phone state.
+         */
+        lyricsView.setText("");
 
         lyricsScroll.scrollTo(0, 0);
 
