@@ -15,6 +15,7 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -30,6 +31,7 @@ class Stage3MidiEngine private constructor(
     }
 
     private val worker = Executors.newSingleThreadExecutor()
+    private val tvTransferWorker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
@@ -72,6 +74,8 @@ class Stage3MidiEngine private constructor(
 
         private const val DIAGNOSTIC_KEY =
             "last_checkpoint"
+
+        private const val MIME_MIDI = "audio/midi"
 
         @JvmStatic
         fun create(context: Context): Stage3MidiEngine {
@@ -343,7 +347,6 @@ class Stage3MidiEngine private constructor(
                     "AFTER_FLUIDSYNTH_CONSTRUCTOR"
                 )
 
-                // Apply Stage 3 master gain before playback begins.
                 val gainApplied = Stage3MidiGain.apply(newPlayer)
 
                 markDiagnostic(
@@ -390,6 +393,16 @@ class Stage3MidiEngine private constructor(
                 }
 
                 markDiagnostic("AFTER_FLUIDSYNTH_PLAY")
+
+                /*
+                 * Send the same MIDI/KAR file to the paired TV.
+                 * This runs separately so the phone's playback,
+                 * lyrics and scoring are not delayed by the transfer.
+                 */
+                scheduleTvMidiTransfer(
+                    midiFile,
+                    sessionId
+                )
 
                 mainHandler.post {
 
@@ -488,6 +501,103 @@ class Stage3MidiEngine private constructor(
         }
     }
 
+    /**
+     * Transfers the currently loaded MIDI/KAR file to the paired TV.
+     * Transfer errors are deliberately isolated from phone playback.
+     */
+    private fun scheduleTvMidiTransfer(
+        midiFile: File,
+        sessionId: Long
+    ) {
+
+        try {
+
+            tvTransferWorker.execute {
+
+                if (!isSessionActive(sessionId)) {
+                    return@execute
+                }
+
+                val manager = try {
+                    PhoneTvConnectionManager.getInstance()
+                } catch (error: Exception) {
+                    Log.w(
+                        TAG,
+                        "Could not access the phone-to-TV manager.",
+                        error
+                    )
+                    return@execute
+                }
+
+                if (!manager.isConnected()) {
+                    Log.i(
+                        TAG,
+                        "No paired TV connection; MIDI transfer skipped."
+                    )
+                    return@execute
+                }
+
+                if (!midiFile.isFile || !midiFile.canRead()) {
+                    Log.w(
+                        TAG,
+                        "MIDI file is unavailable for TV transfer."
+                    )
+                    return@execute
+                }
+
+                val transferId = UUID.randomUUID()
+                    .toString()
+                    .replace("-", "")
+
+                try {
+
+                    markDiagnostic(
+                        "TV_MIDI_TRANSFER_STARTED bytes=" +
+                            midiFile.length()
+                    )
+
+                    manager.sendMediaFile(
+                        midiFile,
+                        MIME_MIDI,
+                        transferId
+                    )
+
+                    markDiagnostic(
+                        "TV_MIDI_TRANSFER_COMPLETED id=" +
+                            transferId
+                    )
+
+                    Log.i(
+                        TAG,
+                        "Stage 3 MIDI file successfully transferred to TV."
+                    )
+
+                } catch (error: Exception) {
+
+                    markDiagnostic(
+                        "TV_MIDI_TRANSFER_FAILED " +
+                            error.javaClass.simpleName +
+                            ": " + error.message
+                    )
+
+                    Log.w(
+                        TAG,
+                        "TV MIDI transfer failed; phone playback continues.",
+                        error
+                    )
+                }
+            }
+
+        } catch (error: Exception) {
+
+            Log.w(
+                TAG,
+                "Could not schedule TV MIDI transfer.",
+                error
+            )
+        }
+    }
+
     @Synchronized
     private fun isSessionActive(
         sessionId: Long
@@ -546,12 +656,6 @@ class Stage3MidiEngine private constructor(
         }
     }
 
-    /**
-     * Copies the SoundFont bundled inside the APK assets
-     * into temporary app storage for FluidSynth.
-     *
-     * No Google Drive or internet download is required.
-     */
     private fun copyDefaultSoundFont(
         sessionId: Long
     ): File {
@@ -899,15 +1003,12 @@ class Stage3MidiEngine private constructor(
         if (file.isDirectory) {
 
             file.listFiles()?.forEach { child ->
-
                 deleteRecursively(child)
             }
         }
 
         try {
-
             file.delete()
-
         } catch (_: Exception) {
         }
     }
@@ -958,7 +1059,6 @@ class Stage3MidiEngine private constructor(
         )
 
         destination.delete()
-
         temporary.delete()
 
         val input = context.contentResolver.openInputStream(uri)
@@ -1010,7 +1110,6 @@ class Stage3MidiEngine private constructor(
         } catch (error: Exception) {
 
             temporary.delete()
-
             destination.delete()
 
             throw error
@@ -1044,7 +1143,6 @@ class Stage3MidiEngine private constructor(
         )
 
         destination.delete()
-
         temporary.delete()
 
         val connection = (
@@ -1053,11 +1151,8 @@ class Stage3MidiEngine private constructor(
             ).apply {
 
             requestMethod = "GET"
-
             connectTimeout = 30000
-
             readTimeout = 120000
-
             instanceFollowRedirects = true
 
             setRequestProperty(
@@ -1143,7 +1238,6 @@ class Stage3MidiEngine private constructor(
         } catch (error: Exception) {
 
             temporary.delete()
-
             destination.delete()
 
             throw error
@@ -1166,20 +1260,14 @@ class Stage3MidiEngine private constructor(
         val player = midiPlayer ?: return
 
         val duration = try {
-
             player.durationTicks.coerceAtLeast(0L)
-
         } catch (_: Exception) {
-
             0L
         }
 
         val position = try {
-
             player.currentTick.coerceAtLeast(0L)
-
         } catch (_: Exception) {
-
             lastNativeTick.coerceAtLeast(0L)
         }
 
@@ -1195,15 +1283,11 @@ class Stage3MidiEngine private constructor(
         closeMidiPlayer()
 
         activeTask = null
-
         activeCallback = null
-
         lastNativeTick = 0L
-
         pausedByEngine = false
 
         cleanupTemporaryFiles()
-
         clearDiagnostic()
 
         callback?.onFinished()
@@ -1222,11 +1306,8 @@ class Stage3MidiEngine private constructor(
         closeMidiPlayer()
 
         activeTask = null
-
         activeCallback = null
-
         lastNativeTick = 0L
-
         pausedByEngine = false
 
         cleanupTemporaryFiles()
@@ -1240,38 +1321,34 @@ class Stage3MidiEngine private constructor(
         if (closed) return
 
         closed = true
-
         activeSessionId++
 
         activeCallback = null
 
         activeTask?.cancel(true)
-
         activeTask = null
 
         closeMidiPlayer()
 
         lastNativeTick = 0L
-
         pausedByEngine = false
 
         cleanupTemporaryFiles()
-
         clearDiagnostic()
 
         worker.shutdownNow()
+        tvTransferWorker.shutdownNow()
     }
 }
 
 internal object Stage3MidiGain {
 
     private const val TAG = "Stage3MidiGain"
-
-    // Full FluidSynth master gain.
     private const val TARGET_GAIN = 1.0f
 
     fun apply(player: MidiFilePlayer): Boolean {
         return try {
+
             val contextField =
                 player.javaClass.getDeclaredField("context").apply {
                     isAccessible = true
@@ -1326,9 +1403,12 @@ internal object Stage3MidiGain {
             true
 
         } catch (error: Exception) {
+
             Log.e(TAG, "Could not adjust Stage 3 MIDI gain.", error)
             false
+
         } catch (error: LinkageError) {
+
             Log.e(TAG, "FluidSynth native gain function unavailable.", error)
             false
         }
