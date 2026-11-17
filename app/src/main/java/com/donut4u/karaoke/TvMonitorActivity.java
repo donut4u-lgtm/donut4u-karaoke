@@ -50,11 +50,6 @@ public class TvMonitorActivity extends Activity
     private static final String DEFAULT_SOUNDFONT =
             "builtin://default";
 
-    /*
-     * This must match the application identifier used by Stage 1.
-     * YouTube requires the embedding application to identify itself
-     * through the WebView Referer.
-     */
     private static final String YOUTUBE_APP_ORIGIN =
             "https://com.donut4u.karaoke";
 
@@ -142,10 +137,6 @@ public class TvMonitorActivity extends Activity
         videoContainer = new FrameLayout(this);
         videoContainer.setBackgroundColor(BLACK);
 
-        /*
-         * The transferred phone image is the bottom layer.
-         * Video playback is added above this ImageView.
-         */
         backgroundImageView = new ImageView(this);
         backgroundImageView.setBackgroundColor(BLACK);
         backgroundImageView.setScaleType(
@@ -270,10 +261,6 @@ public class TvMonitorActivity extends Activity
                 )
         );
 
-        /*
-         * Stage 1 and Stage 2 retain the compact bottom information
-         * panel. Stage 3 changes this to a full-screen lyrics area.
-         */
         lyricsLayoutParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
@@ -328,11 +315,6 @@ public class TvMonitorActivity extends Activity
 
         if (stage == 3) {
 
-            /*
-             * Stage 3 uses the entire TV screen.
-             * The lyrics are large and centered vertically
-             * and horizontally instead of sitting at the bottom.
-             */
             informationPanelParams.width =
                     FrameLayout.LayoutParams.MATCH_PARENT;
 
@@ -352,9 +334,6 @@ public class TvMonitorActivity extends Activity
                     Gravity.CENTER_HORIZONTAL
             );
 
-            /*
-             * Keep the background image visible behind the lyrics.
-             */
             informationPanel.setBackgroundColor(
                     Color.argb(90, 5, 12, 12)
             );
@@ -369,9 +348,6 @@ public class TvMonitorActivity extends Activity
 
         } else {
 
-            /*
-             * Stages 1 and 2 retain their video-first layout.
-             */
             informationPanelParams.width =
                     FrameLayout.LayoutParams.MATCH_PARENT;
 
@@ -499,14 +475,17 @@ public class TvMonitorActivity extends Activity
             currentActiveLineOffset = -1;
         }
 
-        if (!lyrics.equals(currentLyrics)) {
-            currentLyrics = lyrics;
+        currentLyrics = lyrics;
 
-            if (lyrics.isEmpty()) {
-                lyricsView.setText("");
-            }
-        }
-
+        /*
+         * IMPORTANT FIX:
+         * Stages 1 and 2 must replace the initial waiting message
+         * even when the phone's current lyrics value is empty.
+         * Previously, an empty lyrics value could leave the
+         * waiting message visible because both values were empty.
+         *
+         * Stage 3 keeps its existing timed lyric highlighting.
+         */
         if (stage == 3) {
 
             displayHighlightedLyrics(
@@ -515,9 +494,7 @@ public class TvMonitorActivity extends Activity
                     currentActiveLineOffset
             );
 
-        } else if (!lyrics.isEmpty()
-                && !lyrics.equals(
-                        lyricsView.getText().toString())) {
+        } else {
 
             lyricsView.setText(lyrics);
         }
@@ -690,10 +667,6 @@ public class TvMonitorActivity extends Activity
                 int lineBottom =
                         layout.getLineBottom(lineNumber);
 
-                /*
-                 * Keep the currently active karaoke line near
-                 * the vertical center of the TV screen.
-                 */
                 int lineCenter =
                         lineTop + ((lineBottom - lineTop) / 2);
 
@@ -757,9 +730,6 @@ public class TvMonitorActivity extends Activity
             return;
         }
 
-        /*
-         * Ignore duplicate delivery of the same transfer.
-         */
         if (transferId.equals(currentBackgroundTransferId)) {
             return;
         }
@@ -1035,13 +1005,6 @@ public class TvMonitorActivity extends Activity
                 )
         );
 
-        /*
-         * The base URL supplies the Android WebView Referer.
-         * The iframe origin identifies the same Donut4U package.
-         *
-         * referrerpolicy is explicitly included so the browser
-         * sends the required origin information to YouTube.
-         */
         String html =
                 "<!doctype html><html><head>"
                 + "<meta name='viewport' content='width=device-width,"
@@ -1230,11 +1193,6 @@ public class TvMonitorActivity extends Activity
         applyStageLayout(0);
 
         statusView.setText("PHONE CONNECTED");
-
-        /*
-         * Keep the transferred background image.
-         * Stopping a song must not remove the user's image.
-         */
     }
 
     private void destroyVideoView() {
