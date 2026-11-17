@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.util.Base64;
@@ -29,11 +28,15 @@ public final class PhoneTvConnectionManager {
     private static final long MAX_MEDIA_BYTES =
             12L * 1024L * 1024L;
 
+    private static final long MAX_MIDI_BYTES =
+            64L * 1024L * 1024L;
+
     private static final int MEDIA_CHUNK_BYTES = 48000;
 
     private static final String MIME_JPEG = "image/jpeg";
     private static final String MIME_PNG = "image/png";
     private static final String MIME_WEBP = "image/webp";
+    private static final String MIME_MIDI = "audio/midi";
 
     private static volatile PhoneTvConnectionManager instance;
 
@@ -240,7 +243,7 @@ public final class PhoneTvConnectionManager {
     }
 
     /**
-     * Transfers an image file to the paired TV.
+     * Transfers an image or MIDI file to the paired TV.
      *
      * Protocol:
      * 1. media_begin declares the transfer and expected file size.
@@ -248,7 +251,8 @@ public final class PhoneTvConnectionManager {
      * 3. Every chunk waits for a TV acknowledgement.
      * 4. media_end asks the TV to finalize the completed file.
      *
-     * Supported image formats: JPEG, PNG and WebP.
+     * Supported formats: JPEG, PNG, WebP and standard MIDI/KAR.
+     * Images are limited to 12 MB; MIDI/KAR files are limited to 64 MB.
      *
      * The TV receiver must implement the matching media protocol.
      *
@@ -264,27 +268,32 @@ public final class PhoneTvConnectionManager {
 
         if (mediaFile == null || !mediaFile.isFile()) {
             throw new IOException(
-                    "Background image file does not exist."
+                    "TV media file does not exist."
             );
         }
 
         if (!mediaFile.canRead()) {
             throw new IOException(
-                    "Background image cannot be read."
+                    "TV media file cannot be read."
             );
         }
 
-        if (!isSupportedImageMimeType(mimeType)) {
+        if (!isSupportedMediaMimeType(mimeType)) {
             throw new IOException(
-                    "Unsupported background image format."
+                    "Unsupported TV media file format."
             );
         }
 
         long totalBytes = mediaFile.length();
 
-        if (totalBytes <= 0L || totalBytes > MAX_MEDIA_BYTES) {
+        long maximumBytes = MIME_MIDI.equals(mimeType)
+                ? MAX_MIDI_BYTES : MAX_MEDIA_BYTES;
+
+        if (totalBytes <= 0L || totalBytes > maximumBytes) {
             throw new IOException(
-                    "Background image must be between 1 byte and 12 MB."
+                    MIME_MIDI.equals(mimeType)
+                            ? "MIDI/KAR file must be between 1 byte and 64 MB."
+                            : "Background image must be between 1 byte and 12 MB."
             );
         }
 
@@ -323,7 +332,7 @@ public final class PhoneTvConnectionManager {
 
             requireSuccessfulResponse(
                     beginResponse,
-                    "TV rejected the image transfer."
+                    "TV rejected the media transfer."
             );
 
             transferStarted = true;
@@ -347,7 +356,7 @@ public final class PhoneTvConnectionManager {
 
                 if (bytesRead <= 0) {
                     throw new IOException(
-                            "Unexpected end of background image file."
+                            "Unexpected end of TV media file."
                     );
                 }
 
@@ -384,7 +393,7 @@ public final class PhoneTvConnectionManager {
 
                 requireSuccessfulResponse(
                         chunkResponse,
-                        "TV rejected an image data chunk."
+                        "TV rejected a media data chunk."
                 );
 
                 long expectedReceivedBytes =
@@ -398,7 +407,7 @@ public final class PhoneTvConnectionManager {
 
                 if (acknowledgedBytes != expectedReceivedBytes) {
                     throw new IOException(
-                            "TV image transfer acknowledgement "
+                            "TV media transfer acknowledgement "
                                     + "does not match the sent data."
                     );
                 }
@@ -415,7 +424,7 @@ public final class PhoneTvConnectionManager {
 
             requireSuccessfulResponse(
                     endResponse,
-                    "TV could not finalize the background image."
+                    "TV could not finalize the media file."
             );
 
             return endResponse;
@@ -443,13 +452,14 @@ public final class PhoneTvConnectionManager {
         }
     }
 
-    private boolean isSupportedImageMimeType(
+    private boolean isSupportedMediaMimeType(
             String mimeType
     ) {
 
         return MIME_JPEG.equals(mimeType)
                 || MIME_PNG.equals(mimeType)
-                || MIME_WEBP.equals(mimeType);
+                || MIME_WEBP.equals(mimeType)
+                || MIME_MIDI.equals(mimeType);
     }
 
     private void requireSuccessfulResponse(
