@@ -46,11 +46,15 @@ public final class TvKeyboardReceiver {
     private static final long MAX_MEDIA_BYTES =
             12L * 1024L * 1024L;
 
+    private static final long MAX_MIDI_BYTES =
+            64L * 1024L * 1024L;
+
     private static final int MAX_MEDIA_CHUNK_BYTES = 48000;
 
     private static final String MIME_JPEG = "image/jpeg";
     private static final String MIME_PNG = "image/png";
     private static final String MIME_WEBP = "image/webp";
+    private static final String MIME_MIDI = "audio/midi";
 
     public interface Listener {
 
@@ -740,21 +744,28 @@ public final class TvKeyboardReceiver {
             return null;
         }
 
-        if (!isSupportedImageMime(mimeType)) {
+        if (!isSupportedMediaMime(mimeType)) {
             sendResponse(
                     writer,
                     false,
-                    "Unsupported image type"
+                    "Unsupported media type"
             );
             return null;
         }
 
+        long maximumBytes =
+                MIME_MIDI.equals(mimeType)
+                        ? MAX_MIDI_BYTES
+                        : MAX_MEDIA_BYTES;
+
         if (totalBytes <= 0L
-                || totalBytes > MAX_MEDIA_BYTES) {
+                || totalBytes > maximumBytes) {
             sendResponse(
                     writer,
                     false,
-                    "Image size is invalid or exceeds 12 MB"
+                    MIME_MIDI.equals(mimeType)
+                            ? "MIDI size is invalid or exceeds 64 MB"
+                            : "Image size is invalid or exceeds 12 MB"
             );
             return null;
         }
@@ -775,10 +786,15 @@ public final class TvKeyboardReceiver {
             return null;
         }
 
+        String filePrefix =
+                MIME_MIDI.equals(mimeType)
+                        ? "song_"
+                        : "background_";
+
         File temporaryFile =
                 new File(
                         mediaDirectory,
-                        "background_" + transferId + ".part"
+                        filePrefix + transferId + ".part"
                 );
 
         if (temporaryFile.exists()
@@ -786,7 +802,7 @@ public final class TvKeyboardReceiver {
             sendResponse(
                     writer,
                     false,
-                    "Unable to prepare image file"
+                    "Unable to prepare media file"
             );
             return null;
         }
@@ -914,7 +930,7 @@ public final class TvKeyboardReceiver {
             sendResponse(
                     writer,
                     false,
-                    "Media chunk exceeds expected image size"
+                    "Media chunk exceeds expected file size"
             );
             return;
         }
@@ -964,7 +980,7 @@ public final class TvKeyboardReceiver {
             sendResponse(
                     writer,
                     false,
-                    "Image transfer is incomplete"
+                    "Media transfer is incomplete"
             );
             return transfer;
         }
@@ -979,19 +995,24 @@ public final class TvKeyboardReceiver {
             sendResponse(
                     writer,
                     false,
-                    "Saved image size does not match"
+                    "Saved media size does not match"
             );
             cleanupTransfer(transfer);
             return null;
         }
 
         String extension =
-                getImageExtension(transfer.mimeType);
+                getMediaExtension(transfer.mimeType);
+
+        String filePrefix =
+                MIME_MIDI.equals(transfer.mimeType)
+                        ? "song_"
+                        : "background_";
 
         File finalFile =
                 new File(
                         transfer.temporaryFile.getParentFile(),
-                        "background_" + transfer.transferId + extension
+                        filePrefix + transfer.transferId + extension
                 );
 
         if (finalFile.exists()
@@ -999,7 +1020,7 @@ public final class TvKeyboardReceiver {
             sendResponse(
                     writer,
                     false,
-                    "Unable to replace previous TV image"
+                    "Unable to replace previous TV media file"
             );
             cleanupTransfer(transfer);
             return null;
@@ -1009,7 +1030,7 @@ public final class TvKeyboardReceiver {
             sendResponse(
                     writer,
                     false,
-                    "Unable to finalize received image"
+                    "Unable to finalize received media file"
             );
             cleanupTransfer(transfer);
             return null;
@@ -1077,13 +1098,18 @@ public final class TvKeyboardReceiver {
         }
     }
 
-    private boolean isSupportedImageMime(String mimeType) {
+    private boolean isSupportedMediaMime(String mimeType) {
         return MIME_JPEG.equals(mimeType)
                 || MIME_PNG.equals(mimeType)
-                || MIME_WEBP.equals(mimeType);
+                || MIME_WEBP.equals(mimeType)
+                || MIME_MIDI.equals(mimeType);
     }
 
-    private String getImageExtension(String mimeType) {
+    private String getMediaExtension(String mimeType) {
+        if (MIME_MIDI.equals(mimeType)) {
+            return ".mid";
+        }
+
         if (MIME_PNG.equals(mimeType)) {
             return ".png";
         }
@@ -1116,7 +1142,7 @@ public final class TvKeyboardReceiver {
                     );
                 } catch (Exception e) {
                     notifyError(
-                            "Unable to display received TV image: "
+                            "Unable to process received TV media: "
                                     + safeMessage(e)
                     );
                 }
