@@ -45,6 +45,11 @@ public class TvMonitorActivity extends Activity
     private static final int HIGHLIGHT_BACKGROUND =
             Color.argb(75, 50, 220, 130);
 
+    private static final String MIME_MIDI = "audio/midi";
+
+    private static final String DEFAULT_SOUNDFONT =
+            "builtin://default";
+
     /*
      * This must match the application identifier used by Stage 1.
      * YouTube requires the embedding application to identify itself
@@ -79,6 +84,10 @@ public class TvMonitorActivity extends Activity
 
     private volatile String currentBackgroundTransferId = "";
 
+    private Stage3MidiEngine tvMidiEngine;
+
+    private volatile String currentMidiTransferId = "";
+
     private String currentVideoId = "";
     private String currentMediaUrl = "";
     private String currentLyrics = "";
@@ -110,6 +119,8 @@ public class TvMonitorActivity extends Activity
 
         sessionController.startSession(this);
         sessionController.setObserver(this);
+
+        tvMidiEngine = Stage3MidiEngine.create(this);
 
         JSONObject previousState =
                 sessionController.getLastPhoneState();
@@ -426,12 +437,25 @@ public class TvMonitorActivity extends Activity
         currentStage = stage;
         applyStageLayout(stage);
 
+        if (stage != 3 && tvMidiEngine != null) {
+            tvMidiEngine.stop();
+            currentMidiTransferId = "";
+        }
+
         String action = state.optString("action", "");
 
-        if ("stop".equalsIgnoreCase(action)
-                || "back".equalsIgnoreCase(action)) {
+        if ("back".equalsIgnoreCase(action)) {
             stopCurrentPlayback();
             return;
+        }
+
+        if ("stop".equalsIgnoreCase(action)) {
+            if (stage == 3) {
+                pauseAndRewindTvMidi();
+            } else {
+                stopCurrentPlayback();
+                return;
+            }
         }
 
         String title = firstNonEmpty(
@@ -522,15 +546,27 @@ public class TvMonitorActivity extends Activity
 
             pauseVideo();
 
+            if (stage == 3) {
+                pauseTvMidi();
+            }
+
         } else if ("play".equalsIgnoreCase(playback)
                 || "playing".equalsIgnoreCase(playback)) {
 
             resumeVideo();
 
+            if (stage == 3) {
+                resumeTvMidi();
+            }
+
         } else if ("stopped".equalsIgnoreCase(playback)
                 || "stop".equalsIgnoreCase(playback)) {
 
             stopVideoOnly();
+
+            if (stage == 3) {
+                pauseAndRewindTvMidi();
+            }
         }
 
         statusView.setText(
@@ -691,7 +727,7 @@ public class TvMonitorActivity extends Activity
     }
 
     // ------------------------------------------------
-    // TV BACKGROUND IMAGE
+    // TV BACKGROUND IMAGE AND MIDI RECEIVING
     // ------------------------------------------------
 
     @Override
@@ -707,6 +743,11 @@ public class TvMonitorActivity extends Activity
                 || !file.exists()
                 || transferId == null
                 || transferId.trim().isEmpty()) {
+            return;
+        }
+
+        if (MIME_MIDI.equalsIgnoreCase(mimeType)) {
+            startTvMidiPlayback(file, transferId);
             return;
         }
 
@@ -827,6 +868,122 @@ public class TvMonitorActivity extends Activity
                 }
             });
         });
+    }
+
+    // ------------------------------------------------
+    // STAGE 3 MIDI PLAYBACK ON TV
+    // ------------------------------------------------
+
+    private void startTvMidiPlayback(
+            File midiFile,
+            String transferId
+    ) {
+
+        if (destroyed
+                || midiFile == null
+                || !midiFile.isFile()
+                || !midiFile.exists()
+                || midiFile.length() <= 0L
+                || midiFile.length() > 64L * 1024L * 1024L
+                || transferId == null
+                || transferId.trim().isEmpty()) {
+            return;
+        }
+
+        if (transferId.equals(currentMidiTransferId)) {
+            return;
+        }
+
+        currentMidiTransferId = transferId;
+
+        if (tvMidiEngine == null) {
+            tvMidiEngine = Stage3MidiEngine.create(this);
+        }
+
+        statusView.setText("LOADING STAGE 3 AUDIO ON TV...");
+
+        try {
+            tvMidiEngine.play(
+                    midiFile.toURI().toString(),
+                    DEFAULT_SOUNDFONT,
+                    new Stage3MidiEngine.Callback() {
+
+                @Override
+                public void onReady(long durationTicks) {
+                    if (destroyed) {
+                        return;
+                    }
+
+                    statusView.setText(
+                            "STAGE 3 AUDIO PLAYING ON TV"
+                    );
+                }
+
+                @Override
+                public void onError(String message) {
+                    if (destroyed) {
+                        return;
+                    }
+
+                    statusView.setText(
+                            "TV MIDI ERROR: " +
+                                    (message == null
+                                            ? "Playback failed"
+                                            : message)
+                    );
+                }
+
+                @Override
+                public void onFinished() {
+                    if (destroyed) {
+                        return;
+                    }
+
+                    statusView.setText(
+                            "STAGE 3 SONG FINISHED"
+                    );
+                }
+            });
+
+        } catch (Exception e) {
+            statusView.setText(
+                    "TV MIDI ERROR: " + e.getMessage()
+            );
+        }
+    }
+
+    private void pauseTvMidi() {
+        if (tvMidiEngine == null) {
+            return;
+        }
+
+        try {
+            tvMidiEngine.pause();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void resumeTvMidi() {
+        if (tvMidiEngine == null) {
+            return;
+        }
+
+        try {
+            tvMidiEngine.resume();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void pauseAndRewindTvMidi() {
+        if (tvMidiEngine == null) {
+            return;
+        }
+
+        try {
+            tvMidiEngine.pause();
+            tvMidiEngine.seekTo(0L);
+        } catch (Exception ignored) {
+        }
     }
 
     // ------------------------------------------------
@@ -1038,6 +1195,15 @@ public class TvMonitorActivity extends Activity
 
     private void stopCurrentPlayback() {
 
+        if (tvMidiEngine != null) {
+            try {
+                tvMidiEngine.stop();
+            } catch (Exception ignored) {
+            }
+        }
+
+        currentMidiTransferId = "";
+
         destroyVideoView();
 
         currentVideoId = "";
@@ -1195,6 +1361,14 @@ public class TvMonitorActivity extends Activity
         }
 
         imageExecutor.shutdownNow();
+
+        if (tvMidiEngine != null) {
+            try {
+                tvMidiEngine.release();
+            } catch (Exception ignored) {
+            }
+            tvMidiEngine = null;
+        }
 
         destroyVideoView();
 
