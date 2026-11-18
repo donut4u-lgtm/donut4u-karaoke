@@ -59,6 +59,11 @@ class Stage3MidiEngine private constructor(
 
         private const val MIDI_DIRECTORY = "stage3_midi"
         private const val SOUNDFONT_DIRECTORY = "stage3_soundfonts"
+
+        // Separate from phone playback storage so phone cleanup
+        // cannot delete a MIDI file while the TV is receiving it.
+        private const val TV_MIDI_DIRECTORY = "stage3_tv_midi_transfer"
+
         private const val DEFAULT_SOUNDFONT = "builtin://default"
 
         private const val DEFAULT_SOUNDFONT_ASSET =
@@ -383,6 +388,18 @@ class Stage3MidiEngine private constructor(
                     pausedByEngine = false
                 }
 
+                /*
+                 * Prepare and queue the independent TV MIDI copy
+                 * BEFORE phone playback can finish and clean up
+                 * its original temporary MIDI file.
+                 *
+                 * This does not wait for the network transfer.
+                 */
+                scheduleTvMidiTransfer(
+                    midiFile,
+                    sessionId
+                )
+
                 markDiagnostic("BEFORE_FLUIDSYNTH_PLAY")
 
                 newPlayer.play {
@@ -393,16 +410,6 @@ class Stage3MidiEngine private constructor(
                 }
 
                 markDiagnostic("AFTER_FLUIDSYNTH_PLAY")
-
-                /*
-                 * Send the same MIDI/KAR file to the paired TV.
-                 * This runs separately so the phone's playback,
-                 * lyrics and scoring are not delayed by the transfer.
-                 */
-                scheduleTvMidiTransfer(
-                    midiFile,
-                    sessionId
-                )
 
                 mainHandler.post {
 
@@ -502,62 +509,131 @@ class Stage3MidiEngine private constructor(
     }
 
     /**
-     * Transfers the currently loaded MIDI/KAR file to the paired TV.
-     * Transfer errors are deliberately isolated from phone playback.
+     * Creates a separate MIDI copy for the TV before scheduling
+     * network transfer. The transfer worker owns and deletes that
+     * copy after the transfer succeeds or fails.
+     *
+     * Phone playback cleanup never touches this directory.
      */
     private fun scheduleTvMidiTransfer(
         midiFile: File,
         sessionId: Long
     ) {
 
+        var tvCopy: File? = null
+
         try {
+
+            if (!isSessionActive(sessionId)) {
+                return
+            }
+
+            val manager = try {
+
+                PhoneTvConnectionManager.getInstance()
+
+            } catch (error: Exception) {
+
+                Log.w(
+                    TAG,
+                    "Could not access the phone-to-TV manager.",
+                    error
+                )
+
+                return
+            }
+
+            if (!manager.isConnected()) {
+
+                Log.i(
+                    TAG,
+                    "No paired TV connection; MIDI transfer skipped."
+                )
+
+                return
+            }
+
+            if (!midiFile.isFile || !midiFile.canRead()) {
+
+                Log.w(
+                    TAG,
+                    "MIDI file is unavailable for TV transfer."
+                )
+
+                return
+            }
+
+            val directory = File(
+                context.cacheDir,
+                TV_MIDI_DIRECTORY
+            )
+
+            if (
+                !directory.exists() &&
+                !directory.mkdirs()
+            ) {
+                throw IllegalStateException(
+                    "Could not create independent TV MIDI storage."
+                )
+            }
+
+            val transferId = UUID.randomUUID()
+                .toString()
+                .replace("-", "")
+
+            tvCopy = File(
+                directory,
+                "tv_song_$transferId.mid"
+            )
+
+            // Copy synchronously before phone cleanup can run.
+            midiFile.inputStream().buffered().use { input ->
+
+                FileOutputStream(tvCopy).use { output ->
+
+                    input.copyTo(
+                        output,
+                        64 * 1024
+                    )
+
+                    output.flush()
+                    output.fd.sync()
+                }
+            }
+
+            if (
+                !tvCopy.isFile ||
+                tvCopy.length() == 0L ||
+                tvCopy.length() != midiFile.length() ||
+                !isValidMidiFile(tvCopy)
+            ) {
+                throw IllegalStateException(
+                    "The independent TV MIDI copy is incomplete or invalid."
+                )
+            }
+
+            val transferFile = tvCopy
 
             tvTransferWorker.execute {
 
-                if (!isSessionActive(sessionId)) {
-                    return@execute
-                }
-
-                val manager = try {
-                    PhoneTvConnectionManager.getInstance()
-                } catch (error: Exception) {
-                    Log.w(
-                        TAG,
-                        "Could not access the phone-to-TV manager.",
-                        error
-                    )
-                    return@execute
-                }
-
-                if (!manager.isConnected()) {
-                    Log.i(
-                        TAG,
-                        "No paired TV connection; MIDI transfer skipped."
-                    )
-                    return@execute
-                }
-
-                if (!midiFile.isFile || !midiFile.canRead()) {
-                    Log.w(
-                        TAG,
-                        "MIDI file is unavailable for TV transfer."
-                    )
-                    return@execute
-                }
-
-                val transferId = UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-
                 try {
+
+                    if (
+                        !transferFile.isFile ||
+                        !transferFile.canRead()
+                    ) {
+                        throw IllegalStateException(
+                            "The independent TV MIDI copy is unavailable."
+                        )
+                    }
 
                     markDiagnostic(
                         "TV_MIDI_TRANSFER_STARTED bytes=" +
-                            midiFile.length()
+                            transferFile.length()
                     )
 
                     manager.sendMediaFile(
-                        midiFile,
+                        transferFile,
                         MIME_MIDI,
                         transferId
                     )
@@ -585,16 +661,34 @@ class Stage3MidiEngine private constructor(
                         "TV MIDI transfer failed; phone playback continues.",
                         error
                     )
+
+                } finally {
+
+                    try {
+                        transferFile.delete()
+                    } catch (_: Exception) {
+                    }
                 }
             }
+
+            // Ownership has been handed to the transfer worker.
+            tvCopy = null
 
         } catch (error: Exception) {
 
             Log.w(
                 TAG,
-                "Could not schedule TV MIDI transfer.",
+                "Could not prepare or schedule TV MIDI transfer.",
                 error
             )
+
+        } finally {
+
+            // If scheduling failed, do not leave an unused copy behind.
+            try {
+                tvCopy?.delete()
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -992,6 +1086,9 @@ class Stage3MidiEngine private constructor(
                 SOUNDFONT_DIRECTORY
             )
         )
+
+        // Deliberately do not delete TV_MIDI_DIRECTORY here.
+        // Its files belong to the independent TV transfer worker.
     }
 
     private fun deleteRecursively(
@@ -1337,6 +1434,9 @@ class Stage3MidiEngine private constructor(
         clearDiagnostic()
 
         worker.shutdownNow()
+
+        // Do not delete TV transfer files here. An active transfer
+        // owns its independent copy and deletes it in its finally block.
         tvTransferWorker.shutdownNow()
     }
 }
