@@ -68,6 +68,7 @@ public class TvMonitorActivity extends Activity
     private LinearLayout.LayoutParams lyricsLayoutParams;
 
     private TextView titleView;
+    private TextView stage12TitleView;
     private TextView singerView;
     private TextView composerView;
     private TextView lyricsView;
@@ -190,6 +191,50 @@ public class TvMonitorActivity extends Activity
                 informationPanelParams
         );
 
+        // Separate title overlay for Stage 1 and Stage 2.
+        // It is positioned at the top instead of covering
+        // the video from the bottom information panel.
+        stage12TitleView = new TextView(this);
+        stage12TitleView.setText("DONUT4U KARAOKE");
+        stage12TitleView.setTextColor(GREEN);
+        stage12TitleView.setTextSize(23);
+        stage12TitleView.setGravity(Gravity.CENTER);
+        stage12TitleView.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD
+        );
+        stage12TitleView.setMaxLines(2);
+        stage12TitleView.setPadding(
+                dp(22),
+                dp(8),
+                dp(22),
+                dp(8)
+        );
+        stage12TitleView.setBackgroundColor(
+                Color.argb(175, 5, 12, 12)
+        );
+        stage12TitleView.setVisibility(View.GONE);
+        stage12TitleView.setElevation(dp(8));
+
+        FrameLayout.LayoutParams stage12TitleParams =
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP | Gravity.CENTER_HORIZONTAL
+                );
+
+        stage12TitleParams.leftMargin = dp(30);
+        stage12TitleParams.rightMargin = dp(30);
+        stage12TitleParams.topMargin = dp(24);
+
+        root.addView(
+                stage12TitleView,
+                stage12TitleParams
+        );
+
+        // Both panels remain hidden until a stage is selected.
+        informationPanel.setVisibility(View.GONE);
+
         titleView = new TextView(this);
         titleView.setText("DONUT4U KARAOKE");
         titleView.setTextColor(GREEN);
@@ -238,7 +283,6 @@ public class TvMonitorActivity extends Activity
         lyricsView = new TextView(this);
 
         // Keep the TV lyrics area empty until phone playback state arrives.
-        // This prevents the waiting placeholder from flashing on screen.
         lyricsView.setText("");
 
         lyricsView.setTextColor(WHITE);
@@ -311,11 +355,16 @@ public class TvMonitorActivity extends Activity
                 || informationPanelParams == null
                 || lyricsLayoutParams == null
                 || lyricsView == null
-                || lyricsScroll == null) {
+                || lyricsScroll == null
+                || stage12TitleView == null) {
             return;
         }
 
         if (stage == 3) {
+
+            // Stage 3 keeps its existing full-screen lyrics panel.
+            informationPanel.setVisibility(View.VISIBLE);
+            stage12TitleView.setVisibility(View.GONE);
 
             informationPanelParams.width =
                     FrameLayout.LayoutParams.MATCH_PARENT;
@@ -349,6 +398,16 @@ public class TvMonitorActivity extends Activity
             lyricsView.setGravity(Gravity.CENTER);
 
         } else {
+
+            // Stage 1/2: hide the bottom panel completely.
+            // Show only the song title at the top.
+            informationPanel.setVisibility(View.GONE);
+
+            if (stage == 1 || stage == 2) {
+                stage12TitleView.setVisibility(View.VISIBLE);
+            } else {
+                stage12TitleView.setVisibility(View.GONE);
+            }
 
             informationPanelParams.width =
                     FrameLayout.LayoutParams.MATCH_PARENT;
@@ -446,6 +505,7 @@ public class TvMonitorActivity extends Activity
         String composer = state.optString("composer", "");
 
         titleView.setText(title);
+        stage12TitleView.setText(title);
 
         if (stage == 3) {
 
@@ -504,7 +564,6 @@ public class TvMonitorActivity extends Activity
         } else {
 
             // Stage 1 and Stage 2 do not send timed lyrics.
-            // Keep this area empty during their playback.
             lyricsView.setText("");
             lyricsScroll.scrollTo(0, 0);
         }
@@ -1190,6 +1249,7 @@ public class TvMonitorActivity extends Activity
         videoLoaded = false;
 
         titleView.setText("DONUT4U KARAOKE");
+        stage12TitleView.setText("DONUT4U KARAOKE");
 
         singerView.setText("");
         singerView.setVisibility(View.GONE);
@@ -1198,7 +1258,6 @@ public class TvMonitorActivity extends Activity
         composerView.setVisibility(View.GONE);
 
         // Keep the lyrics area empty after playback stops.
-        // Do not restore the waiting placeholder.
         lyricsView.setText("");
 
         lyricsScroll.scrollTo(0, 0);
