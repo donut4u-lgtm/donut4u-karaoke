@@ -191,9 +191,6 @@ public class TvMonitorActivity extends Activity
                 informationPanelParams
         );
 
-        // Separate title overlay for Stage 1 and Stage 2.
-        // It is positioned at the top instead of covering
-        // the video from the bottom information panel.
         stage12TitleView = new TextView(this);
         stage12TitleView.setText("DONUT4U KARAOKE");
         stage12TitleView.setTextColor(GREEN);
@@ -232,7 +229,6 @@ public class TvMonitorActivity extends Activity
                 stage12TitleParams
         );
 
-        // Both panels remain hidden until a stage is selected.
         informationPanel.setVisibility(View.GONE);
 
         titleView = new TextView(this);
@@ -281,10 +277,7 @@ public class TvMonitorActivity extends Activity
         );
 
         lyricsView = new TextView(this);
-
-        // Keep the TV lyrics area empty until phone playback state arrives.
         lyricsView.setText("");
-
         lyricsView.setTextColor(WHITE);
         lyricsView.setTextSize(30);
         lyricsView.setTypeface(
@@ -362,7 +355,6 @@ public class TvMonitorActivity extends Activity
 
         if (stage == 3) {
 
-            // Stage 3 keeps its existing full-screen lyrics panel.
             informationPanel.setVisibility(View.VISIBLE);
             stage12TitleView.setVisibility(View.GONE);
 
@@ -394,13 +386,14 @@ public class TvMonitorActivity extends Activity
             lyricsLayoutParams.topMargin = dp(2);
 
             lyricsView.setTextSize(36);
-            lyricsView.setLineSpacing(dp(14), 1.08f);
+
+            // Stage 3 uses extra paragraph separation below.
+            // Keep modest line spacing within wrapped lines.
+            lyricsView.setLineSpacing(dp(8), 1.08f);
             lyricsView.setGravity(Gravity.CENTER);
 
         } else {
 
-            // Stage 1/2: hide the bottom panel completely.
-            // Show only the song title at the top.
             informationPanel.setVisibility(View.GONE);
 
             if (stage == 1 || stage == 2) {
@@ -509,7 +502,6 @@ public class TvMonitorActivity extends Activity
 
         if (stage == 3) {
 
-            // Preserve Stage 3 singer and composer information.
             setMetadata(
                     singerView,
                     singer,
@@ -524,8 +516,6 @@ public class TvMonitorActivity extends Activity
 
         } else {
 
-            // Stage 1 and Stage 2 must not display channel metadata
-            // as singer information.
             singerView.setText("");
             singerView.setVisibility(View.GONE);
 
@@ -563,7 +553,6 @@ public class TvMonitorActivity extends Activity
 
         } else {
 
-            // Stage 1 and Stage 2 do not send timed lyrics.
             lyricsView.setText("");
             lyricsScroll.scrollTo(0, 0);
         }
@@ -635,27 +624,60 @@ public class TvMonitorActivity extends Activity
             return;
         }
 
-        SpannableStringBuilder builder =
-                new SpannableStringBuilder(lyrics);
+        /*
+         * Add one empty display row after each source lyric line.
+         *
+         * The phone's original lyric string and offsets are not
+         * modified. offsetMap translates every original character
+         * position to its new position in the TV display string.
+         *
+         * This keeps active-line highlighting and auto-scroll
+         * aligned even after the extra display rows are inserted.
+         */
+        StringBuilder expandedLyrics =
+                new StringBuilder(lyrics.length() + 64);
 
-        int targetStart = -1;
-        int targetEnd = -1;
+        int[] offsetMap = new int[lyrics.length() + 1];
+
+        for (int i = 0; i < lyrics.length(); i++) {
+
+            offsetMap[i] = expandedLyrics.length();
+
+            char character = lyrics.charAt(i);
+            expandedLyrics.append(character);
+
+            if (character == '\n'
+                    && i < lyrics.length() - 1) {
+
+                expandedLyrics.append('\n');
+            }
+        }
+
+        offsetMap[lyrics.length()] = expandedLyrics.length();
+
+        SpannableStringBuilder builder =
+                new SpannableStringBuilder(
+                        expandedLyrics.toString()
+                );
+
+        int originalTargetStart = -1;
+        int originalTargetEnd = -1;
 
         if (activeLineOffset >= 0
                 && activeLineOffset < lyrics.length()) {
 
-            targetStart = lyrics.lastIndexOf(
+            originalTargetStart = lyrics.lastIndexOf(
                     "\n",
                     Math.max(0, activeLineOffset - 1)
             ) + 1;
 
-            targetEnd = lyrics.indexOf(
+            originalTargetEnd = lyrics.indexOf(
                     "\n",
                     activeLineOffset
             );
 
-            if (targetEnd < 0) {
-                targetEnd = lyrics.length();
+            if (originalTargetEnd < 0) {
+                originalTargetEnd = lyrics.length();
             }
 
         } else {
@@ -670,13 +692,25 @@ public class TvMonitorActivity extends Activity
                         lineStart + lines[i].length();
 
                 if (i == activeLine && activeLine >= 0) {
-                    targetStart = lineStart;
-                    targetEnd = lineEnd;
+                    originalTargetStart = lineStart;
+                    originalTargetEnd = lineEnd;
                     break;
                 }
 
                 lineStart = lineEnd + 1;
             }
+        }
+
+        int targetStart = -1;
+        int targetEnd = -1;
+
+        if (originalTargetStart >= 0
+                && originalTargetStart < offsetMap.length
+                && originalTargetEnd >= originalTargetStart
+                && originalTargetEnd < offsetMap.length) {
+
+            targetStart = offsetMap[originalTargetStart];
+            targetEnd = offsetMap[originalTargetEnd];
         }
 
         if (targetStart >= 0
@@ -1257,7 +1291,6 @@ public class TvMonitorActivity extends Activity
         composerView.setText("");
         composerView.setVisibility(View.GONE);
 
-        // Keep the lyrics area empty after playback stops.
         lyricsView.setText("");
 
         lyricsScroll.scrollTo(0, 0);
