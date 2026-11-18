@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -235,9 +236,11 @@ public class TvMonitorActivity extends Activity
         );
 
         lyricsView = new TextView(this);
-        lyricsView.setText(
-                "Waiting for a song from your phone..."
-        );
+
+        // Keep the TV lyrics area empty until phone playback state arrives.
+        // This prevents the waiting placeholder from flashing on screen.
+        lyricsView.setText("");
+
         lyricsView.setTextColor(WHITE);
         lyricsView.setTextSize(30);
         lyricsView.setTypeface(
@@ -444,17 +447,31 @@ public class TvMonitorActivity extends Activity
 
         titleView.setText(title);
 
-        setMetadata(
-                singerView,
-                singer,
-                "Singer: "
-        );
+        if (stage == 3) {
 
-        setMetadata(
-                composerView,
-                composer,
-                "Composer: "
-        );
+            // Preserve Stage 3 singer and composer information.
+            setMetadata(
+                    singerView,
+                    singer,
+                    "Singer: "
+            );
+
+            setMetadata(
+                    composerView,
+                    composer,
+                    "Composer: "
+            );
+
+        } else {
+
+            // Stage 1 and Stage 2 must not display channel metadata
+            // as singer information.
+            singerView.setText("");
+            singerView.setVisibility(View.GONE);
+
+            composerView.setText("");
+            composerView.setVisibility(View.GONE);
+        }
 
         String lyrics = firstNonEmpty(
                 state.optString("lyrics", ""),
@@ -486,11 +503,8 @@ public class TvMonitorActivity extends Activity
 
         } else {
 
-            /*
-             * Stage 1 and Stage 2 do not send timed lyrics.
-             * Always clear the lyrics area for these stages.
-             * Never restore the waiting message during playback.
-             */
+            // Stage 1 and Stage 2 do not send timed lyrics.
+            // Keep this area empty during their playback.
             lyricsView.setText("");
             lyricsScroll.scrollTo(0, 0);
         }
@@ -1177,18 +1191,14 @@ public class TvMonitorActivity extends Activity
 
         titleView.setText("DONUT4U KARAOKE");
 
+        singerView.setText("");
         singerView.setVisibility(View.GONE);
+
+        composerView.setText("");
         composerView.setVisibility(View.GONE);
 
-        /*
-         * Do not restore the waiting message here.
-         * Stage 1 and Stage 2 can send repeated state updates
-         * while changing playback screens. Restoring the
-         * placeholder here makes it flash over active playback.
-         *
-         * The initial waiting message is still shown when the
-         * TV screen first opens and before the first phone state.
-         */
+        // Keep the lyrics area empty after playback stops.
+        // Do not restore the waiting placeholder.
         lyricsView.setText("");
 
         lyricsScroll.scrollTo(0, 0);
