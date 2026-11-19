@@ -436,7 +436,7 @@ public class TvStageMenuActivity extends Activity {
 
         switch (stage) {
             case 1:
-                target = OnlineSongActivity.class;
+                target = Stage1TvActivity.class;
                 break;
 
             case 2:
