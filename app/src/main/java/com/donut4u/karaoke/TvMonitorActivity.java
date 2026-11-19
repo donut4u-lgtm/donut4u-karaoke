@@ -386,8 +386,6 @@ public class TvMonitorActivity extends Activity
 
             lyricsView.setTextSize(36);
 
-            // Stage 3 uses extra paragraph separation below.
-            // Keep modest line spacing within wrapped lines.
             lyricsView.setLineSpacing(dp(8), 1.08f);
             lyricsView.setGravity(Gravity.CENTER);
 
@@ -1107,28 +1105,88 @@ public class TvMonitorActivity extends Activity
                 )
         );
 
-        String html =
-                "<!doctype html><html><head>"
-                + "<meta name='viewport' content='width=device-width,"
-                + "initial-scale=1,maximum-scale=1'>"
-                + "<meta name='referrer' "
-                + "content='strict-origin-when-cross-origin'>"
-                + "<style>"
-                + "html,body{margin:0;padding:0;background:#000;"
-                + "width:100%;height:100%;overflow:hidden;}"
-                + "iframe{position:absolute;inset:0;width:100%;"
-                + "height:100%;border:0;}"
-                + "</style></head><body>"
-                + "<iframe id='player' "
-                + "src='https://www.youtube.com/embed/"
-                + safeVideoId
-                + "?enablejsapi=1&playsinline=1&controls=1"
-                + "&rel=0&autoplay=1"
-                + "&origin=https://com.donut4u.karaoke' "
-                + "referrerpolicy='strict-origin' "
-                + "allow='autoplay; encrypted-media; picture-in-picture' "
-                + "allowfullscreen></iframe>"
-                + "</body></html>";
+        String html;
+
+        if (currentStage == 1) {
+
+            // Stage 1 only: use the same YouTube IFrame API
+            // playback identity and startup method as Stage1TvActivity.
+
+            html =
+                    "<!DOCTYPE html>"
+                            + "<html><head>"
+                            + "<meta name='viewport' "
+                            + "content='width=device-width,"
+                            + "initial-scale=1,maximum-scale=1'>"
+                            + "<meta name='referrer' "
+                            + "content='strict-origin-when-cross-origin'>"
+                            + "<style>"
+                            + "html,body{margin:0;padding:0;"
+                            + "width:100%;height:100%;"
+                            + "background:#000;overflow:hidden;}"
+                            + "#player{position:absolute;top:0;left:0;"
+                            + "width:100%;height:100%;}"
+                            + "</style>"
+                            + "</head><body>"
+                            + "<div id='player'></div>"
+                            + "<script>"
+                            + "var donutPlayer;"
+                            + "function onYouTubeIframeAPIReady(){"
+                            + "donutPlayer=new YT.Player('player',{"
+                            + "width:'100%',height:'100%',"
+                            + "videoId:'" + safeVideoId + "',"
+                            + "playerVars:{"
+                            + "playsinline:1,"
+                            + "autoplay:1,"
+                            + "controls:1,"
+                            + "rel:0,"
+                            + "modestbranding:1,"
+                            + "enablejsapi:1,"
+                            + "origin:'https://com.donut4u.karaoke'"
+                            + "},"
+                            + "events:{"
+                            + "onReady:function(event){"
+                            + "event.target.playVideo();"
+                            + "},"
+                            + "onError:function(event){"
+                            + "document.title='YOUTUBE_ERROR_' + event.data;"
+                            + "}"
+                            + "}"
+                            + "});"
+                            + "}"
+                            + "</script>"
+                            + "<script "
+                            + "src='https://www.youtube.com/iframe_api'>"
+                            + "</script>"
+                            + "</body></html>";
+
+        } else {
+
+            // Stage 2 and Stage 3 retain the previous iframe method.
+
+            html =
+                    "<!doctype html><html><head>"
+                    + "<meta name='viewport' content='width=device-width,"
+                    + "initial-scale=1,maximum-scale=1'>"
+                    + "<meta name='referrer' "
+                    + "content='strict-origin-when-cross-origin'>"
+                    + "<style>"
+                    + "html,body{margin:0;padding:0;background:#000;"
+                    + "width:100%;height:100%;overflow:hidden;}"
+                    + "iframe{position:absolute;inset:0;width:100%;"
+                    + "height:100%;border:0;}"
+                    + "</style></head><body>"
+                    + "<iframe id='player' "
+                    + "src='https://www.youtube.com/embed/"
+                    + safeVideoId
+                    + "?enablejsapi=1&playsinline=1&controls=1"
+                    + "&rel=0&autoplay=1"
+                    + "&origin=https://com.donut4u.karaoke' "
+                    + "referrerpolicy='strict-origin' "
+                    + "allow='autoplay; encrypted-media; picture-in-picture' "
+                    + "allowfullscreen></iframe>"
+                    + "</body></html>";
+        }
 
         videoView.loadDataWithBaseURL(
                 YOUTUBE_APP_BASE_URL,
