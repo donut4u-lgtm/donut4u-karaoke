@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -776,26 +775,50 @@ public class Stage1TvActivity extends Activity {
                         + "<meta name='viewport' "
                         + "content='width=device-width,"
                         + "initial-scale=1,maximum-scale=1'>"
+                        + "<meta name='referrer' "
+                        + "content='strict-origin-when-cross-origin'>"
                         + "<style>"
                         + "html,body{margin:0;padding:0;"
                         + "width:100%;height:100%;"
                         + "background:#000;overflow:hidden;}"
-                        + "iframe{width:100%;height:100%;"
-                        + "border:0;}"
-                        + "</style></head><body>"
-                        + "<iframe "
-                        + "src='https://www.youtube.com/embed/"
-                        + video.id
-                        + "?autoplay=1&playsinline=1"
-                        + "&rel=0&modestbranding=1' "
-                        + "allow='autoplay; encrypted-media; "
-                        + "picture-in-picture' "
-                        + "allowfullscreen>"
-                        + "</iframe>"
+                        + "#player{position:absolute;top:0;left:0;"
+                        + "width:100%;height:100%;}"
+                        + "</style>"
+                        + "</head><body>"
+                        + "<div id='player'></div>"
+                        + "<script>"
+                        + "var donutPlayer;"
+                        + "function onYouTubeIframeAPIReady(){"
+                        + "donutPlayer=new YT.Player('player',{"
+                        + "width:'100%',height:'100%',"
+                        + "videoId:'" + video.id + "',"
+                        + "playerVars:{"
+                        + "playsinline:1,"
+                        + "autoplay:1,"
+                        + "controls:1,"
+                        + "rel:0,"
+                        + "modestbranding:1,"
+                        + "enablejsapi:1,"
+                        + "origin:'https://com.donut4u.karaoke'"
+                        + "},"
+                        + "events:{"
+                        + "onReady:function(event){"
+                        + "event.target.playVideo();"
+                        + "},"
+                        + "onError:function(event){"
+                        + "document.title='YOUTUBE_ERROR_' + event.data;"
+                        + "}"
+                        + "}"
+                        + "});"
+                        + "}"
+                        + "</script>"
+                        + "<script "
+                        + "src='https://www.youtube.com/iframe_api'>"
+                        + "</script>"
                         + "</body></html>";
 
         player.loadDataWithBaseURL(
-                "https://www.youtube.com/",
+                "https://com.donut4u.karaoke/",
                 html,
                 "text/html",
                 "UTF-8",
