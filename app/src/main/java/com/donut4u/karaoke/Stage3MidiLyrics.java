@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -95,9 +96,11 @@ public final class Stage3MidiLyrics {
 
     public String getEditableText() {
         StringBuilder result = new StringBuilder();
+
         int previousStanza = Integer.MIN_VALUE;
         int previousLine = Integer.MIN_VALUE;
         boolean firstLine = true;
+        LyricEvent previousEvent = null;
 
         for (LyricEvent event : events) {
             if (event.section || event.text.trim().isEmpty()) {
@@ -114,12 +117,14 @@ public final class Stage3MidiLyrics {
                 previousStanza = event.stanza;
                 previousLine = event.line;
                 firstLine = false;
+                previousEvent = null;
 
-            } else if (hasWordBoundaryBefore(event)) {
+            } else if (hasWordBoundaryBefore(event, previousEvent)) {
                 result.append(' ');
             }
 
             result.append(event.text);
+            previousEvent = event;
         }
 
         return result.toString();
@@ -204,8 +209,11 @@ public final class Stage3MidiLyrics {
             for (int i = 0; i < originalEvents.size(); i++) {
                 LyricEvent event = originalEvents.get(i);
 
+                LyricEvent previousEvent =
+                        i > 0 ? originalEvents.get(i - 1) : null;
+
                 boolean startsNewWord = i == 0
-                        || hasWordBoundaryBefore(event);
+                        || hasWordBoundaryBefore(event, previousEvent);
 
                 if (group == null || startsNewWord) {
                     group = new ArrayList<>();
@@ -275,8 +283,13 @@ public final class Stage3MidiLyrics {
         return true;
     }
 
-    private static boolean hasWordBoundaryBefore(LyricEvent event) {
-        return event.spaceBefore || event.inferredSpaceBefore;
+    private static boolean hasWordBoundaryBefore(
+            LyricEvent event,
+            LyricEvent previous) {
+
+        return event.spaceBefore
+                || event.inferredSpaceBefore
+                || (previous != null && previous.spaceAfter);
     }
 
     public String getMetadataText() {
@@ -409,15 +422,6 @@ public final class Stage3MidiLyrics {
                 && tick < upcoming.tick - ppq / 2L;
     }
 
-    /*
-     * Only two countdown targets are allowed:
-     *
-     * 1. The first lyric in the song.
-     * 2. The first lyric after the first identified interlude/chorus.
-     *
-     * If the file has no section label, one long instrumental gap may
-     * identify the second entrance. No later entrances are counted.
-     */
     public int getCountdownNumberAtTick(long tick) {
         long now = Math.max(0L, tick);
         long beat = Math.max(1L, ppq);
@@ -467,10 +471,6 @@ public final class Stage3MidiLyrics {
     private int secondCountdownLyricIndex(int firstLyric) {
         int markedSectionIndex = -1;
 
-        /*
-         * First look for an explicit INTERLUDE or CHORUS section
-         * after the opening lyric.
-         */
         for (int i = firstLyric + 1; i < events.size(); i++) {
             LyricEvent event = events.get(i);
 
@@ -489,11 +489,6 @@ public final class Stage3MidiLyrics {
             return nextLyricIndex(markedSectionIndex + 1);
         }
 
-        /*
-         * Some MIDI/KAR files do not label their sections.
-         * In that case, allow one long gap or instrumental section
-         * to identify one later vocal entrance.
-         */
         int previousLyric = firstLyric;
 
         for (int i = firstLyric + 1; i < events.size(); i++) {
@@ -674,9 +669,7 @@ public final class Stage3MidiLyrics {
             if (previousEvent >= 0) {
                 LyricEvent previous = events.get(previousEvent);
 
-                if (previous.spaceAfter
-                        || e.spaceBefore
-                        || e.inferredSpaceBefore) {
+                if (hasWordBoundaryBefore(e, previous)) {
                     output.append(' ');
                 }
             }
@@ -722,9 +715,7 @@ public final class Stage3MidiLyrics {
                         || previous.line != current.line
                         || starts[previousIndex] < 0
                         || ends[previousIndex] <= starts[previousIndex]
-                        || previous.spaceAfter
-                        || current.spaceBefore
-                        || current.inferredSpaceBefore) {
+                        || hasWordBoundaryBefore(current, previous)) {
                     break;
                 }
 
@@ -742,9 +733,7 @@ public final class Stage3MidiLyrics {
                         || current.line != next.line
                         || starts[nextIndex] < 0
                         || ends[lastWordEvent] <= starts[lastWordEvent]
-                        || current.spaceAfter
-                        || next.spaceBefore
-                        || next.inferredSpaceBefore) {
+                        || hasWordBoundaryBefore(next, current)) {
                     break;
                 }
 
@@ -1050,6 +1039,7 @@ public final class Stage3MidiLyrics {
                 }
             });
 
+            inferWordBoundaries(chosen, ppq);
             applyAutomaticFormatting(chosen, ppq);
 
             int line = 0;
@@ -1078,6 +1068,61 @@ public final class Stage3MidiLyrics {
 
         } catch (Exception ignored) {
             return empty();
+        }
+    }
+
+    private static void inferWordBoundaries(
+            List<LyricEvent> lyricEvents,
+            int ppq) {
+
+        if (lyricEvents == null || lyricEvents.size() < 2) {
+            return;
+        }
+
+        long minimumGap = Math.max(1L, ppq / 2L);
+        LyricEvent previous = null;
+
+        for (LyricEvent current : lyricEvents) {
+
+            if (current.section) {
+                previous = null;
+                continue;
+            }
+
+            if (current.lineBreak || current.stanzaBreak) {
+                previous = current;
+                continue;
+            }
+
+            if (previous != null
+                    && !previous.section
+                    && !previous.text.trim().isEmpty()
+                    && !current.text.trim().isEmpty()
+                    && !previous.spaceAfter
+                    && !current.spaceBefore
+                    && !current.inferredSpaceBefore) {
+
+                long gap = current.tick - previous.tick;
+
+                String previousText = previous.text.trim();
+                String currentText = current.text.trim();
+
+                boolean previousEndsWithHyphen =
+                        previousText.endsWith("-")
+                        || previousText.endsWith("‐");
+
+                boolean currentStartsWithPunctuation =
+                        currentText.matches("^[,.;:!?…%)\\]}].*");
+
+                if (gap >= minimumGap
+                        && !previousEndsWithHyphen
+                        && !currentStartsWithPunctuation) {
+
+                    current.inferredSpaceBefore = true;
+                }
+            }
+
+            previous = current;
         }
     }
 
@@ -1125,7 +1170,9 @@ public final class Stage3MidiLyrics {
                         || previousText.endsWith(":");
 
                 boolean explicitWordBoundary =
-                        previous.spaceAfter || current.spaceBefore;
+                        previous.spaceAfter
+                        || current.spaceBefore
+                        || current.inferredSpaceBefore;
 
                 boolean wordBoundary = explicitWordBoundary;
 
@@ -1272,7 +1319,7 @@ public final class Stage3MidiLyrics {
 
                 } else if (!rawFragment.isEmpty()
                         && rawFragment.trim().isEmpty()) {
-                    pendingSpace = false;
+                    pendingSpace = true;
                 }
 
                 fragment.setLength(0);
