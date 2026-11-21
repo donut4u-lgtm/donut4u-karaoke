@@ -6,7 +6,10 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Layout;
+import android.text.Spanned;
 import android.text.SpannableStringBuilder;
 import android.text.style.BackgroundColorSpan;
 import android.text.style.ForegroundColorSpan;
@@ -44,6 +47,9 @@ public class TvMonitorActivity extends Activity
     private static final int HIGHLIGHT_BACKGROUND =
             Color.argb(75, 50, 220, 130);
 
+    private static final int TV_ACTIVE_GREEN =
+            Color.rgb(0, 255, 100);
+
     private static final String MIME_MIDI = "audio/midi";
 
     private static final String DEFAULT_SOUNDFONT =
@@ -77,9 +83,26 @@ public class TvMonitorActivity extends Activity
     private final ExecutorService imageExecutor =
             Executors.newSingleThreadExecutor();
 
+    private final Handler lyricHandler =
+            new Handler(Looper.getMainLooper());
+
+    private final Runnable tvLyricUpdater = new Runnable() {
+        @Override public void run() {
+            if (destroyed || currentStage != 3 || tvMidiEngine == null) return;
+            updateTvMidiLyrics();
+            lyricHandler.postDelayed(this, 33L);
+        }
+    };
+
     private volatile String currentBackgroundTransferId = "";
 
     private Stage3MidiEngine tvMidiEngine;
+    private volatile Stage3MidiLyrics tvMidiLyrics;
+    private volatile long tvMidiDurationTicks;
+    private String lastTvLyricText = "";
+    private int lastTvWordStart = -1;
+    private int lastTvWordEnd = -1;
+    private int lastTvScrolledLine = Integer.MIN_VALUE;
 
     private volatile String currentMidiTransferId = "";
 
@@ -464,8 +487,15 @@ public class TvMonitorActivity extends Activity
         currentStage = stage;
         applyStageLayout(stage);
 
-        if (stage != 3 && tvMidiEngine != null) {
-            tvMidiEngine.stop();
+        if (stage != 3) {
+            lyricHandler.removeCallbacks(tvLyricUpdater);
+            tvMidiLyrics = null;
+            tvMidiDurationTicks = 0L;
+            lastTvLyricText = "";
+            lastTvWordStart = -1;
+            lastTvWordEnd = -1;
+            lastTvScrolledLine = Integer.MIN_VALUE;
+            if (tvMidiEngine != null) tvMidiEngine.stop();
             currentMidiTransferId = "";
         }
 
@@ -502,6 +532,7 @@ public class TvMonitorActivity extends Activity
             setMetadata(
                     singerView,
                     singer,
+```java
                     "Singer: "
             );
 
@@ -541,13 +572,12 @@ public class TvMonitorActivity extends Activity
         currentLyrics = lyrics;
 
         if (stage == 3) {
-
-            displayHighlightedLyrics(
-                    lyrics,
-                    currentActiveLine,
-                    currentActiveLineOffset
-            );
-
+            if (tvMidiLyrics != null && tvMidiLyrics.hasLyrics()) {
+                updateTvMidiLyrics();
+            } else {
+                displayHighlightedLyrics(lyrics, currentActiveLine,
+                        currentActiveLineOffset);
+            }
         } else {
 
             lyricsView.setText("");
@@ -610,178 +640,141 @@ public class TvMonitorActivity extends Activity
     // KARAOKE LYRICS
     // ------------------------------------------------
 
+    /*
+     * Fallback while the TV MIDI file is arriving. The definitive
+     * lyrics are parsed from that MIDI file and timed by the TV player.
+     * No display-only newline is inserted, so source offsets stay valid.
+     */
     private void displayHighlightedLyrics(
             String lyrics,
             int activeLine,
             int activeLineOffset
     ) {
-
         if (lyrics == null || lyrics.isEmpty()) {
             lyricsView.setText("");
+            lyricsScroll.scrollTo(0, 0);
             return;
         }
-
-        /*
-         * Add one empty display row after each source lyric line.
-         *
-         * The phone's original lyric string and offsets are not
-         * modified. offsetMap translates every original character
-         * position to its new position in the TV display string.
-         *
-         * This keeps active-line highlighting and auto-scroll
-         * aligned even after the extra display rows are inserted.
-         */
-        StringBuilder expandedLyrics =
-                new StringBuilder(lyrics.length() + 64);
-
-        int[] offsetMap = new int[lyrics.length() + 1];
-
-        for (int i = 0; i < lyrics.length(); i++) {
-
-            offsetMap[i] = expandedLyrics.length();
-
-            char character = lyrics.charAt(i);
-            expandedLyrics.append(character);
-
-            if (character == '\n'
-                    && i < lyrics.length() - 1) {
-
-                expandedLyrics.append('\n');
-            }
-        }
-
-        offsetMap[lyrics.length()] = expandedLyrics.length();
-
-        SpannableStringBuilder builder =
-                new SpannableStringBuilder(
-                        expandedLyrics.toString()
-                );
-
-        int originalTargetStart = -1;
-        int originalTargetEnd = -1;
-
-        if (activeLineOffset >= 0
-                && activeLineOffset < lyrics.length()) {
-
-            originalTargetStart = lyrics.lastIndexOf(
-                    "\n",
-                    Math.max(0, activeLineOffset - 1)
-            ) + 1;
-
-            originalTargetEnd = lyrics.indexOf(
-                    "\n",
-                    activeLineOffset
-            );
-
-            if (originalTargetEnd < 0) {
-                originalTargetEnd = lyrics.length();
-            }
-
-        } else {
-
-            String[] lines = lyrics.split("\n", -1);
-
-            int lineStart = 0;
-
-            for (int i = 0; i < lines.length; i++) {
-
-                int lineEnd =
-                        lineStart + lines[i].length();
-
-                if (i == activeLine && activeLine >= 0) {
-                    originalTargetStart = lineStart;
-                    originalTargetEnd = lineEnd;
+        SpannableStringBuilder builder = new SpannableStringBuilder(lyrics);
+        int lineStart = -1;
+        int lineEnd = -1;
+        if (activeLineOffset >= 0 && activeLineOffset < lyrics.length()) {
+            lineStart = lyrics.lastIndexOf("\n",
+                    Math.max(0, activeLineOffset - 1)) + 1;
+            lineEnd = lyrics.indexOf("\n", activeLineOffset);
+            if (lineEnd < 0) lineEnd = lyrics.length();
+        } else if (activeLine >= 0) {
+            int start = 0;
+            int line = 0;
+            while (line < activeLine && start < lyrics.length()) {
+                int newline = lyrics.indexOf('\n', start);
+                if (newline < 0) {
+                    start = lyrics.length();
                     break;
                 }
-
-                lineStart = lineEnd + 1;
+                start = newline + 1;
+                line++;
+            }
+            if (line == activeLine && start <= lyrics.length()) {
+                lineStart = start;
+                int newline = lyrics.indexOf('\n', start);
+                lineEnd = newline < 0 ? lyrics.length() : newline;
             }
         }
-
-        int targetStart = -1;
-        int targetEnd = -1;
-
-        if (originalTargetStart >= 0
-                && originalTargetStart < offsetMap.length
-                && originalTargetEnd >= originalTargetStart
-                && originalTargetEnd < offsetMap.length) {
-
-            targetStart = offsetMap[originalTargetStart];
-            targetEnd = offsetMap[originalTargetEnd];
+        if (lineStart >= 0 && lineEnd > lineStart
+                && lineEnd <= builder.length()) {
+            builder.setSpan(new ForegroundColorSpan(GREEN), lineStart, lineEnd,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE);
+            builder.setSpan(new BackgroundColorSpan(HIGHLIGHT_BACKGROUND),
+                    lineStart, lineEnd,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE);
+            builder.setSpan(new StyleSpan(Typeface.BOLD), lineStart, lineEnd,
+                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
-
-        if (targetStart >= 0
-                && targetEnd > targetStart
-                && targetEnd <= builder.length()) {
-
-            builder.setSpan(
-                    new ForegroundColorSpan(GREEN),
-                    targetStart,
-                    targetEnd,
-                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
-
-            builder.setSpan(
-                    new BackgroundColorSpan(
-                            HIGHLIGHT_BACKGROUND
-                    ),
-                    targetStart,
-                    targetEnd,
-                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
-
-            builder.setSpan(
-                    new StyleSpan(Typeface.BOLD),
-                    targetStart,
-                    targetEnd,
-                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
-        }
-
         lyricsView.setText(builder);
-
-        if (targetStart >= 0) {
-
-            final int scrollOffset = targetStart;
-
-            lyricsView.post(() -> {
-
-                if (destroyed
-                        || lyricsView == null
-                        || lyricsScroll == null) {
-                    return;
-                }
-
-                Layout layout = lyricsView.getLayout();
-
-                if (layout == null) {
-                    return;
-                }
-
-                int lineNumber =
-                        layout.getLineForOffset(scrollOffset);
-
-                int lineTop =
-                        layout.getLineTop(lineNumber);
-
-                int lineBottom =
-                        layout.getLineBottom(lineNumber);
-
-                int lineCenter =
-                        lineTop + ((lineBottom - lineTop) / 2);
-
-                int viewportCenter =
-                        lyricsScroll.getHeight() / 2;
-
-                int targetScroll =
-                        lineCenter - viewportCenter;
-
-                lyricsScroll.smoothScrollTo(
-                        0,
-                        Math.max(0, targetScroll)
-                );
-            });
+        if (lineStart >= 0) {
+            final int offset = lineStart;
+            lyricsView.post(() -> scrollTvLyricsToOffset(offset));
         }
+    }
+
+    /* Render active word and line from the exact MIDI timing on TV. */
+    private void updateTvMidiLyrics() {
+        Stage3MidiLyrics parsed = tvMidiLyrics;
+        if (destroyed || currentStage != 3 || parsed == null
+                || tvMidiEngine == null) return;
+        if (!parsed.hasLyrics()) {
+            String message = "No embedded lyrics found in this MIDI/KAR file.";
+            if (!message.contentEquals(lyricsView.getText())) {
+                lyricsView.setText(message);
+            }
+            return;
+        }
+        long tick;
+        try {
+            tick = tvMidiEngine.getCurrentTick();
+        } catch (Exception error) {
+            return;
+        }
+        CharSequence rendered = parsed.styledFullTextAtTick(
+                tick, tvMidiDurationTicks);
+        if (rendered == null) return;
+        String plainText = rendered.toString();
+        int wordStart = -1;
+        int wordEnd = -1;
+        if (rendered instanceof Spanned) {
+            Spanned spanned = (Spanned) rendered;
+            ForegroundColorSpan[] spans = spanned.getSpans(
+                    0, spanned.length(), ForegroundColorSpan.class);
+            for (ForegroundColorSpan span : spans) {
+                if (span.getForegroundColor() == TV_ACTIVE_GREEN) {
+                    wordStart = spanned.getSpanStart(span);
+                    wordEnd = spanned.getSpanEnd(span);
+                    break;
+                }
+            }
+        }
+        if (!plainText.equals(lastTvLyricText)
+                || wordStart != lastTvWordStart
+                || wordEnd != lastTvWordEnd) {
+            lyricsView.setText(rendered);
+            lastTvLyricText = plainText;
+            lastTvWordStart = wordStart;
+            lastTvWordEnd = wordEnd;
+        }
+        int activeLine = parsed.activeLineNumberAtTick(tick);
+        if (activeLine >= 0 && activeLine != lastTvScrolledLine) {
+            lastTvScrolledLine = activeLine;
+            int offset = Math.max(0,
+                    parsed.activeLineStartOffsetAtTick(tick));
+            lyricsView.post(() -> scrollTvLyricsToOffset(offset));
+        }
+    }
+
+    private void scrollTvLyricsToOffset(int requestedOffset) {
+        if (destroyed || lyricsView == null || lyricsScroll == null) return;
+        Layout layout = lyricsView.getLayout();
+        if (layout == null || layout.getLineCount() == 0) return;
+        int offset = Math.max(0, Math.min(requestedOffset, lyricsView.length()));
+        int lineNumber = layout.getLineForOffset(offset);
+        int lineTop = layout.getLineTop(lineNumber);
+        int lineBottom = layout.getLineBottom(lineNumber);
+        int viewportHeight = lyricsScroll.getHeight()
+                - lyricsScroll.getPaddingTop()
+                - lyricsScroll.getPaddingBottom();
+        if (viewportHeight <= 0) return;
+        int lineHeight = lineBottom - lineTop;
+        int target = lineTop - (viewportHeight - lineHeight) / 2;
+        int maxScroll = Math.max(0, lyricsView.getHeight() - viewportHeight);
+        target = Math.max(0, Math.min(target, maxScroll));
+        if (Math.abs(target - lyricsScroll.getScrollY()) > dp(12)) {
+            lyricsScroll.smoothScrollTo(0, target);
+        }
+    }
+
+    private void startTvLyricUpdates() {
+        lyricHandler.removeCallbacks(tvLyricUpdater);
+        if (!destroyed && currentStage == 3) lyricHandler.post(tvLyricUpdater);
     }
 
     private void setMetadata(
@@ -965,7 +958,28 @@ public class TvMonitorActivity extends Activity
         }
 
         currentMidiTransferId = transferId;
-
+        tvMidiLyrics = null;
+        tvMidiDurationTicks = 0L;
+        lastTvLyricText = "";
+        lastTvWordStart = -1;
+        lastTvWordEnd = -1;
+        lastTvScrolledLine = Integer.MIN_VALUE;
+        lyricHandler.removeCallbacks(tvLyricUpdater);
+        final String parsedTransferId = transferId;
+        imageExecutor.execute(() -> {
+            Stage3MidiLyrics parsed = Stage3MidiLyrics.read(midiFile);
+            runOnUiThread(() -> {
+                if (destroyed || !parsedTransferId.equals(currentMidiTransferId)) return;
+                tvMidiLyrics = parsed;
+                setMetadata(singerView, parsed.getSinger(), "Singer: ");
+                setMetadata(composerView, parsed.getComposer(), "Composer: ");
+                lastTvLyricText = "";
+                lastTvWordStart = -1;
+                lastTvWordEnd = -1;
+                lastTvScrolledLine = Integer.MIN_VALUE;
+                updateTvMidiLyrics();
+            });
+        });
         if (tvMidiEngine == null) {
             tvMidiEngine = Stage3MidiEngine.create(this);
         }
@@ -980,13 +994,10 @@ public class TvMonitorActivity extends Activity
 
                 @Override
                 public void onReady(long durationTicks) {
-                    if (destroyed) {
-                        return;
-                    }
-
-                    statusView.setText(
-                            "STAGE 3 AUDIO PLAYING ON TV"
-                    );
+                    if (destroyed) return;
+                    tvMidiDurationTicks = Math.max(0L, durationTicks);
+                    statusView.setText("STAGE 3 AUDIO PLAYING ON TV");
+                    startTvLyricUpdates();
                 }
 
                 @Override
@@ -1023,6 +1034,7 @@ public class TvMonitorActivity extends Activity
     }
 
     private void pauseTvMidi() {
+        lyricHandler.removeCallbacks(tvLyricUpdater);
         if (tvMidiEngine == null) {
             return;
         }
@@ -1040,6 +1052,7 @@ public class TvMonitorActivity extends Activity
 
         try {
             tvMidiEngine.resume();
+            startTvLyricUpdates();
         } catch (Exception ignored) {
         }
     }
@@ -1049,9 +1062,12 @@ public class TvMonitorActivity extends Activity
             return;
         }
 
+        lyricHandler.removeCallbacks(tvLyricUpdater);
         try {
             tvMidiEngine.pause();
             tvMidiEngine.seekTo(0L);
+            lastTvScrolledLine = Integer.MIN_VALUE;
+            updateTvMidiLyrics();
         } catch (Exception ignored) {
         }
     }
@@ -1318,14 +1334,20 @@ public class TvMonitorActivity extends Activity
 
     private void stopCurrentPlayback() {
 
+        lyricHandler.removeCallbacks(tvLyricUpdater);
         if (tvMidiEngine != null) {
             try {
                 tvMidiEngine.stop();
             } catch (Exception ignored) {
             }
         }
-
         currentMidiTransferId = "";
+        tvMidiLyrics = null;
+        tvMidiDurationTicks = 0L;
+        lastTvLyricText = "";
+        lastTvWordStart = -1;
+        lastTvWordEnd = -1;
+        lastTvScrolledLine = Integer.MIN_VALUE;
 
         destroyVideoView();
 
@@ -1479,6 +1501,7 @@ public class TvMonitorActivity extends Activity
             sessionController.setObserver(null);
         }
 
+        lyricHandler.removeCallbacks(tvLyricUpdater);
         imageExecutor.shutdownNow();
 
         if (tvMidiEngine != null) {
