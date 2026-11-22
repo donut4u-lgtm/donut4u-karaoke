@@ -20,26 +20,129 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download verified FluidSynth AAR
-        uses: actions/download-artifact@v4
+      - name: Checkout pinned FluidSynth source
+        uses: actions/checkout@v4
         with:
-          name: fluidsynth-16kb-verified-aar
-          repository: donut4u-lgtm/donut4u-karaoke
-          run-id: 42462751189
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: verified-aar
+          repository: Virtover/fluidsynth-kmp
+          ref: 0ca21c2e5ba25001d19ebf11d385c82b9e84a0e7
+          path: fluidsynth-source
 
-      - name: Install FluidSynth AAR
+      - name: Set up Java 21 for FluidSynth
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "ndk;30.0.16248370" \
+            "cmake;3.22.1"
+
+      - name: Build FluidSynth release AAR
+        working-directory: fluidsynth-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+
+          ./gradlew :fluidsynth-kmp:assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+      - name: Verify FluidSynth 16 KB ELF alignment
         shell: bash
         run: |
           set -euo pipefail
 
-          AAR="$(find verified-aar -type f -name '*.aar' -print -quit)"
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
+            -maxdepth 1 -type f -name '*.aar' -print -quit)"
 
           if [[ -z "$AAR" || ! -s "$AAR" ]]; then
-            echo "ERROR: Verified FluidSynth AAR is missing."
+            echo "ERROR: FluidSynth AAR was not generated."
             exit 1
           fi
+
+          mkdir -p aar-check
+          unzip -q "$AAR" -d aar-check
+
+          TOTAL=0
+
+          for ABI in arm64-v8a x86_64; do
+            ABI_DIR="aar-check/jni/$ABI"
+
+            if [[ ! -d "$ABI_DIR" ]]; then
+              echo "ERROR: Missing ABI directory: $ABI_DIR"
+              exit 1
+            fi
+
+            mapfile -t LIBRARIES < <(
+              find "$ABI_DIR" -type f -name '*.so' | sort
+            )
+
+            if [[ "${#LIBRARIES[@]}" -eq 0 ]]; then
+              echo "ERROR: No native libraries for $ABI."
+              exit 1
+            fi
+
+            for LIBRARY in "${LIBRARIES[@]}"; do
+              FOUND_LOAD=0
+
+              while IFS= read -r LINE; do
+                if [[ "$LINE" != *" LOAD "* && "$LINE" != LOAD* ]]; then
+                  continue
+                fi
+
+                FOUND_LOAD=1
+                ALIGN="${LINE##* }"
+
+                if [[ ! "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]; then
+                  echo "ERROR: Invalid ELF alignment: $LIBRARY"
+                  exit 1
+                fi
+
+                ALIGN_NUM=$((16#${ALIGN#0x}))
+
+                if (( ALIGN_NUM < 16384 )); then
+                  echo "ERROR: Insufficient alignment: $LIBRARY ($ALIGN)"
+                  exit 1
+                fi
+
+                echo "PASS: $ABI $(basename "$LIBRARY") ($ALIGN)"
+              done < <("$READELF" -lW "$LIBRARY")
+
+              if (( FOUND_LOAD == 0 )); then
+                echo "ERROR: No LOAD segments: $LIBRARY"
+                exit 1
+              fi
+
+              TOTAL=$((TOTAL + 1))
+            done
+          done
+
+          echo "PASS: $TOTAL native libraries verified for 16 KB alignment."
+
+      - name: Install verified FluidSynth AAR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AAR="$(find fluidsynth-source/fluidsynth-kmp/build/outputs/aar \
+            -maxdepth 1 -type f -name '*.aar' -print -quit)"
+
+          test -n "$AAR"
+          test -s "$AAR"
 
           mkdir -p app/libs
           cp "$AAR" app/libs/fluidsynth-kmp-release.aar
@@ -67,7 +170,7 @@ jobs:
           echo "GeneralUser SoundFont assembled and verified."
           sha256sum app/src/main/assets/GeneralUser-GS.sf2
 
-      - name: Set up Java
+      - name: Set up Java 17 for Donut4U
         uses: actions/setup-java@v4
         with:
           distribution: temurin
