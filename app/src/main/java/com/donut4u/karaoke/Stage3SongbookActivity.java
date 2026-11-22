@@ -415,12 +415,6 @@ public class Stage3SongbookActivity extends Activity {
         }
     }
 
-    /**
-     * Builds the current filtered song results for the phone.
-     *
-     * The phone receives the same filtered entries currently
-     * displayed by the TV songbook.
-     */
     private JSONObject createPhoneSearchResults() {
         JSONObject response = new JSONObject();
         JSONArray results = new JSONArray();
@@ -469,16 +463,7 @@ public class Stage3SongbookActivity extends Activity {
         return response;
     }
 
-    /**
-     * Resolves a phone selection against the actual saved
-     * songbook. The phone-provided list index is not trusted.
-     *
-     * The saved URI is the primary identifier. Number and
-     * title are checked as additional identity information.
-     */
-    private JSONObject handlePhoneSongSelection(
-            JSONObject request
-    ) {
+    private JSONObject handlePhoneSongSelection(JSONObject request) {
         String requestedNumber =
                 request.optString("number", "").trim();
 
@@ -516,12 +501,6 @@ public class Stage3SongbookActivity extends Activity {
             }
         }
 
-        /*
-         * Fallback for compatible phone clients that send
-         * number and title but do not send a URI.
-         *
-         * The fallback must identify exactly one song.
-         */
         if (selectedSong == null && requestedUri.isEmpty()
                 && !requestedNumber.isEmpty()
                 && !requestedTitle.isEmpty()) {
@@ -613,10 +592,6 @@ public class Stage3SongbookActivity extends Activity {
     // PHONE TEXT INPUT
     // ------------------------------------------------
 
-    /**
-     * Receives generic phone keyboard actions for the Stage 3
-     * songbook search field.
-     */
     private void applyTvTextInput(
             String target,
             String text,
@@ -1705,24 +1680,38 @@ public class Stage3SongbookActivity extends Activity {
 
         try {
             Stage3SongQueue.initialize(this);
+
             Stage3SongQueue.setNowPlaying(
                     new Stage3SongQueue.QueuedSong(
-                            song.number, song.title, song.uri, song.type));
+                            song.number,
+                            song.title,
+                            song.uri,
+                            song.type));
 
-            startActivity(new Intent(
+            Intent intent = new Intent(
                     Stage3SongbookActivity.this,
-                    Stage3PlayerActivity.class));
+                    Stage3PlayerActivity.class);
+
+            // Preserve TV mode when launching the player.
+            intent.putExtra(EXTRA_TV_MODE, tvMode);
+
+            startActivity(intent);
 
         } catch (Exception e) {
-            android.util.Log.e("Stage3Songbook",
-                    "Could not launch built-in player.", e);
+            android.util.Log.e(
+                    "Stage3Songbook",
+                    "Could not launch built-in player.",
+                    e);
 
-            Toast.makeText(this,
-                    "Could not open Donut4U Stage 3.",
+            Toast.makeText(
+                    Stage3SongbookActivity.this,
+                    "Could not open Stage 3. "
+                            + (e.getMessage() == null
+                            ? "Please check the selected song."
+                            : e.getMessage()),
                     Toast.LENGTH_LONG).show();
 
-            throw new IllegalStateException(
-                    "Could not launch Stage 3 player.", e);
+            // Do not rethrow. A launch error must not crash the app.
         }
     }
 
