@@ -4,7 +4,7 @@ name: Stage 4 TV Build and 16 KB APK Verification
 on:
   workflow_run:
     workflows:
-      - Stage 4 - MIDI Gain 1.0 Build and Verify
+      - Stage 4 - MIDI Gain 1.0 Signed Release Build and Verify
     types:
       - completed
     branches:
@@ -17,7 +17,7 @@ permissions:
 jobs:
   build-and-verify:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    name: Build Donut4U with MIDI Gain 1.0 and Verify 16 KB APK
+    name: Build Donut4U TV APK and Verify 16 KB
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
