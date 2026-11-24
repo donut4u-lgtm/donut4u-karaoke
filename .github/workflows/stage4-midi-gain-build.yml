@@ -1,8 +1,10 @@
 
-name: Stage 4 - MIDI Gain 1.0 Signed Release Build and Verify
+name: Stage 4 - MIDI Gain 1.0 and TV Build Verification
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - stage4-tv-isolated
 
 permissions:
   contents: read
@@ -10,9 +12,9 @@ permissions:
 
 jobs:
   build:
-    name: Build Gain 1.0 FluidSynth and Signed Donut4U APK
+    name: Build MIDI Gain 1.0, Signed APK and TV APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Donut4U
@@ -33,9 +35,7 @@ jobs:
           SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
           if [[ ! -x "$SDKMANAGER" ]]; then
-            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
-              -type f -name sdkmanager -perm -u+x 2>/dev/null \
-              | sort -V | tail -n 1)"
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -u+x 2>/dev/null | sort -V | tail -n 1)"
           fi
 
           if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
@@ -57,8 +57,6 @@ jobs:
             "platform-tools" \
             "ndk;30.0.16248370"
 
-          echo "PASS: Android SDK and NDK installed."
-
       - name: Download pinned FluidSynth source
         shell: bash
         run: |
@@ -68,10 +66,9 @@ jobs:
           cd fluidsynth-source
           git checkout a364bb9cd17834a4c5eb290efaae0845785e3dfe
 
-          echo "PASS: Pinned FluidSynth source checked out."
-          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "a364bb9cd17834a4c5eb290efaae0845785e3dfe"
 
-      - name: Add reliable Maven Central mirror
+      - name: Add Maven Central mirror
         working-directory: fluidsynth-source
         shell: bash
         run: |
@@ -80,8 +77,8 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
 
-          settings = Path("settings.gradle.kts")
-          source = settings.read_text()
+          path = Path("settings.gradle.kts")
+          source = path.read_text()
 
           old = """pluginManagement {
               repositories {
@@ -102,19 +99,13 @@ jobs:
               }
           }"""
 
-          if source.count(old) != 1:
-              raise SystemExit(
-                  "FAIL: Expected pluginManagement repositories block "
-                  "was not found exactly once."
-              )
+          if "maven-central.storage-download.googleapis.com/maven2" not in source:
+              if source.count(old) != 1:
+                  raise SystemExit("FAIL: Cannot safely locate pluginManagement repositories.")
+              source = source.replace(old, new, 1)
+              path.write_text(source)
 
-          patched = source.replace(old, new, 1)
-
-          if "maven-central.storage-download.googleapis.com/maven2" not in patched:
-              raise SystemExit("FAIL: Maven Central mirror was not added.")
-
-          settings.write_text(patched)
-          print("PASS: Maven Central mirror added.")
+          print("PASS: Maven Central repository configuration checked.")
           PY
 
       - name: Apply Stage 3 MIDI gain 1.0
@@ -123,7 +114,6 @@ jobs:
           set -euo pipefail
 
           FILE="fluidsynth-source/fluidsynth-kmp/src/androidMain/kotlin/dev/kotlinds/fluidsynthkmp/MidiFilePlayer.kt"
-
           test -s "$FILE"
 
           python3 - "$FILE" <<'PY'
@@ -132,6 +122,12 @@ jobs:
 
           path = pathlib.Path(sys.argv[1])
           source = path.read_text()
+
+          gain = "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
+
+          if gain in source:
+              print("PASS: MIDI gain 1.0 is already present.")
+              raise SystemExit(0)
 
           old = """    init {
                   FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)
@@ -143,42 +139,17 @@ jobs:
                   FluidSynthJni.sfLoad(context.synthPtr, soundFontPath, true)
                   playerPtr = FluidSynthJni.playerNew(context.synthPtr)
                   FluidSynthJni.playerAdd(playerPtr, midiPath)
-
-                  // Donut4U Stage 3 MIDI/KAR volume adjustment.
                   FluidSynthJni.setGain(context.synthPtr, 1.0f)
               }"""
 
           if source.count(old) != 1:
-              raise SystemExit(
-                  "FAIL: Expected MIDI player initialization "
-                  "was not found exactly once."
-              )
+              raise SystemExit("FAIL: Expected MIDI player initialization was not found exactly once.")
 
-          if "FluidSynthJni.setGain(context.synthPtr, 1.0f)" in source:
-              raise SystemExit("FAIL: Gain patch already exists.")
-
-          patched = source.replace(old, new, 1)
-
-          if patched.count("FluidSynthJni.setGain(context.synthPtr, 1.0f)") != 1:
-              raise SystemExit("FAIL: Gain patch verification failed.")
-
-          if patched.index("FluidSynthJni.sfLoad") > patched.index(
-              "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
-          ):
-              raise SystemExit("FAIL: Gain must follow SoundFont loading.")
-
-          if patched.index("FluidSynthJni.playerAdd") > patched.index(
-              "FluidSynthJni.setGain(context.synthPtr, 1.0f)"
-          ):
-              raise SystemExit("FAIL: Gain must follow MIDI player setup.")
-
-          path.write_text(patched)
-          print("PASS: Stage 3 MIDI gain 1.0 applied.")
+          path.write_text(source.replace(old, new, 1))
+          print("PASS: MIDI gain 1.0 applied.")
           PY
 
-          grep -F 'FluidSynthJni.setGain(context.synthPtr, 1.0f)' "$FILE"
-
-      - name: Apply 16 KB linker alignment to FluidSynth JNI
+      - name: Apply 16 KB linker alignment
         shell: bash
         run: |
           set -euo pipefail
@@ -193,32 +164,23 @@ jobs:
           path = pathlib.Path(sys.argv[1])
           source = path.read_text()
 
-          old = "target_link_libraries(fluidsynth_jni fluidsynth ${log-lib})"
-
-          new = """target_link_options(fluidsynth_jni PRIVATE
+          flags = """target_link_options(fluidsynth_jni PRIVATE
               "-Wl,-z,max-page-size=16384"
               "-Wl,-z,common-page-size=16384"
           )
 
-          target_link_libraries(fluidsynth_jni fluidsynth ${log-lib})"""
-
-          if source.count(old) != 1:
-              raise SystemExit(
-                  "FAIL: Expected CMake link target not found exactly once."
-              )
+          """
 
           if "max-page-size=16384" in source:
-              raise SystemExit("FAIL: 16 KB linker flags already exist.")
+              print("PASS: 16 KB linker flags already present.")
+              raise SystemExit(0)
 
-          patched = source.replace(old, new, 1)
+          old = "target_link_libraries(fluidsynth_jni fluidsynth ${log-lib})"
 
-          if patched.count('"-Wl,-z,max-page-size=16384"') != 1:
-              raise SystemExit("FAIL: Maximum page-size flag missing.")
+          if source.count(old) != 1:
+              raise SystemExit("FAIL: Expected FluidSynth CMake target was not found exactly once.")
 
-          if patched.count('"-Wl,-z,common-page-size=16384"') != 1:
-              raise SystemExit("FAIL: Common page-size flag missing.")
-
-          path.write_text(patched)
+          path.write_text(source.replace(old, flags + old, 1))
           print("PASS: 16 KB linker flags applied.")
           PY
 
@@ -242,7 +204,7 @@ jobs:
           mkdir -p ../app/libs
           cp "$AAR" ../app/libs/fluidsynth-kmp-release.aar
 
-          echo "PASS: Gain 1.0 FluidSynth AAR built."
+          echo "PASS: FluidSynth AAR built."
           ls -lh ../app/libs/fluidsynth-kmp-release.aar
 
       - name: Verify FluidSynth 16 KB native alignment
@@ -252,6 +214,8 @@ jobs:
 
           NDK="$ANDROID_HOME/ndk/30.0.16248370"
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          test -x "$READELF"
 
           mkdir -p aar-check
           unzip -q app/libs/fluidsynth-kmp-release.aar -d aar-check
@@ -285,8 +249,6 @@ jobs:
               echo "PASS: $ABI $(basename "$LIB")"
             done
           done
-
-          echo "PASS: FluidSynth 16 KB alignment."
 
       - name: Set up Java 17 for Donut4U
         uses: actions/setup-java@v4
@@ -325,16 +287,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$ENC_PASSWORD" || {
-            echo "FAIL: DONUT4U_KEYSTORE_ENCRYPTION_PASSWORD is missing."
-            exit 1
-          }
-
-          test -n "$STORE_PASSWORD" || {
-            echo "FAIL: DONUT4U_KEYSTORE_PASSWORD is missing."
-            exit 1
-          }
-
+          test -n "$ENC_PASSWORD"
+          test -n "$STORE_PASSWORD"
           test -s signing/donut4u-release.jks.enc
 
           openssl enc -d -aes-256-cbc \
@@ -350,8 +304,6 @@ jobs:
             -storepass "$STORE_PASSWORD" \
             -alias donut4u
 
-          echo "PASS: Existing Donut4U release key decrypted."
-
       - name: Build Donut4U signed release APK
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -364,62 +316,40 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$YOUTUBE_API_KEY" || {
-            echo "FAIL: YOUTUBE_API_KEY secret is missing."
-            exit 1
-          }
-
-          test -n "$DONUT4U_KEY_PASSWORD" || {
-            echo "FAIL: DONUT4U_KEY_PASSWORD is missing."
-            exit 1
-          }
-
+          test -n "$YOUTUBE_API_KEY"
+          test -n "$DONUT4U_KEY_PASSWORD"
           test -s app/libs/fluidsynth-kmp-release.aar
           test -s "$DONUT4U_KEYSTORE_PATH"
 
-          for ATTEMPT in 1 2 3 4; do
-            echo "Donut4U signed release build attempt $ATTEMPT/4"
+          gradle assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
 
-            if gradle assembleRelease \
-              --no-daemon \
-              --stacktrace \
-              --console=plain; then
-              echo "PASS: Donut4U signed release APK assembled."
-              exit 0
-            fi
+          test -s app/build/outputs/apk/release/app-release.apk
 
-            if [[ "$ATTEMPT" -lt 4 ]]; then
-              sleep 45
-            fi
-          done
-
-          echo "FAIL: Donut4U signed release build failed."
-          exit 1
-
-      - name: Verify APK package, version and integrity
+      - name: Verify signed release APK
         shell: bash
         run: |
           set -euo pipefail
 
           APK="app/build/outputs/apk/release/app-release.apk"
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
 
           test -s "$APK"
-          test -x "$AAPT"
 
           BADGING="$("$AAPT" dump badging "$APK")"
-
           echo "$BADGING" | grep -F "package: name='com.donut4u.karaoke'"
           echo "$BADGING" | grep -F "versionCode='26'"
           echo "$BADGING" | grep -F "versionName='1.0.26'"
           echo "$BADGING" | grep -F "sdkVersion:'24'"
 
           unzip -t "$APK"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
           sha256sum "$APK"
 
-          echo "PASS: Package, version and APK integrity verified."
-
-      - name: Verify APK 16 KB alignment
+      - name: Verify release APK 16 KB alignment
         shell: bash
         run: |
           set -euo pipefail
@@ -429,14 +359,144 @@ jobs:
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
-          test -s "$APK"
-
-          rm -rf apk-check
-          mkdir -p apk-check
-          unzip -q "$APK" 'lib/*' -d apk-check
+          rm -rf release-apk-check
+          mkdir -p release-apk-check
+          unzip -q "$APK" 'lib/*' -d release-apk-check
 
           for ABI in arm64-v8a x86_64; do
-            DIR="apk-check/lib/$ABI"
+            DIR="release-apk-check/lib/$ABI"
+            test -d "$DIR"
+
+            mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
+            test "${#LIBS[@]}" -gt 0
+
+            for LIB in "${LIBS[@]}"; do
+              "$READELF" -lW "$LIB" | awk '
+                / LOAD / {
+                  align = $NF
+                  if (align !~ /^0x[0-9a-fA-F]+$/ || strtonum(align) < 16384) {
+                    print "FAIL: ELF LOAD alignment below 16 KB:", align
+                    exit 1
+                  }
+                  found = 1
+                }
+                END {
+                  if (!found) {
+                    print "FAIL: No ELF LOAD segments found."
+                    exit 1
+                  }
+                }
+              '
+            done
+          done
+
+          "$ZIPALIGN" -v -c -P 16 4 "$APK"
+
+      - name: Verify existing release certificate
+        env:
+          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+          KEYSTORE="$RUNNER_TEMP/donut4u-release.jks"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+
+          EXPECTED_CERT_SHA="$(
+            keytool -exportcert \
+              -keystore "$KEYSTORE" \
+              -storepass "$STORE_PASSWORD" \
+              -alias donut4u \
+              | sha256sum | awk '{print tolower($1)}'
+          )"
+
+          ACTUAL_CERT_SHA="$(
+            "$APKSIGNER" verify --print-certs "$APK" \
+              | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {
+                  gsub(/:/, "", $2)
+                  print tolower($2)
+                  exit
+                }'
+          )"
+
+          test -n "$EXPECTED_CERT_SHA"
+          test -n "$ACTUAL_CERT_SHA"
+          test "$EXPECTED_CERT_SHA" = "$ACTUAL_CERT_SHA"
+
+          echo "PASS: Existing Donut4U release certificate verified."
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-midi-gain-10-signed-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified FluidSynth AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-midi-gain-10-verified-aar
+          path: app/libs/fluidsynth-kmp-release.aar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build Donut4U TV test APK
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$YOUTUBE_API_KEY"
+          test -s app/libs/fluidsynth-kmp-release.aar
+          test -s app/src/main/assets/GeneralUser-GS.sf2
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+          test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Verify TV test APK package and version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+
+          test -s "$APK"
+
+          BADGING="$("$AAPT" dump badging "$APK")"
+          echo "$BADGING" | grep -F "package: name='com.donut4u.karaoke'"
+          echo "$BADGING" | grep -F "versionCode='26'"
+          echo "$BADGING" | grep -F "versionName='1.0.26'"
+          echo "$BADGING" | grep -F "sdkVersion:'24'"
+
+          unzip -t "$APK"
+
+      - name: Verify TV APK 16 KB alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          NDK="$ANDROID_HOME/ndk/30.0.16248370"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+
+          test -s "$APK"
+
+          rm -rf tv-apk-check
+          mkdir -p tv-apk-check
+          unzip -q "$APK" 'lib/*' -d tv-apk-check
+
+          for ABI in arm64-v8a x86_64; do
+            DIR="tv-apk-check/lib/$ABI"
             test -d "$DIR"
 
             mapfile -t LIBS < <(find "$DIR" -type f -name '*.so' | sort)
@@ -453,7 +513,6 @@ jobs:
                 [[ "$ALIGN" =~ ^0x[0-9a-fA-F]+$ ]]
 
                 VALUE=$((16#${ALIGN#0x}))
-
                 if (( VALUE < 16384 )); then
                   echo "FAIL: $LIB alignment is $ALIGN"
                   exit 1
@@ -466,71 +525,12 @@ jobs:
           done
 
           "$ZIPALIGN" -v -c -P 16 4 "$APK"
-          echo "PASS: APK 16 KB verification."
 
-      - name: Verify APK signature and existing release certificate
-        shell: bash
-        env:
-          STORE_PASSWORD: ${{ secrets.DONUT4U_KEYSTORE_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          APK="app/build/outputs/apk/release/app-release.apk"
-          KEYSTORE="$RUNNER_TEMP/donut4u-release.jks"
-          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-
-          test -s "$APK"
-          test -s "$KEYSTORE"
-          test -x "$APKSIGNER"
-
-          "$APKSIGNER" verify --verbose --print-certs "$APK"
-
-          EXPECTED_CERT_SHA="$(
-            keytool -exportcert \
-              -keystore "$KEYSTORE" \
-              -storepass "$STORE_PASSWORD" \
-              -alias donut4u \
-              | sha256sum | awk '{print tolower($1)}'
-          )"
-
-          ACTUAL_CERT_SHA="$(
-            "$APKSIGNER" verify --print-certs "$APK" \
-              | awk -F': ' \
-                '/Signer #1 certificate SHA-256 digest:/ {
-                  gsub(/:/, "", $2)
-                  print tolower($2)
-                  exit
-                }'
-          )"
-
-          if [[ -z "$EXPECTED_CERT_SHA" || -z "$ACTUAL_CERT_SHA" ]]; then
-            echo "FAIL: Could not read signing certificate fingerprints."
-            exit 1
-          fi
-
-          echo "Expected release certificate: $EXPECTED_CERT_SHA"
-          echo "APK certificate:              $ACTUAL_CERT_SHA"
-
-          if [[ "$EXPECTED_CERT_SHA" != "$ACTUAL_CERT_SHA" ]]; then
-            echo "FAIL: APK certificate does not match the existing release key."
-            exit 1
-          fi
-
-          echo "PASS: APK uses the existing Donut4U release signing certificate."
-
-      - name: Upload signed Gain 1.0 release APK
+      - name: Upload verified TV test APK
         uses: actions/upload-artifact@v4
         with:
-          name: stage4-midi-gain-10-signed-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload rebuilt Gain 1.0 FluidSynth AAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: stage4-midi-gain-10-verified-aar
-          path: app/libs/fluidsynth-kmp-release.aar
+          name: stage4-tv-midi-gain-10-16kb-verified-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
