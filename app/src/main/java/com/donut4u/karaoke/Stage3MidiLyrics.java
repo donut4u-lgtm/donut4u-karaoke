@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.graphics.Color;
@@ -204,7 +203,6 @@ public final class Stage3MidiLyrics {
             LyricEvent previous) {
 
         return event.spaceBefore
-                || event.inferredSpaceBefore
                 || (previous != null && previous.spaceAfter);
     }
 
@@ -421,10 +419,6 @@ public final class Stage3MidiLyrics {
         return -1;
     }
 
-    /*
-     * Returns the last lyric event at or before the playback tick.
-     * Events sharing the same tick are handled together by build().
-     */
     private int activeIndex(long tick) {
         long target = Math.max(0, tick);
         int low = 0;
@@ -556,10 +550,6 @@ public final class Stage3MidiLyrics {
                 int firstWord = active;
                 int lastWord = active;
 
-                /*
-                 * If several lyric fragments have the same MIDI tick,
-                 * highlight all of them instead of skipping fragments.
-                 */
                 long activeTick = events.get(active).tick;
 
                 while (firstWord > 0
@@ -574,10 +564,6 @@ public final class Stage3MidiLyrics {
                     lastWord++;
                 }
 
-                /*
-                 * Extend the highlight across fragments belonging to
-                 * the same word, but never across a detected word boundary.
-                 */
                 while (firstWord > 0) {
                     int previousIndex = firstWord - 1;
                     LyricEvent previous = events.get(previousIndex);
@@ -906,65 +892,22 @@ public final class Stage3MidiLyrics {
     }
 
     /*
-     * Detect likely spaces using explicit MIDI spacing first, then timing.
-     * The timing threshold is deliberately lower than the old half-beat
-     * threshold to catch missing spaces in common KAR lyric tracks.
+     * Do not infer word boundaries from MIDI timing gaps.
+     *
+     * A long musical pause can occur between syllables belonging
+     * to the same word. Adding a space based on elapsed ticks can
+     * therefore split a word incorrectly.
+     *
+     * This parser preserves only explicit spaces and separators
+     * supplied by the KAR/MIDI lyric events.
      */
     private static void inferWordBoundaries(
             List<LyricEvent> list,
             int ppq) {
 
-        if (list == null || list.size() < 2) return;
-
-        long minimumGap = Math.max(1L, ppq / 3L);
-        LyricEvent previous = null;
-
-        for (LyricEvent current : list) {
-            if (current.section) {
-                previous = null;
-                continue;
-            }
-
-            if (current.lineBreak || current.stanzaBreak) {
-                previous = current;
-                continue;
-            }
-
-            if (previous != null
-                    && !previous.section
-                    && !previous.text.trim().isEmpty()
-                    && !current.text.trim().isEmpty()
-                    && !previous.spaceAfter
-                    && !current.spaceBefore
-                    && !current.inferredSpaceBefore) {
-
-                long gap = current.tick - previous.tick;
-                String before = previous.text.trim();
-                String after = current.text.trim();
-
-                boolean hyphenated = before.endsWith("-")
-                        || before.endsWith("‐")
-                        || before.endsWith("‑");
-
-                boolean punctuation = after.matches("^[,.;:!?…%)\\]}].*");
-
-                boolean sameTick = current.tick == previous.tick;
-
-                if (!sameTick && gap >= minimumGap
-                        && !hyphenated && !punctuation) {
-                    current.inferredSpaceBefore = true;
-                }
-            }
-
-            previous = current;
-        }
+        // Intentionally empty: preserve explicit MIDI spacing only.
     }
 
-    /*
-     * Preserve explicit MIDI line breaks. Only wrap long lines at detected
-     * word boundaries; do not force a new line merely because punctuation
-     * appears in the lyric text.
-     */
     private static void applyAutomaticFormatting(List<LyricEvent> list) {
         if (list == null || list.isEmpty()) return;
 
@@ -1273,8 +1216,6 @@ public final class Stage3MidiLyrics {
         final boolean spaceBefore;
         final boolean spaceAfter;
 
-        boolean inferredSpaceBefore;
-
         int line;
         int stanza;
 
@@ -1296,7 +1237,6 @@ public final class Stage3MidiLyrics {
             this.stanzaBreak = stanzaBreak;
             this.spaceBefore = spaceBefore;
             this.spaceAfter = spaceAfter;
-            this.inferredSpaceBefore = false;
         }
     }
 
