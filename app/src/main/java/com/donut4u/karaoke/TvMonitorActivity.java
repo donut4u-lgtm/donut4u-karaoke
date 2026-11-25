@@ -771,8 +771,30 @@ public class TvMonitorActivity extends Activity
 
         if (!parsed.hasLyrics()) {
 
+            /*
+             * The phone already parses the selected Stage 3 MIDI/KAR
+             * and sends its current lyric lines in the TV state.
+             *
+             * If the TV-side copy cannot expose embedded lyric events,
+             * keep using those phone-supplied lyrics instead of replacing
+             * them with an error message. This fallback affects TV only.
+             */
+            if (currentLyrics != null
+                    && !currentLyrics.trim().isEmpty()) {
+
+                if (!currentLyrics.contentEquals(lyricsView.getText())) {
+                    displayHighlightedLyrics(
+                            currentLyrics,
+                            currentActiveLine,
+                            currentActiveLineOffset
+                    );
+                }
+
+                return;
+            }
+
             String message =
-                    "No embedded lyrics found in this MIDI/KAR file.";
+                    "Waiting for Stage 3 lyrics from phone...";
 
             if (!message.contentEquals(lyricsView.getText())) {
                 lyricsView.setText(message);
