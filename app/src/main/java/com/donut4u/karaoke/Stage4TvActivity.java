@@ -1,3 +1,4 @@
+
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -26,12 +27,17 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 
 public class Stage4TvActivity extends Activity {
 
     private static final String SONGBOOK_PREFS =
             "donut4u_stage4_tv_songbook";
+
+    private static final String STAGE3_PREFS =
+            "donut4u_stage3_songbook";
 
     private static final String SONGS_KEY = "songs_json";
 
@@ -50,8 +56,10 @@ public class Stage4TvActivity extends Activity {
     private static final int MUTED = Color.rgb(175, 193, 187);
 
     private final ArrayList<TvSong> songs = new ArrayList<>();
+    private final Set<String> loadedUris = new HashSet<>();
 
     private SharedPreferences preferences;
+    private SharedPreferences stage3Preferences;
 
     private ListView songList;
     private TextView countLabel;
@@ -61,6 +69,7 @@ public class Stage4TvActivity extends Activity {
 
     private int nextNumber = 10000;
     private int totalSavedEntries;
+    private int stage3Entries;
 
     private static final class TvSong {
         final String number;
@@ -98,6 +107,11 @@ public class Stage4TvActivity extends Activity {
                 MODE_PRIVATE
         );
 
+        stage3Preferences = getSharedPreferences(
+                STAGE3_PREFS,
+                MODE_PRIVATE
+        );
+
         loadSongs();
         buildScreen();
     }
@@ -111,52 +125,155 @@ public class Stage4TvActivity extends Activity {
 
     private void loadSongs() {
         songs.clear();
+        loadedUris.clear();
+
         totalSavedEntries = 0;
+        stage3Entries = 0;
         nextNumber = 10000;
 
-        try {
-            String savedJson =
-                    preferences.getString(SONGS_KEY, "[]");
+        loadSongbookArray(
+                preferences.getString(SONGS_KEY, "[]"),
+                false
+        );
 
-            JSONArray array = new JSONArray(savedJson);
-            totalSavedEntries = array.length();
+        loadSongbookArray(
+                stage3Preferences.getString(SONGS_KEY, "[]"),
+                true
+        );
+    }
+
+    private void loadSongbookArray(String json, boolean fromStage3) {
+        try {
+            JSONArray array = new JSONArray(
+                    json == null ? "[]" : json
+            );
+
+            if (fromStage3) {
+                stage3Entries = array.length();
+            } else {
+                totalSavedEntries = array.length();
+            }
 
             for (int i = 0; i < array.length(); i++) {
                 JSONObject object = array.optJSONObject(i);
 
                 if (object == null) continue;
 
-                String number = object.optString("number", "");
-                String title = object.optString("title", "");
-                String uri = object.optString("uri", "");
-                String type = object.optString("type", "AUDIO");
+                String number = object.optString("number", "").trim();
+                String title = object.optString("title", "").trim();
+                String uriString = object.optString("uri", "").trim();
+                String type = object.optString("type", "AUDIO").trim();
 
-                if (number.trim().isEmpty()
-                        || title.trim().isEmpty()
-                        || uri.trim().isEmpty()) {
+                if (number.isEmpty()
+                        || title.isEmpty()
+                        || uriString.isEmpty()) {
                     continue;
                 }
 
                 updateNextNumber(number);
 
-                if (!isPlayableEntry(title, type)) continue;
+                if (!isPlayableEntry(title, type, uriString)) {
+                    continue;
+                }
 
-                songs.add(new TvSong(number, title, uri, type));
+                if (!loadedUris.add(uriString)) {
+                    continue;
+                }
+
+                Uri uri;
+
+                try {
+                    uri = Uri.parse(uriString);
+                } catch (Exception ignored) {
+                    continue;
+                }
+
+                if (!canReadUri(uri)) {
+                    android.util.Log.w(
+                            "Stage4TV",
+                            "Skipping inaccessible songbook file: " + title
+                    );
+                    continue;
+                }
+
+                songs.add(new TvSong(
+                        number,
+                        title,
+                        uriString,
+                        normalizeType(title, type)
+                ));
             }
 
         } catch (Exception e) {
             android.util.Log.e(
                     "Stage4TV",
-                    "Could not load TV songbook.",
+                    fromStage3
+                            ? "Could not load Stage 3 songbook entries."
+                            : "Could not load Stage 4 TV songbook.",
                     e
             );
-
-            Toast.makeText(
-                    this,
-                    "Could not read the TV songbook.",
-                    Toast.LENGTH_LONG
-            ).show();
         }
+    }
+
+    private boolean canReadUri(Uri uri) {
+        if (uri == null) return false;
+
+        String scheme = uri.getScheme();
+
+        if (scheme == null) return false;
+
+        if ("songhub-midi".equalsIgnoreCase(scheme)
+                || "songhub-index".equalsIgnoreCase(scheme)) {
+            return false;
+        }
+
+        try {
+            if ("content".equalsIgnoreCase(scheme)) {
+                try (java.io.InputStream input =
+                             getContentResolver().openInputStream(uri)) {
+                    return input != null;
+                }
+            }
+
+            if ("file".equalsIgnoreCase(scheme)) {
+                java.io.File file = new java.io.File(uri.getPath());
+                return file.isFile() && file.canRead();
+            }
+
+        } catch (Exception e) {
+            android.util.Log.w(
+                    "Stage4TV",
+                    "File access check failed: " + uri,
+                    e
+            );
+        }
+
+        return false;
+    }
+
+    private String normalizeType(String title, String type) {
+        String safeType = type == null
+                ? ""
+                : type.toUpperCase(Locale.ROOT);
+
+        String extension = getExtension(title);
+
+        if ("mid".equals(extension)
+                || "midi".equals(extension)
+                || "kar".equals(extension)
+                || safeType.contains("MIDI")
+                || "KAR".equals(safeType)) {
+            return "MIDI/KAR";
+        }
+
+        if ("mp4".equals(extension)
+                || "mkv".equals(extension)
+                || "webm".equals(extension)
+                || "VIDEO".equals(safeType)) {
+            return "VIDEO";
+        }
+
+        return "AUDIO";
     }
 
     private void updateNextNumber(String number) {
@@ -210,7 +327,11 @@ public class Stage4TvActivity extends Activity {
         return false;
     }
 
-    private boolean isPlayableEntry(String title, String type) {
+    private boolean isPlayableEntry(
+            String title,
+            String type,
+            String uriString
+    ) {
         String safeTitle = title == null
                 ? ""
                 : title.toLowerCase(Locale.ROOT);
@@ -219,11 +340,20 @@ public class Stage4TvActivity extends Activity {
                 ? ""
                 : type.toUpperCase(Locale.ROOT);
 
-        return !"CATALOG".equals(safeType)
-                && !"SOUNDFONT".equals(safeType)
-                && !"LYRICS".equals(safeType)
-                && !safeTitle.endsWith(".sf2")
-                && !safeTitle.endsWith(".lrc");
+        String safeUri = uriString == null
+                ? ""
+                : uriString.toLowerCase(Locale.ROOT);
+
+        if ("CATALOG".equals(safeType)
+                || "SOUNDFONT".equals(safeType)
+                || "LYRICS".equals(safeType)
+                || safeTitle.endsWith(".sf2")
+                || safeTitle.endsWith(".lrc")) {
+            return false;
+        }
+
+        return !safeUri.startsWith("songhub-index://")
+                && !safeUri.startsWith("songhub-midi://");
     }
 
     private void buildScreen() {
@@ -250,7 +380,7 @@ public class Stage4TvActivity extends Activity {
         );
 
         TextView heading = new TextView(this);
-        heading.setText("CHOOSE YOUR KARAOKE SONG");
+        heading.setText("STAGE 4 • TV SONGBOOK");
         heading.setTextColor(WHITE);
         heading.setTextSize(29);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -292,8 +422,9 @@ public class Stage4TvActivity extends Activity {
 
         emptyLabel = new TextView(this);
         emptyLabel.setText(
-                "No songs imported on this TV yet.\n"
-                        + "Choose IMPORT SONGS FROM THIS TV."
+                "NO PLAYABLE SONG FILES FOUND.\n\n"
+                        + "Import MIDI, KAR, audio or video files "
+                        + "from this TV."
         );
         emptyLabel.setTextColor(MUTED);
         emptyLabel.setTextSize(18);
@@ -409,8 +540,10 @@ public class Stage4TvActivity extends Activity {
 
         countLabel.setText(
                 "AVAILABLE SONGS: " + songs.size()
-                        + "   •   SAVED FILES: "
+                        + "   •   STAGE 4 FILES: "
                         + totalSavedEntries
+                        + "   •   STAGE 3 ENTRIES: "
+                        + stage3Entries
         );
     }
 
@@ -419,7 +552,6 @@ public class Stage4TvActivity extends Activity {
 
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
-
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
 
         intent.addFlags(
@@ -485,7 +617,6 @@ public class Stage4TvActivity extends Activity {
             }
         }
 
-        saveSongs();
         loadSongs();
 
         if (adapter != null) {
@@ -514,21 +645,8 @@ public class Stage4TvActivity extends Activity {
 
         String uriString = uri.toString();
 
-        try {
-            JSONArray existing = new JSONArray(
-                    preferences.getString(SONGS_KEY, "[]")
-            );
-
-            for (int i = 0; i < existing.length(); i++) {
-                JSONObject object = existing.optJSONObject(i);
-
-                if (object != null
-                        && uriString.equals(
-                                object.optString("uri", ""))) {
-                    return false;
-                }
-            }
-        } catch (Exception ignored) {
+        if (loadedUris.contains(uriString)) {
+            return false;
         }
 
         String fileName = getFileName(uri);
@@ -640,23 +758,6 @@ public class Stage4TvActivity extends Activity {
         }
     }
 
-    private void saveSongs() {
-        try {
-            preferences.edit()
-                    .putString(
-                            SONGS_KEY,
-                            preferences.getString(SONGS_KEY, "[]")
-                    )
-                    .commit();
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not commit TV songbook.",
-                    e
-            );
-        }
-    }
-
     private String getFileName(Uri uri) {
         String name = null;
 
@@ -763,31 +864,38 @@ public class Stage4TvActivity extends Activity {
         String mediaBase = fileNameWithoutExtension(mediaSong.title);
         if (mediaBase.isEmpty()) return "";
 
-        try {
-            JSONArray saved = new JSONArray(
-                    preferences.getString(SONGS_KEY, "[]")
-            );
+        String[] sources = new String[]{
+                preferences.getString(SONGS_KEY, "[]"),
+                stage3Preferences.getString(SONGS_KEY, "[]")
+        };
 
-            for (int i = 0; i < saved.length(); i++) {
-                JSONObject item = saved.optJSONObject(i);
-                if (item == null) continue;
+        for (String source : sources) {
+            try {
+                JSONArray saved = new JSONArray(source);
 
-                String type = item.optString("type", "");
-                String title = item.optString("title", "");
-                String uri = item.optString("uri", "");
+                for (int i = 0; i < saved.length(); i++) {
+                    JSONObject item = saved.optJSONObject(i);
+                    if (item == null) continue;
 
-                if ("LYRICS".equalsIgnoreCase(type)
-                        && mediaBase.equals(fileNameWithoutExtension(title))
-                        && !uri.trim().isEmpty()) {
-                    return uri;
+                    String type = item.optString("type", "");
+                    String title = item.optString("title", "");
+                    String uri = item.optString("uri", "");
+
+                    if ("LYRICS".equalsIgnoreCase(type)
+                            && mediaBase.equals(
+                                    fileNameWithoutExtension(title))
+                            && !uri.trim().isEmpty()
+                            && canReadUri(Uri.parse(uri))) {
+                        return uri;
+                    }
                 }
+            } catch (Exception e) {
+                android.util.Log.e(
+                        "Stage4TV",
+                        "Could not match TV LRC lyrics file.",
+                        e
+                );
             }
-        } catch (Exception e) {
-            android.util.Log.e(
-                    "Stage4TV",
-                    "Could not match TV LRC lyrics file.",
-                    e
-            );
         }
 
         return "";
@@ -800,6 +908,15 @@ public class Stage4TvActivity extends Activity {
             Toast.makeText(
                     this,
                     "This song has no playable media file.",
+                    Toast.LENGTH_LONG
+            ).show();
+            return;
+        }
+
+        if (!canReadUri(Uri.parse(song.uri))) {
+            Toast.makeText(
+                    this,
+                    "TV cannot access this song file. Import it again on the TV.",
                     Toast.LENGTH_LONG
             ).show();
             return;
