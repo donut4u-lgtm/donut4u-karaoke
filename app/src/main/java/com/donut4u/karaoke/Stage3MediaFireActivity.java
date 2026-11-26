@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -1088,9 +1087,18 @@ public class Stage3MediaFireActivity extends Activity {
                             "Song added to Stage 3 songbook.",
                             Toast.LENGTH_LONG).show();
 
-                    startActivity(new Intent(
+                    // Preserve TV mode when opening the player.
+                    Intent playerIntent = new Intent(
                             this,
-                            Stage3PlayerActivity.class));
+                            Stage3PlayerActivity.class
+                    );
+
+                    playerIntent.putExtra(
+                            EXTRA_TV_MODE,
+                            tvMode
+                    );
+
+                    startActivity(playerIntent);
                 });
 
             } catch (Exception e) {
