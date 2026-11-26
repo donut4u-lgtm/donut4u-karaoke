@@ -782,13 +782,11 @@ public class TvMonitorActivity extends Activity
             if (currentLyrics != null
                     && !currentLyrics.trim().isEmpty()) {
 
-                if (!currentLyrics.contentEquals(lyricsView.getText())) {
-                    displayHighlightedLyrics(
-                            currentLyrics,
-                            currentActiveLine,
-                            currentActiveLineOffset
-                    );
-                }
+                displayHighlightedLyrics(
+                        currentLyrics,
+                        currentActiveLine,
+                        currentActiveLineOffset
+                );
 
                 return;
             }
@@ -817,7 +815,34 @@ public class TvMonitorActivity extends Activity
                         tvMidiDurationTicks
                 );
 
-        if (rendered == null) {
+        /*
+         * IMPORTANT TV-ONLY FALLBACK:
+         * Some MIDI/KAR files are playable on the TV but the TV parser
+         * can return an empty lyric result. Do not replace valid lyrics
+         * already received from the phone with that empty result.
+         */
+        if (rendered == null
+                || rendered.toString().trim().isEmpty()) {
+
+            if (currentLyrics != null
+                    && !currentLyrics.trim().isEmpty()) {
+
+                displayHighlightedLyrics(
+                        currentLyrics,
+                        currentActiveLine,
+                        currentActiveLineOffset
+                );
+
+            } else {
+
+                String waitingMessage =
+                        "Waiting for Stage 3 lyrics from phone...";
+
+                if (!waitingMessage.contentEquals(lyricsView.getText())) {
+                    lyricsView.setText(waitingMessage);
+                }
+            }
+
             return;
         }
 
