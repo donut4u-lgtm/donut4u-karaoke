@@ -1,4 +1,3 @@
-
 package com.donut4u.karaoke;
 
 import android.app.Activity;
@@ -487,92 +486,98 @@ public class Stage4TvPlayerActivity extends Activity {
 
                         @Override
                         public void onReady(long durationTicks) {
-                            if (released) return;
+                            handler.post(() -> {
+                                if (released) return;
 
-                            try {
-                                midiReady = true;
+                                try {
+                                    midiReady = true;
 
-                                File midiFile = new File(
-                                        getFilesDir(),
-                                        "stage3_midi/song.mid"
-                                );
-
-                                midiLyrics = Stage3MidiLyrics.read(midiFile);
-
-                                if (midiLyrics.hasLyrics()) {
-                                    usingLrcFallback = false;
-
-                                    lyricsLabel.setText(
-                                            midiLyrics.styledFullTextAtTick(
-                                                    0L,
-                                                    durationTicks
-                                            )
+                                    File midiFile = new File(
+                                            getFilesDir(),
+                                            "stage3_midi/song.mid"
                                     );
 
-                                    statusLabel.setText("MIDI / KAR PLAYING");
+                                    midiLyrics = Stage3MidiLyrics.read(midiFile);
 
-                                } else if (!lrcUri.trim().isEmpty()) {
-                                    usingLrcFallback = true;
-                                    loadLrcLyrics();
+                                    if (midiLyrics.hasLyrics()) {
+                                        usingLrcFallback = false;
 
-                                    if (!lrcLines.isEmpty()) {
-                                        statusLabel.setText(
-                                                "MIDI / KAR PLAYING - LRC LYRICS"
-                                        );
-                                    } else {
                                         lyricsLabel.setText(
-                                                "No embedded MIDI lyrics and the matching LRC file could not be loaded."
+                                                midiLyrics.styledFullTextAtTick(
+                                                        0L,
+                                                        durationTicks
+                                                )
                                         );
+
+                                        statusLabel.setText("MIDI / KAR PLAYING");
+
+                                    } else if (!lrcUri.trim().isEmpty()) {
+                                        usingLrcFallback = true;
+                                        loadLrcLyrics();
+
+                                        if (!lrcLines.isEmpty()) {
+                                            statusLabel.setText(
+                                                    "MIDI / KAR PLAYING - LRC LYRICS"
+                                            );
+                                        } else {
+                                            lyricsLabel.setText(
+                                                    "No embedded MIDI lyrics and the matching LRC file could not be loaded."
+                                            );
+                                        }
+
+                                    } else {
+                                        usingLrcFallback = false;
+
+                                        lyricsLabel.setText(
+                                                "No embedded lyrics or matching LRC file were found."
+                                        );
+
+                                        statusLabel.setText("MIDI / KAR PLAYING");
                                     }
 
-                                } else {
-                                    usingLrcFallback = false;
+                                    lastLyricLine = Integer.MIN_VALUE;
+                                    lastLrcLine = Integer.MIN_VALUE;
 
-                                    lyricsLabel.setText(
-                                            "No embedded lyrics or matching LRC file were found."
+                                    updateMidiDisplay();
+
+                                } catch (Throwable error) {
+                                    midiReady = false;
+
+                                    android.util.Log.e(
+                                            "Stage4TVPlayer",
+                                            "MIDI ready callback failed.",
+                                            error
                                     );
 
-                                    statusLabel.setText("MIDI / KAR PLAYING");
+                                    showError(
+                                            "MIDI started, but lyrics could not be prepared: "
+                                                    + errorText(error)
+                                    );
                                 }
-
-                                lastLyricLine = Integer.MIN_VALUE;
-                                lastLrcLine = Integer.MIN_VALUE;
-
-                                updateMidiDisplay();
-
-                            } catch (Throwable error) {
-                                midiReady = false;
-
-                                android.util.Log.e(
-                                        "Stage4TVPlayer",
-                                        "MIDI ready callback failed.",
-                                        error
-                                );
-
-                                showError(
-                                        "MIDI started, but lyrics could not be prepared: "
-                                                + errorText(error)
-                                );
-                            }
+                            });
                         }
 
                         @Override
                         public void onError(String message) {
-                            if (released) return;
+                            handler.post(() -> {
+                                if (released) return;
 
-                            midiReady = false;
+                                midiReady = false;
 
-                            showError(
-                                    "MIDI playback error: " + message
-                            );
+                                showError(
+                                        "MIDI playback error: " + message
+                                );
+                            });
                         }
 
                         @Override
                         public void onFinished() {
-                            if (released) return;
+                            handler.post(() -> {
+                                if (released) return;
 
-                            midiReady = false;
-                            statusLabel.setText("SONG FINISHED");
+                                midiReady = false;
+                                statusLabel.setText("SONG FINISHED");
+                            });
                         }
                     }
             );
