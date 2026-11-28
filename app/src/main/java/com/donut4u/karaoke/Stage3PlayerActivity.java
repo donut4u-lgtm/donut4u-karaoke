@@ -1,3481 +1,1993 @@
+
 package com.donut4u.karaoke;
 
-import android.Manifest;
-import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.content.res.ColorStateList;
 import android.graphics.Color;
-import android.graphics.Matrix;
-import android.graphics.Typeface;
-import android.net.Uri;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.text.Layout;
+import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
-import android.util.Log;
-import android.view.Gravity;
-import android.view.TextureView;
-import android.view.View;
-import android.widget.Button;
-import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.SeekBar;
-import android.widget.TextView;
-import android.widget.Toast;
 
-import androidx.media3.common.MediaItem;
-import androidx.media3.common.PlaybackException;
-import androidx.media3.common.Player;
-import androidx.media3.common.VideoSize;
-import androidx.media3.exoplayer.ExoPlayer;
-
-import com.google.android.gms.ads.AdRequest;
-import com.google.android.gms.ads.AdSize;
-import com.google.android.gms.ads.AdView;
-import com.google.android.gms.ads.MobileAds;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.text.Normalizer;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class Stage3MidiLyrics {
+
+private static final int ACTIVE_GREEN = Color.rgb(0, 255, 100);
+private static final long DEFAULT_TEMPO = 500000L;
+private static final int MAX_VISIBLE_LINES = 5;
+private static final int MAX_LINE_CHARACTERS = 36;
+private static final int MAX_LINE_EVENTS = 16;
+
+private final List<LyricEvent> events;
+private final List<TempoEvent> tempos;
+private final String title;
+private final String singer;
+private final String composer;
+private final int ppq;
+private final boolean hasExplicitStanzas;
+
+private Stage3MidiLyrics(
+List<LyricEvent> events,
+List<TempoEvent> tempos,
+String title,
+String singer,
+String composer,
+int ppq,
+boolean hasExplicitStanzas) {
+
+this.events = events;
+this.tempos = tempos;
+this.title = safe(title);
+this.singer = safe(singer);
+this.composer = safe(composer);
+this.ppq = ppq > 0 ? ppq : 480;
+this.hasExplicitStanzas = hasExplicitStanzas;
+
+if (this.tempos.isEmpty()) {
+this.tempos.add(new TempoEvent(0, DEFAULT_TEMPO));
+}
+
+Collections.sort(this.tempos, new Comparator<TempoEvent>() {
+@Override
+public int compare(TempoEvent a, TempoEvent b) {
+return Long.compare(a.tick, b.tick);
+}
+});
+}
+
+public static Stage3MidiLyrics empty() {
+List<LyricEvent> e = new ArrayList<>();
+List<TempoEvent> t = new ArrayList<>();
+t.add(new TempoEvent(0, DEFAULT_TEMPO));
+return new Stage3MidiLyrics(e, t, "", "", "", 480, false);
+}
+
+public String getTitle() {
+return title;
+}
+
+public String getSinger() {
+return singer;
+}
+
+public String getComposer() {
+return composer;
+}
+
+public int getTicksPerQuarterNote() {
+return ppq;
+}
+
+public boolean hasLyrics() {
+for (LyricEvent e : events) {
+if (!e.section && !e.text.trim().isEmpty()) return true;
+}
+return false;
+}
+
+/*
+ * Converts a matched external LRC file into the same timed lyric
+ * event structure used by the MIDI lyric renderer.
+ *
+ * The MIDI tempo map and PPQ are retained so LRC timestamps
+ * synchronize with the MIDI player's tick position.
+ */
+public Stage3MidiLyrics withLrcText(String lrcText) {
+
+if (lrcText == null || lrcText.trim().isEmpty()) {
+return this;
+}
+
+List<LyricEvent> parsed = new ArrayList<>();
+
+String lrcTitle = "";
+String lrcSinger = "";
+long offsetMillis = 0L;
+int sequence = 0;
+int lineNumber = 0;
+
+Pattern timestampPattern = Pattern.compile(
+"\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]");
+
+String[] lines = lrcText
+.replace("\r\n", "\n")
+.replace('\r', '\n')
+.split("\n");
+
+for (String originalLine : lines) {
+
+if (originalLine == null) continue;
+
+String line = originalLine.trim();
+if (line.isEmpty()) continue;
+
+String lower = line.toLowerCase(Locale.ROOT);
+
+if (lower.startsWith("[ti:")) {
+lrcTitle = metadataValue(line);
+continue;
+}
+
+if (lower.startsWith("[ar:")) {
+lrcSinger = metadataValue(line);
+continue;
+}
+
+if (lower.startsWith("[offset:")) {
+String value = metadataValue(line);
+try {
+offsetMillis = Long.parseLong(value.trim());
+} catch (Exception ignored) {
+offsetMillis = 0L;
+}
+continue;
+}
+
+Matcher matcher = timestampPattern.matcher(line);
+
+List<Long> timestamps = new ArrayList<>();
+int lastTimestampEnd = -1;
+
+while (matcher.find()) {
+
+try {
+long minutes = Long.parseLong(matcher.group(1));
+long seconds = Long.parseLong(matcher.group(2));
+
+String fractionText = matcher.group(3);
+long fraction = 0L;
+
+if (fractionText != null) {
+if (fractionText.length() == 1) {
+fraction = Long.parseLong(fractionText) * 100L;
+} else if (fractionText.length() == 2) {
+fraction = Long.parseLong(fractionText) * 10L;
+} else {
+fraction = Long.parseLong(
+fractionText.substring(0, 3));
+}
+}
+
+long millis =
+(minutes * 60000L)
++ (seconds * 1000L)
++ fraction;
+
+millis = Math.max(0L, millis + offsetMillis);
+timestamps.add(millis);
+lastTimestampEnd = matcher.end();
+
+} catch (Exception ignored) {
+}
+}
+
+if (timestamps.isEmpty()) {
+continue;
+}
+
+String lyricText = line.substring(
+Math.max(0, lastTimestampEnd)).trim();
+
+if (lyricText.isEmpty()) {
+continue;
+}
+
+if (lyricText.startsWith("[")
+&& lyricText.endsWith("]")) {
+String heading = extractHeading(lyricText);
+if (heading != null) {
+continue;
+}
+}
+
+if (isCredit(lyricText)
+|| isNonLyricTag(lyricText)
+|| isControlToken(lyricText)) {
+continue;
+}
+
+for (Long timestamp : timestamps) {
+
+if (timestamp == null) continue;
+
+long tick = millisToTick(timestamp);
 
-public class Stage3PlayerActivity extends Activity {
+parsed.add(new LyricEvent(
+tick,
+lyricText,
+sequence++,
+true,
+false,
+false,
+false,
+false));
+}
+lineNumber++;
+}
+
+if (parsed.isEmpty()) {
+return this;
+}
+
+Collections.sort(parsed, new Comparator<LyricEvent>() {
+@Override
+public int compare(LyricEvent a, LyricEvent b) {
+int byTick = Long.compare(a.tick, b.tick);
+return byTick != 0
+? byTick
+: Integer.compare(a.sequence, b.sequence);
+}
+});
 
-    private static final String SONGBOOK_PREFS =
-            "donut4u_stage3_songbook";
+int line = 0;
+int stanza = 0;
 
-    private static final String SONGS_KEY = "songs_json";
+for (int i = 0; i < parsed.size(); i++) {
 
-    private static final String EXTRA_TV_MODE =
-            "com.donut4u.karaoke.EXTRA_TV_MODE";
+LyricEvent event = parsed.get(i);
 
-    private static final String DEFAULT_SOUNDFONT =
-            "builtin://default";
+if (i > 0) {
+LyricEvent previous = parsed.get(i - 1);
 
-    private static final int SONGHUB_SECTOR_SIZE = 2048;
+if (event.tick != previous.tick
+|| !event.text.equals(previous.text)) {
+line++;
+}
+}
 
-    private static final long MAX_SONGHUB_SLICE_BYTES =
-            64L * 1024L * 1024L;
+event.line = line;
+event.stanza = stanza;
+}
 
-    private static final int DARK_GREEN =
-            Color.rgb(5, 24, 15);
+List<TempoEvent> copiedTempos =
+new ArrayList<>(tempos);
 
-    private static final int ACTIVE_GREEN =
-            Color.rgb(0, 255, 100);
+String finalTitle = !lrcTitle.isEmpty()
+? lrcTitle : title;
 
-    private static final int WHITE = Color.WHITE;
+String finalSinger = !lrcSinger.isEmpty()
+? lrcSinger : singer;
 
-    private static final int SEEK_MAX = 1000;
+return new Stage3MidiLyrics(
+parsed,
+copiedTempos,
+finalTitle,
+finalSinger,
+composer,
+ppq,
+false);
+}
 
-    private static final int REQUEST_BACKGROUND_IMAGE = 7301;
-    private static final int REQUEST_BACKGROUND_VIDEO = 7302;
-    private static final int REQUEST_MIC_PERMISSION = 7401;
+private static String metadataValue(String line) {
 
-    private static final String PREF_BG_TYPE =
-            "stage3_personal_background_type";
+if (line == null) return "";
 
-    private static final String PREF_BG_URI =
-            "stage3_personal_background_uri";
+int colon = line.indexOf(':');
+int close = line.lastIndexOf(']');
 
-    private static final String PREF_BG_DARKNESS =
-            "stage3_personal_background_darkness";
+if (colon < 0) return "";
 
-    private static final String PREF_BG_FIT =
-            "stage3_personal_background_fit";
+if (close <= colon) {
+return line.substring(colon + 1).trim();
+}
 
-    private static final String BG_DEFAULT = "DEFAULT";
-    private static final String BG_IMAGE = "IMAGE";
-    private static final String BG_VIDEO = "VIDEO";
+return line.substring(colon + 1, close).trim();
+}
 
-    private static final String FIT_FILL = "FILL";
-    private static final String FIT = "FIT";
-    private static final String FIT_STRETCH = "STRETCH";
+private long millisToTick(long millis) {
 
-    // ---------------------------------------------------------
-    // ADMOB — STAGE 3 PLAYER
-    // ---------------------------------------------------------
+long targetMillis = Math.max(0L, millis);
 
-    private static final String STAGE3_AD_UNIT_ID =
-            "ca-app-pub-5625332026157890/2970292504";
+long low = 0L;
+long high = Math.max(1000000L, (long) ppq * 10000L);
 
-    private AdView stage3AdView;
+while (tickToMillis(high) < targetMillis
+&& high < Long.MAX_VALUE / 4L) {
+high *= 2L;
+}
 
-    // ---------------------------------------------------------
-    // STAGE 3 LAUNCH DIAGNOSTICS
-    // ---------------------------------------------------------
+while (low < high) {
 
-    private static final String DIAG_PREFS =
-            "stage3_player_launch_diagnostics";
+long middle = low + ((high - low) >>> 1);
 
-    private static final String DIAG_KEY =
-            "last_checkpoint";
+if (tickToMillis(middle) < targetMillis) {
+low = middle + 1L;
+} else {
+high = middle;
+}
+}
 
-    private static final String DIAG_ERROR_KEY =
-            "last_error";
+return low;
+}
 
-    private void markPlayerLaunchCheckpoint(String checkpoint) {
-        try {
-            getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
-                    .edit()
-                    .putString(DIAG_KEY, checkpoint)
-                    .putLong("last_checkpoint_time",
-                            System.currentTimeMillis())
-                    .apply();
-        } catch (Exception ignored) {
-        }
+public String getEditableText() {
 
-        Log.e("Stage3Launch", "CHECKPOINT: " + checkpoint);
-    }
+StringBuilder result = new StringBuilder();
+int previousLine = Integer.MIN_VALUE;
+int previousStanza = Integer.MIN_VALUE;
+LyricEvent previous = null;
 
-    private String getPlayerLaunchCheckpoint() {
-        try {
-            return getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
-                    .getString(DIAG_KEY, "unknown");
-        } catch (Exception ignored) {
-            return "unavailable";
-        }
-    }
+for (LyricEvent e : events) {
 
-    private void showStartupDiagnostic(
-            String message,
-            Throwable error) {
-
-        String details = message;
-
-        if (error != null) {
-            Log.e("Stage3Launch", message, error);
-
-            String errorText =
-                    error.getClass().getSimpleName()
-                            + ": "
-                            + String.valueOf(error.getMessage());
-
-            details += "\n\n" + errorText;
-
-            try {
-                getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
-                        .edit()
-                        .putString(DIAG_ERROR_KEY,
-                                Log.getStackTraceString(error))
-                        .apply();
-            } catch (Exception ignored) {
-            }
-        }
-
-        try {
-            LinearLayout diagnostic =
-                    new LinearLayout(this);
-
-            diagnostic.setOrientation(
-                    LinearLayout.VERTICAL);
-
-            diagnostic.setGravity(Gravity.CENTER_VERTICAL);
-
-            diagnostic.setPadding(
-                    dp(20), dp(20), dp(20), dp(20));
-
-            diagnostic.setBackgroundColor(DARK_GREEN);
-
-            TextView heading = new TextView(this);
-            heading.setText("STAGE 3 STARTUP DIAGNOSTIC");
-            heading.setTextColor(ACTIVE_GREEN);
-            heading.setTextSize(22);
-            heading.setTypeface(
-                    Typeface.DEFAULT, Typeface.BOLD);
+if (e.section || e.text.trim().isEmpty()) continue;
 
-            TextView text = new TextView(this);
-            text.setTextColor(WHITE);
-            text.setTextSize(17);
-            text.setText(
-                    details
-                            + "\n\nLast checkpoint: "
-                            + getPlayerLaunchCheckpoint()
-                            + "\n\nPlease note this checkpoint "
-                            + "before returning to the Songbook.");
+if (e.line != previousLine || e.stanza != previousStanza) {
 
-            Button back = new Button(this);
-            back.setText("BACK TO SONGBOOK");
-            back.setOnClickListener(v -> {
-                returningToSongbook = true;
-                finish();
-            });
+if (result.length() > 0) result.append('\n');
 
-            diagnostic.addView(heading);
-            diagnostic.addView(text);
-            diagnostic.addView(back);
+previousLine = e.line;
+previousStanza = e.stanza;
+previous = null;
 
-            setContentView(diagnostic);
+} else if (hasWordBoundaryBefore(e, previous)) {
 
-        } catch (Throwable displayError) {
-            Log.e("Stage3Launch",
-                    "Could not display diagnostic screen",
-                    displayError);
+result.append(' ');
+}
 
-            Toast.makeText(
-                    this,
-                    details + "\nCheckpoint: "
-                            + getPlayerLaunchCheckpoint(),
-                    Toast.LENGTH_LONG).show();
-        }
-    }
+result.append(e.text);
+previous = e;
+}
 
-    private ExoPlayer player;
-    private ExoPlayer backgroundPlayer;
+return result.toString();
+}
 
-    private Stage3MidiEngine midiEngine;
+public boolean applyEditedText(String editedText) {
 
-    private FrameLayout stage;
-    private TextureView backgroundTexture;
-    private ImageView backgroundImage;
+if (editedText == null || events.isEmpty()) return false;
 
-    private LinearLayout overlay;
-    private TextView songTitleLabel;
-    private TextView singerLabel;
-    private TextView lyricsLabel;
-    private TextView countdownLabel;
-    private ScrollView lyricsScroll;
+String normalized = editedText
+.replace("\r\n", "\n")
+.replace('\r', '\n');
 
-    private TextView playbackTimeLabel;
-    private TextView backButton;
+String[] lines = normalized.split("\n", -1);
 
-    private Button playButton;
-    private Button pauseButton;
-    private Button stopButton;
-    private Button backgroundButton;
+List<List<LyricEvent>> groupedLines = new ArrayList<>();
+List<LyricEvent> current = null;
 
-    // Microphone monitor controls
-    private Stage3MicrophoneMonitor microphoneMonitor;
-    private Button microphoneButton;
-    private TextView microphoneStatusLabel;
+int oldLine = Integer.MIN_VALUE;
+int oldStanza = Integer.MIN_VALUE;
 
-    // Karaoke scoring
-    private Stage3MidiNoteReader currentMidiNoteReader;
+for (LyricEvent e : events) {
 
-    private final Stage3KaraokeScorer karaokeScorer =
-            new Stage3KaraokeScorer();
+if (e.section || e.text.trim().isEmpty()) continue;
 
-    private TextView scoreLabel;
+if (current == null
+|| e.line != oldLine
+|| e.stanza != oldStanza) {
 
-    private volatile int latestMicLevel;
-    private volatile int latestMicNote = -1;
-    private volatile double latestMicConfidence;
+current = new ArrayList<>();
+groupedLines.add(current);
+oldLine = e.line;
+oldStanza = e.stanza;
+}
 
-    private SeekBar seekBar;
+current.add(e);
+}
 
-    private Stage3MidiTiming currentMidiTiming;
+if (lines.length != groupedLines.size()) return false;
 
-    private boolean released;
-    private boolean midiMode;
-    private boolean midiReady;
-    private boolean midiPausedByLifecycle;
-    private boolean backgroundAvailable;
-    private boolean userSeeking;
-    private boolean updatingSeekBar;
-    private boolean returningToSongbook;
+List<String[]> words = new ArrayList<>();
 
-    private boolean tvMode;
+for (String line : lines) {
 
-    private long midiDurationTicks;
+String clean = line.trim();
 
-    private int lastRenderedLyricStart = -2;
-    private int lastRenderedLyricEnd = -2;
+if (clean.isEmpty()) return false;
 
-    private int lastScrolledLyricLine = Integer.MIN_VALUE;
+words.add(clean.split("\\s+"));
+}
 
-    private String lastRenderedLyricText;
+for (int lineIndex = 0;
+lineIndex < groupedLines.size();
+lineIndex++) {
 
-    private VideoSize currentBackgroundVideoSize;
+List<LyricEvent> lineEvents = groupedLines.get(lineIndex);
+String[] lineWords = words.get(lineIndex);
 
-    private final Handler handler =
-            new Handler(Looper.getMainLooper());
+if (lineEvents.isEmpty()) return false;
 
-    private Stage3MidiLyrics currentMidiLyrics =
-            Stage3MidiLyrics.empty();
+List<List<LyricEvent>> groups = new ArrayList<>();
+List<LyricEvent> group = null;
 
-    private Stage3SongQueue.QueuedSong currentSong;
+for (int i = 0; i < lineEvents.size(); i++) {
 
-    private final Runnable progressUpdater = new Runnable() {
-        @Override
-        public void run() {
+LyricEvent e = lineEvents.get(i);
+LyricEvent previous = i > 0
+? lineEvents.get(i - 1) : null;
 
-            if (released || returningToSongbook) {
-                return;
-            }
+if (group == null
+|| hasWordBoundaryBefore(e, previous)) {
 
-            if (midiMode && midiReady && midiEngine != null) {
+group = new ArrayList<>();
+groups.add(group);
+}
 
-                long tick = midiEngine.getCurrentTick();
+group.add(e);
+}
 
-                updateMidiLyricsAtTick(tick);
-                updateMidiControls(tick);
+List<String> assignments = new ArrayList<>();
 
-            } else if (!midiMode && player != null) {
+for (int i = 0; i < lineEvents.size(); i++) {
+assignments.add("");
+}
 
-                updateMediaControls();
-            }
+for (int i = 0; i < lineWords.length; i++) {
 
-            handler.postDelayed(this, 100);
-        }
-    };
+int groupIndex = Math.min(
+groups.size() - 1,
+(int) (((long) i * groups.size()) / lineWords.length));
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+int eventIndex = lineEvents.indexOf(
+groups.get(groupIndex).get(0));
 
-        tvMode = getIntent().getBooleanExtra(
-                EXTRA_TV_MODE, false);
+if (eventIndex < 0) return false;
 
-        markPlayerLaunchCheckpoint("01_ACTIVITY_CREATED");
+String existing = assignments.get(eventIndex);
 
-        try {
-            Stage3SongQueue.initialize(this);
-            markPlayerLaunchCheckpoint("02_QUEUE_INITIALIZED");
+if (!existing.isEmpty()) existing += " ";
 
-            midiEngine = Stage3MidiEngine.create(this);
-            markPlayerLaunchCheckpoint("03_MIDI_ENGINE_CREATED");
+assignments.set(
+eventIndex,
+existing + lineWords[i]);
+}
 
-            buildScreen();
-            markPlayerLaunchCheckpoint("04_SCREEN_BUILT");
+for (int i = 0; i < lineEvents.size(); i++) {
+lineEvents.get(i).text = assignments.get(i);
+}
+}
 
-            startSelectedSong();
-            markPlayerLaunchCheckpoint("05_SELECTED_SONG_STARTED");
+return true;
+}
 
-            handler.post(progressUpdater);
-            markPlayerLaunchCheckpoint("06_PROGRESS_UPDATER_STARTED");
+private static boolean hasWordBoundaryBefore(
+LyricEvent event,
+LyricEvent previous) {
 
-            Toast.makeText(
-                    this,
-                    "STAGE 3 PLAYER OPENED",
-                    Toast.LENGTH_SHORT).show();
-
-        } catch (Throwable error) {
-            markPlayerLaunchCheckpoint("ERROR_ON_CREATE");
-            showStartupDiagnostic(
-                    "Stage 3 player startup failed.",
-                    error);
-        }
-    }
-
-    private SharedPreferences backgroundPreferences() {
-        return getSharedPreferences(
-                SONGBOOK_PREFS,
-                MODE_PRIVATE);
-    }
-
-    private int dp(float value) {
-        return (int) (
-                value * getResources()
-                        .getDisplayMetrics().density + 0.5f);
-    }
-
-    private void buildScreen() {
-
-        stage = new FrameLayout(this);
-        stage.setBackgroundColor(DARK_GREEN);
-
-        backgroundImage = new ImageView(this);
-        backgroundImage.setVisibility(View.GONE);
-        backgroundImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        backgroundImage.setBackgroundColor(DARK_GREEN);
-
-        FrameLayout.LayoutParams imageParams =
-                new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT);
-
-        stage.addView(backgroundImage, imageParams);
-
-        backgroundTexture = new TextureView(this);
-        backgroundTexture.setVisibility(View.GONE);
-        backgroundTexture.setOpaque(false);
-
-        FrameLayout.LayoutParams videoParams =
-                new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT);
-
-        stage.addView(backgroundTexture, videoParams);
-
-        backgroundTexture.addOnLayoutChangeListener(
-                (v, left, top, right, bottom,
-                 oldLeft, oldTop, oldRight, oldBottom) -> {
-                    applyVideoFitMode();
-                });
-
-        overlay = new LinearLayout(this);
-        overlay.setOrientation(LinearLayout.VERTICAL);
-        overlay.setGravity(Gravity.CENTER);
-        overlay.setPadding(
-                dp(tvMode ? 30 : 14),
-                dp(tvMode ? 12 : 8),
-                dp(tvMode ? 30 : 14),
-                dp(tvMode ? 8 : 8));
-
-        FrameLayout.LayoutParams overlayParams =
-                new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT);
-
-        stage.addView(overlay, overlayParams);
-
-        applyBackgroundDarkness();
-
-        songTitleLabel = new TextView(this);
-        songTitleLabel.setText("");
-        songTitleLabel.setTextColor(WHITE);
-        songTitleLabel.setTextSize(tvMode ? 25 : 19);
-        songTitleLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        songTitleLabel.setGravity(Gravity.CENTER);
-        songTitleLabel.setMaxLines(2);
-        songTitleLabel.setPadding(
-                dp(8), dp(3), dp(8), dp(4));
-
-        overlay.addView(
-                songTitleLabel,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        singerLabel = new TextView(this);
-        singerLabel.setText("");
-        singerLabel.setTextColor(WHITE);
-        singerLabel.setTextSize(tvMode ? 19 : 15);
-        singerLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        singerLabel.setGravity(Gravity.CENTER);
-        singerLabel.setPadding(
-                dp(8), dp(1), dp(8), dp(3));
-        singerLabel.setVisibility(View.GONE);
-
-        overlay.addView(
-                singerLabel,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        View lyricsTopGap = new View(this);
-
-        overlay.addView(
-                lyricsTopGap,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(tvMode ? 8 : 22)));
-
-        FrameLayout lyricsContainer = new FrameLayout(this);
-
-        LinearLayout.LayoutParams containerParams =
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        0,
-                        1f);
-
-        lyricsScroll = new ScrollView(this);
-        lyricsScroll.setFillViewport(true);
-        lyricsScroll.setVerticalScrollBarEnabled(false);
-        lyricsScroll.setHorizontalScrollBarEnabled(false);
-        lyricsScroll.setBackgroundColor(Color.TRANSPARENT);
-        lyricsScroll.setOverScrollMode(
-                ScrollView.OVER_SCROLL_NEVER);
-        lyricsScroll.setSmoothScrollingEnabled(true);
-        lyricsScroll.setClipToPadding(false);
-        lyricsScroll.setPadding(0, dp(4), 0, dp(4));
-
-        lyricsContainer.addView(
-                lyricsScroll,
-                new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT));
-
-        lyricsLabel = new TextView(this);
-        lyricsLabel.setText("");
-        lyricsLabel.setTextColor(WHITE);
-        lyricsLabel.setTextSize(tvMode ? 30 : 22);
-        lyricsLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        lyricsLabel.setGravity(Gravity.CENTER);
-        lyricsLabel.setPadding(
-                dp(10), dp(10), dp(10), dp(10));
-        lyricsLabel.setLineSpacing(
-                dp(tvMode ? 9 : 6), 1.05f);
-        lyricsLabel.setIncludeFontPadding(true);
-        lyricsLabel.setMaxLines(Integer.MAX_VALUE);
-        lyricsLabel.setBreakStrategy(
-                Layout.BREAK_STRATEGY_HIGH_QUALITY);
-        lyricsLabel.setHyphenationFrequency(
-                Layout.HYPHENATION_FREQUENCY_NONE);
-
-        lyricsScroll.addView(
-                lyricsLabel,
-                new ScrollView.LayoutParams(
-                        ScrollView.LayoutParams.MATCH_PARENT,
-                        ScrollView.LayoutParams.WRAP_CONTENT));
-
-        countdownLabel = new TextView(this);
-        countdownLabel.setTextColor(ACTIVE_GREEN);
-        countdownLabel.setTextSize(tvMode ? 100 : 76);
-        countdownLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        countdownLabel.setGravity(Gravity.CENTER);
-        countdownLabel.setShadowLayer(
-                dp(12), 0, 0, Color.BLACK);
-        countdownLabel.setVisibility(View.GONE);
-        countdownLabel.setClickable(false);
-
-        lyricsContainer.addView(
-                countdownLabel,
-                new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT));
-
-        overlay.addView(lyricsContainer, containerParams);
-
-        buildPlaybackControls();
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(DARK_GREEN);
-
-        if (tvMode) {
-
-            // TV uses the complete screen for lyrics and controls.
-            // No reserved 250dp advertisement area.
-            root.addView(
-                    stage,
-                    new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.MATCH_PARENT));
-
-        } else {
-
-            root.addView(
-                    stage,
-                    new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            0,
-                            1f));
-
-            FrameLayout adHolder = new FrameLayout(this);
-            adHolder.setBackgroundColor(DARK_GREEN);
-
-            root.addView(
-                    adHolder,
-                    new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            dp(250)));
-
-            setContentView(root);
-
-            loadStage3Ad(adHolder);
-        }
-
-        if (tvMode) {
-            setContentView(root);
-        }
-
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-    }
-
-    // ---------------------------------------------------------
-    // ADMOB LOADING
-    // ---------------------------------------------------------
-
-    private void loadStage3Ad(FrameLayout adHolder) {
-
-        if (tvMode) {
-            return;
-        }
-
-        try {
-            stage3AdView = new AdView(this);
-
-            stage3AdView.setAdSize(
-                    AdSize.MEDIUM_RECTANGLE);
-
-            stage3AdView.setAdUnitId(
-                    STAGE3_AD_UNIT_ID);
-
-            FrameLayout.LayoutParams adParams =
-                    new FrameLayout.LayoutParams(
-                            dp(300),
-                            dp(250),
-                            Gravity.CENTER);
-
-            adHolder.addView(stage3AdView, adParams);
-
-            MobileAds.initialize(
-                    getApplicationContext(),
-                    initializationStatus -> {
-
-                        if (stage3AdView == null
-                                || isFinishing()
-                                || isDestroyed()) {
-                            return;
-                        }
-
-                        runOnUiThread(() -> {
-
-                            if (stage3AdView == null
-                                    || isFinishing()
-                                    || isDestroyed()) {
-                                return;
-                            }
-
-                            AdRequest request =
-                                    new AdRequest.Builder().build();
-
-                            stage3AdView.loadAd(request);
-                        });
-                    });
-
-        } catch (Exception error) {
-
-            Log.e(
-                    "Stage3AdMob",
-                    "Could not initialize Stage 3 ad.",
-                    error);
-        }
-    }
-
-    private void buildPlaybackControls() {
-
-        LinearLayout controls = new LinearLayout(this);
-
-        controls.setOrientation(LinearLayout.VERTICAL);
-        controls.setGravity(Gravity.CENTER);
-        controls.setPadding(
-                dp(tvMode ? 12 : 8),
-                dp(tvMode ? 2 : 4),
-                dp(tvMode ? 12 : 8),
-                dp(2));
-        controls.setBackgroundColor(Color.TRANSPARENT);
-
-        playbackTimeLabel = new TextView(this);
-        playbackTimeLabel.setText("00:00 / 00:00");
-        playbackTimeLabel.setTextColor(WHITE);
-        playbackTimeLabel.setTextSize(tvMode ? 18 : 14);
-        playbackTimeLabel.setGravity(Gravity.CENTER);
-        playbackTimeLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        playbackTimeLabel.setPadding(
-                dp(4), dp(2), dp(4), dp(2));
-
-        controls.addView(
-                playbackTimeLabel,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        seekBar = new SeekBar(this);
-        seekBar.setMax(SEEK_MAX);
-        seekBar.setProgress(0);
-        seekBar.setEnabled(false);
-        seekBar.setVisibility(View.VISIBLE);
-        seekBar.setMinimumHeight(dp(tvMode ? 42 : 48));
-        seekBar.setPadding(dp(8), 0, dp(8), 0);
-
-        if (android.os.Build.VERSION.SDK_INT >= 21) {
-            seekBar.setProgressTintList(
-                    ColorStateList.valueOf(ACTIVE_GREEN));
-            seekBar.setProgressBackgroundTintList(
-                    ColorStateList.valueOf(WHITE));
-            seekBar.setThumbTintList(
-                    ColorStateList.valueOf(ACTIVE_GREEN));
-        }
-
-        LinearLayout.LayoutParams seekParams =
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(tvMode ? 42 : 52));
-
-        controls.addView(seekBar, seekParams);
-
-        seekBar.setOnSeekBarChangeListener(
-                new SeekBar.OnSeekBarChangeListener() {
-
-            @Override
-            public void onProgressChanged(
-                    SeekBar bar,
-                    int progress,
-                    boolean fromUser) {
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar bar) {
-                userSeeking = true;
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar bar) {
-                userSeeking = false;
-                seekToProgress(bar.getProgress());
-            }
-        });
-
-        LinearLayout buttonRow = new LinearLayout(this);
-        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
-        buttonRow.setGravity(Gravity.CENTER);
-        buttonRow.setPadding(0, dp(2), 0, dp(2));
-
-        playButton = createControlButton("PLAY");
-        pauseButton = createControlButton("PAUSE");
-        stopButton = createControlButton("STOP");
-
-        int buttonHeight = dp(tvMode ? 58 : 50);
-
-        buttonRow.addView(
-                playButton,
-                new LinearLayout.LayoutParams(0, buttonHeight, 1f));
-
-        buttonRow.addView(
-                pauseButton,
-                new LinearLayout.LayoutParams(0, buttonHeight, 1f));
-
-        buttonRow.addView(
-                stopButton,
-                new LinearLayout.LayoutParams(0, buttonHeight, 1f));
-
-        controls.addView(buttonRow);
-
-        playButton.setOnClickListener(v -> playCurrentSong());
-        pauseButton.setOnClickListener(v -> pauseCurrentSong());
-        stopButton.setOnClickListener(v -> stopCurrentSong());
-
-        // -----------------------------------------------------
-        // PHONE-ONLY MICROPHONE MONITOR ROW
-        // -----------------------------------------------------
-
-        LinearLayout microphoneRow = new LinearLayout(this);
-        microphoneRow.setOrientation(LinearLayout.HORIZONTAL);
-        microphoneRow.setGravity(Gravity.CENTER_VERTICAL);
-        microphoneRow.setPadding(
-                dp(4), dp(2), dp(4), dp(2));
-
-        microphoneStatusLabel = new TextView(this);
-        microphoneStatusLabel.setText(
-                "MIC OFF — singer monitor");
-        microphoneStatusLabel.setTextColor(WHITE);
-        microphoneStatusLabel.setTextSize(12);
-        microphoneStatusLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        microphoneStatusLabel.setGravity(Gravity.CENTER_VERTICAL);
-        microphoneStatusLabel.setMaxLines(2);
-
-        microphoneRow.addView(
-                microphoneStatusLabel,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(42),
-                        1f));
-
-        microphoneButton = createControlButton("MIC: OFF");
-        microphoneButton.setTextSize(12);
-        microphoneButton.setMinHeight(dp(40));
-        microphoneButton.setMinimumHeight(dp(40));
-
-        microphoneRow.addView(
-                microphoneButton,
-                new LinearLayout.LayoutParams(
-                        dp(112),
-                        dp(42)));
-
-        microphoneButton.setOnClickListener(
-                v -> toggleMicrophoneMonitoring());
-
-        controls.addView(microphoneRow);
-
-        // -----------------------------------------------------
-        // PHONE-ONLY KARAOKE SCORE DISPLAY
-        // -----------------------------------------------------
-
-        scoreLabel = new TextView(this);
-        scoreLabel.setText("SCORE: 0% | WAITING FOR MIDI SONG");
-        scoreLabel.setTextColor(ACTIVE_GREEN);
-        scoreLabel.setTextSize(13);
-        scoreLabel.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        scoreLabel.setGravity(Gravity.CENTER);
-        scoreLabel.setMaxLines(2);
-        scoreLabel.setPadding(
-                dp(4), dp(3), dp(4), dp(3));
-
-        controls.addView(
-                scoreLabel,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(38)));
-
-        if (tvMode) {
-            microphoneRow.setVisibility(View.GONE);
-            scoreLabel.setVisibility(View.GONE);
-        }
-
-        // -----------------------------------------------------
-        // BACKGROUND AND SONGBOOK CONTROLS
-        // -----------------------------------------------------
-
-        backgroundButton = createControlButton("BACKGROUND");
-        backgroundButton.setTextSize(tvMode ? 16 : 14);
-        backgroundButton.setOnClickListener(v -> showBackgroundMenu());
-
-        controls.addView(
-                backgroundButton,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(tvMode ? 46 : 46)));
-
-        backButton = new TextView(this);
-        backButton.setText("←  BACK TO SONGBOOK");
-        backButton.setTextColor(WHITE);
-        backButton.setTextSize(tvMode ? 18 : 15);
-        backButton.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        backButton.setGravity(Gravity.CENTER);
-        backButton.setPadding(
-                dp(20), dp(6), dp(20), dp(6));
-        backButton.setBackgroundColor(Color.TRANSPARENT);
-        backButton.setContentDescription("Back to Songbook");
-        backButton.setFocusable(true);
-
-        backButton.setOnClickListener(v -> returnToSongbook());
-
-        controls.addView(
-                backButton,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        dp(tvMode ? 42 : 44)));
-
-        overlay.addView(
-                controls,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT));
-    }
-
-    private Button createControlButton(String text) {
-
-        Button button = new Button(this);
-
-        button.setText(text);
-        button.setTextColor(WHITE);
-        button.setTextSize(15);
-        button.setTypeface(
-                Typeface.DEFAULT, Typeface.BOLD);
-        button.setGravity(Gravity.CENTER);
-        button.setAllCaps(false);
-        button.setPadding(
-                dp(8), dp(5), dp(8), dp(5));
-        button.setMinHeight(dp(48));
-        button.setMinimumHeight(dp(48));
-        button.setClickable(true);
-        button.setFocusable(true);
-
-        if (android.os.Build.VERSION.SDK_INT >= 21) {
-            button.setBackgroundTintList(
-                    ColorStateList.valueOf(Color.rgb(0, 115, 55)));
-        } else {
-            button.setBackgroundColor(Color.rgb(0, 115, 55));
-        }
-
-        button.setEnabled(true);
-        button.setAlpha(1f);
-
-        return button;
-    }
-
-    // ---------------------------------------------------------
-    // EXTERNAL LRC MATCHING
-    // ---------------------------------------------------------
-
-    private String normalizeLyricsMatchName(String value) {
-
-        if (value == null) {
-            return "";
-        }
-
-        String name = value.trim();
-
-        if (name.isEmpty()) {
-            return "";
-        }
-
-        try {
-            Uri uri = Uri.parse(name);
-
-            String path = uri.getLastPathSegment();
-
-            if (path != null && !path.trim().isEmpty()
-                    && (name.contains("://")
-                    || name.startsWith("content:"))) {
-                name = path;
-            }
-        } catch (Exception ignored) {
-        }
-
-        int slash = Math.max(
-                name.lastIndexOf('/'),
-                name.lastIndexOf('\\'));
-
-        if (slash >= 0 && slash < name.length() - 1) {
-            name = name.substring(slash + 1);
-        }
-
-        int dot = name.lastIndexOf('.');
-
-        if (dot > 0) {
-            name = name.substring(0, dot);
-        }
-
-        name = Normalizer.normalize(
-                name,
-                Normalizer.Form.NFD);
-
-        name = name.replaceAll("\\p{M}+", "");
-
-        name = name.toLowerCase(Locale.ROOT);
-
-        name = name.replace('_', ' ');
-        name = name.replace('-', ' ');
-
-        name = name.replaceAll("\\s+", " ").trim();
-
-        return name;
-    }
-
-    private String findMatchingLrcUri(
-            Stage3SongQueue.QueuedSong song) {
-
-        if (song == null) {
-            return null;
-        }
-
-        String songTitle = normalizeLyricsMatchName(
-                song.title);
-
-        String songUriName = "";
-
-        try {
-            Uri songUri = Uri.parse(song.uri);
-
-            String lastSegment = songUri.getLastPathSegment();
-
-            songUriName = normalizeLyricsMatchName(
-                    lastSegment);
-        } catch (Exception ignored) {
-        }
-
-        if (songTitle.isEmpty() && songUriName.isEmpty()) {
-            return null;
-        }
-
-        try {
-            SharedPreferences preferences =
-                    getSharedPreferences(
-                            SONGBOOK_PREFS,
-                            MODE_PRIVATE);
-
-            String savedSongs = preferences.getString(
-                    SONGS_KEY, "[]");
-
-            JSONArray array = new JSONArray(savedSongs);
-
-            for (int i = 0; i < array.length(); i++) {
-
-                JSONObject item = array.optJSONObject(i);
-
-                if (item == null) {
-                    continue;
-                }
-
-                String type = item.optString(
-                        "type", "");
-
-                String uri = item.optString(
-                        "uri", "");
-
-                String title = item.optString(
-                        "title", "");
-
-                if (uri.trim().isEmpty()) {
-                    continue;
-                }
-
-                boolean lyricsType =
-                        "LYRICS".equalsIgnoreCase(type);
-
-                boolean lrcUri = false;
-
-                try {
-                    String path =
-                            Uri.parse(uri).getLastPathSegment();
-
-                    lrcUri = path != null
-                            && path.toLowerCase(Locale.ROOT)
-                                    .endsWith(".lrc");
-                } catch (Exception ignored) {
-                }
-
-                if (!lyricsType && !lrcUri) {
-                    continue;
-                }
-
-                String lrcTitle =
-                        normalizeLyricsMatchName(title);
-
-                String lrcFileName = "";
-
-                try {
-                    lrcFileName =
-                            normalizeLyricsMatchName(
-                                    Uri.parse(uri).getLastPathSegment());
-                } catch (Exception ignored) {
-                }
-
-                boolean exactTitleMatch =
-                        !songTitle.isEmpty()
-                                && (songTitle.equals(lrcTitle)
-                                || songTitle.equals(lrcFileName));
-
-                boolean exactUriMatch =
-                        !songUriName.isEmpty()
-                                && (songUriName.equals(lrcTitle)
-                                || songUriName.equals(lrcFileName));
-
-                if (exactTitleMatch || exactUriMatch) {
-                    return uri;
-                }
-            }
-
-        } catch (Exception error) {
-
-            Log.e(
-                    "Stage3Lyrics",
-                    "Could not search the Stage 3 Songbook for LRC.",
-                    error);
-        }
-
-        return null;
-    }
-
-    private String readLrcText(String lrcUri) throws IOException {
-
-        if (lrcUri == null || lrcUri.trim().isEmpty()) {
-            return null;
-        }
-
-        Uri uri = Uri.parse(lrcUri);
-
-        try (InputStream input =
-                     getContentResolver().openInputStream(uri)) {
-
-            if (input == null) {
-                throw new IOException(
-                        "Cannot open the matching LRC file.");
-            }
-
-            StringBuilder result = new StringBuilder();
-
-            try (BufferedReader reader =
-                         new BufferedReader(
-                                 new InputStreamReader(
-                                         input,
-                                         StandardCharsets.UTF_8))) {
-
-                String line;
-
-                while ((line = reader.readLine()) != null) {
-                    result.append(line).append('\n');
-
-                    if (result.length() > 2_000_000) {
-                        throw new IOException(
-                                "The LRC file is too large.");
-                    }
-                }
-            }
-
-            return result.toString();
-        }
-    }
-
-    private void loadExternalLrcForSong(
-            Stage3SongQueue.QueuedSong song) {
-
-        if (song == null || !midiMode) {
-            return;
-        }
-
-        final String expectedSongNumber = song.number == null
-                ? ""
-                : song.number;
-
-        final String lrcUri = findMatchingLrcUri(song);
-
-        if (lrcUri == null) {
-            Log.i(
-                    "Stage3Lyrics",
-                    "No exact matching LRC found. "
-                            + "Keeping embedded MIDI/KAR lyrics.");
-            return;
-        }
-
-        new Thread(() -> {
-
-            String lrcText;
-
-            try {
-                lrcText = readLrcText(lrcUri);
-
-            } catch (Exception error) {
-
-                Log.w(
-                        "Stage3Lyrics",
-                        "Could not read matching LRC. "
-                                + "Embedded lyrics will remain active.",
-                        error);
-                return;
-            }
-
-            if (lrcText == null || lrcText.trim().isEmpty()) {
-                return;
-            }
-
-            runOnUiThread(() -> {
-
-                if (released
-                        || returningToSongbook
-                        || !midiMode
-                        || currentSong == null) {
-                    return;
-                }
-
-                String currentNumber =
-                        currentSong.number == null
-                                ? ""
-                                : currentSong.number;
-
-                if (!expectedSongNumber.equals(currentNumber)) {
-                    return;
-                }
-
-                try {
-                    Stage3MidiLyrics externalLyrics =
-                            currentMidiLyrics.withLrcText(lrcText);
-
-                    if (externalLyrics == null
-                            || !externalLyrics.hasLyrics()) {
-
-                        Log.w(
-                                "Stage3Lyrics",
-                                "Matching LRC did not contain usable "
-                                        + "timestamped lyrics. "
-                                        + "Keeping embedded lyrics.");
-                        return;
-                    }
-
-                    currentMidiLyrics = externalLyrics;
-
-                    String singer =
-                            currentMidiLyrics.getSinger();
-
-                    if (singer != null
-                            && !singer.trim().isEmpty()) {
-
-                        singerLabel.setText(singer.trim());
-                        singerLabel.setVisibility(View.VISIBLE);
-                    }
-
-                    resetLyricTracking();
-
-                    long currentTick =
-                            midiEngine != null && midiReady
-                                    ? midiEngine.getCurrentTick()
-                                    : 0L;
-
-                    updateMidiLyricsAtTick(currentTick);
-
-                    Log.i(
-                            "Stage3Lyrics",
-                            "Loaded exact matching external LRC: "
-                                    + lrcUri);
-
-                } catch (Exception error) {
-
-                    Log.e(
-                            "Stage3Lyrics",
-                            "Could not apply external LRC. "
-                                    + "Keeping the existing lyrics.",
-                            error);
-                }
-            });
-
-        }, "Stage3ExternalLrc").start();
-    }
-
-    // ---------------------------------------------------------
-    // MICROPHONE MONITOR AND KARAOKE SCORING
-    // ---------------------------------------------------------
-
-    private void toggleMicrophoneMonitoring() {
-
-        if (microphoneMonitor != null
-                && microphoneMonitor.isRunning()) {
-
-            stopMicrophoneMonitoring();
-            return;
-        }
-
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-
-            requestPermissions(
-                    new String[]{
-                            Manifest.permission.RECORD_AUDIO
-                    },
-                    REQUEST_MIC_PERMISSION);
-
-            return;
-        }
-
-        startMicrophoneMonitoring();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            String[] permissions,
-            int[] grantResults) {
-
-        super.onRequestPermissionsResult(
-                requestCode, permissions, grantResults);
-
-        if (requestCode != REQUEST_MIC_PERMISSION) {
-            return;
-        }
-
-        if (grantResults.length > 0
-                && grantResults[0]
-                == PackageManager.PERMISSION_GRANTED) {
-
-            startMicrophoneMonitoring();
-
-        } else {
-
-            if (microphoneButton != null) {
-                microphoneButton.setText("MIC: OFF");
-            }
-
-            if (microphoneStatusLabel != null) {
-                microphoneStatusLabel.setText(
-                        "MIC PERMISSION DENIED");
-            }
-
-            Toast.makeText(
-                    this,
-                    "Microphone permission is required "
-                            + "to use the singer monitor.",
-                    Toast.LENGTH_LONG).show();
-        }
-    }
-
-    private void startMicrophoneMonitoring() {
-
-        if (released || returningToSongbook) {
-            return;
-        }
-
-        if (microphoneMonitor != null
-                && microphoneMonitor.isRunning()) {
-            return;
-        }
-
-        microphoneMonitor =
-                new Stage3MicrophoneMonitor(
-                        new Stage3MicrophoneMonitor.Listener() {
-
-            @Override
-            public void onUpdate(
-                    int levelPercent,
-                    int midiNote,
-                    double confidence) {
-
-                if (released
-                        || returningToSongbook
-                        || microphoneStatusLabel == null) {
-                    return;
-                }
-
-                latestMicLevel = levelPercent;
-                latestMicNote = midiNote;
-                latestMicConfidence = confidence;
-
-                String pitch = "Pitch: —";
-
-                if (midiNote >= 0 && confidence >= 0.72) {
-                    pitch = "Pitch: " + midiNoteName(midiNote);
-                }
-
-                microphoneStatusLabel.setText(
-                        "MIC " + levelPercent + "%  |  " + pitch);
-
-                if (midiMode
-                        && midiReady
-                        && midiEngine != null
-                        && currentMidiNoteReader != null
-                        && midiEngine.isPlaying()) {
-
-                    long currentTick =
-                            midiEngine.getCurrentTick();
-
-                    int expectedNote =
-                            currentMidiNoteReader
-                                    .getMelodyNoteAtTick(currentTick);
-
-                    karaokeScorer.update(
-                            expectedNote,
-                            midiNote,
-                            confidence,
-                            levelPercent);
-
-                    updateKaraokeScoreDisplay();
-                }
-            }
-
-            @Override
-            public void onError(String message) {
-
-                if (released || returningToSongbook) {
-                    return;
-                }
-
-                Stage3MicrophoneMonitor old =
-                        microphoneMonitor;
-
-                microphoneMonitor = null;
-
-                if (old != null) {
-                    old.stop();
-                }
-
-                if (microphoneButton != null) {
-                    microphoneButton.setText("MIC: OFF");
-                }
-
-                if (microphoneStatusLabel != null) {
-                    microphoneStatusLabel.setText(
-                            "MIC UNAVAILABLE");
-                }
-
-                Toast.makeText(
-                        Stage3PlayerActivity.this,
-                        message,
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-
-        boolean started = microphoneMonitor.start();
-
-        if (started) {
-
-            if (microphoneButton != null) {
-                microphoneButton.setText("MIC: ON");
-            }
-
-            if (microphoneStatusLabel != null) {
-                microphoneStatusLabel.setText(
-                        "MIC ON — sing to test");
-            }
-
-        } else {
-
-            microphoneMonitor = null;
-
-            if (microphoneButton != null) {
-                microphoneButton.setText("MIC: OFF");
-            }
-
-            if (microphoneStatusLabel != null) {
-                microphoneStatusLabel.setText(
-                        "MIC UNAVAILABLE");
-            }
-        }
-    }
-
-    private void updateKaraokeScoreDisplay() {
-
-        if (scoreLabel == null) {
-            return;
-        }
-
-        if (currentMidiNoteReader == null) {
-            scoreLabel.setText(
-                    "SCORING UNAVAILABLE — MIDI MELODY NOT READ");
-            return;
-        }
-
-        if (!karaokeScorer.hasScored()) {
-            scoreLabel.setText(
-                    "SCORE: 0%  |  SING TO START SCORING");
-            return;
-        }
-
-        scoreLabel.setText(
-                "SCORE: "
-                        + karaokeScorer.getScorePercent()
-                        + "%  |  "
-                        + karaokeScorer.getRating()
-                        + "  |  STREAK: "
-                        + karaokeScorer.getBestStreak());
-    }
-
-    private void stopMicrophoneMonitoring() {
-
-        Stage3MicrophoneMonitor old =
-                microphoneMonitor;
-
-        microphoneMonitor = null;
-
-        if (old != null) {
-            old.stop();
-        }
-
-        if (microphoneButton != null) {
-            microphoneButton.setText("MIC: OFF");
-        }
-
-        if (microphoneStatusLabel != null) {
-            microphoneStatusLabel.setText(
-                    "MIC OFF — singer monitor");
-        }
-    }
-
-    private String midiNoteName(int midiNote) {
-
-        String[] names = {
-                "C", "C#", "D", "D#", "E", "F",
-                "F#", "G", "G#", "A", "A#", "B"
-        };
-
-        int safeNote = Math.max(0, Math.min(127, midiNote));
-
-        int noteIndex = safeNote % 12;
-        int octave = safeNote / 12 - 1;
-
-        return names[noteIndex] + octave;
-    }
-
-    // ---------------------------------------------------------
-    // PERSONAL BACKGROUND MENU
-    // ---------------------------------------------------------
-
-    private void showBackgroundMenu() {
-
-        String[] choices = {
-                "Choose picture from phone",
-                "Choose MP4 video from phone",
-                "Adjust background darkness",
-                "Change display mode: Fill / Fit / Stretch",
-                "Use original dark-green background"
-        };
-
-        new AlertDialog.Builder(this)
-                .setTitle("PERSONAL KARAOKE BACKGROUND")
-                .setItems(choices, (dialog, which) -> {
-
-                    if (which == 0) {
-                        openBackgroundPicker(false);
-
-                    } else if (which == 1) {
-                        openBackgroundPicker(true);
-
-                    } else if (which == 2) {
-                        showDarknessDialog();
-
-                    } else if (which == 3) {
-                        showFitModeDialog();
-
-                    } else if (which == 4) {
-                        useDefaultBackground();
-                    }
-                })
-                .setNegativeButton("CLOSE", null)
-                .show();
-    }
-
-    private void openBackgroundPicker(boolean video) {
-
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-
-        intent.setType(video ? "video/mp4" : "image/*");
-
-        intent.addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-
-        try {
-            startActivityForResult(
-                    intent,
-                    video
-                            ? REQUEST_BACKGROUND_VIDEO
-                            : REQUEST_BACKGROUND_IMAGE);
-
-        } catch (Exception e) {
-
-            Toast.makeText(
-                    this,
-                    "Cannot open the phone file picker.",
-                    Toast.LENGTH_LONG).show();
-        }
-    }
-
-    @Override
-    protected void onActivityResult(
-            int requestCode,
-            int resultCode,
-            Intent data) {
-
-        super.onActivityResult(
-                requestCode, resultCode, data);
-
-        if (resultCode != RESULT_OK
-                || data == null
-                || data.getData() == null) {
-            return;
-        }
-
-        if (requestCode != REQUEST_BACKGROUND_IMAGE
-                && requestCode != REQUEST_BACKGROUND_VIDEO) {
-            return;
-        }
-
-        Uri uri = data.getData();
-
-        try {
-            int flags = data.getFlags()
-                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-
-            getContentResolver().takePersistableUriPermission(
-                    uri,
-                    flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
-        } catch (Exception ignored) {
-        }
-
-        boolean video =
-                requestCode == REQUEST_BACKGROUND_VIDEO;
-
-        SharedPreferences.Editor editor =
-                backgroundPreferences().edit();
-
-        editor.putString(
-                PREF_BG_TYPE,
-                video ? BG_VIDEO : BG_IMAGE);
-
-        editor.putString(PREF_BG_URI, uri.toString());
-
-        editor.apply();
-
-        applySavedPersonalBackground();
-
-        Toast.makeText(
-                this,
-                video
-                        ? "Your personal MP4 background is selected."
-                        : "Your personal picture background is selected.",
-                Toast.LENGTH_SHORT).show();
-    }
-
-    private void useDefaultBackground() {
-
-        backgroundPreferences()
-                .edit()
-                .putString(PREF_BG_TYPE, BG_DEFAULT)
-                .remove(PREF_BG_URI)
-                .apply();
-
-        applySavedPersonalBackground();
-
-        Toast.makeText(
-                this,
-                "Original dark-green background restored.",
-                Toast.LENGTH_SHORT).show();
-    }
-
-    private void applyBackgroundDarkness() {
-
-        if (overlay == null) {
-            return;
-        }
-
-        int darkness = backgroundPreferences().getInt(
-                PREF_BG_DARKNESS, 57);
-
-        darkness = Math.max(0, Math.min(90, darkness));
-
-        int alpha = Math.round(
-                darkness * 255f / 100f);
-
-        overlay.setBackgroundColor(
-                Color.argb(alpha, 0, 12, 7));
-    }
-
-    private void showDarknessDialog() {
-
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(
-                dp(22), dp(12), dp(22), dp(8));
-
-        TextView valueLabel = new TextView(this);
-        valueLabel.setTextColor(WHITE);
-        valueLabel.setTextSize(16);
-        valueLabel.setGravity(Gravity.CENTER);
-
-        SeekBar darknessBar = new SeekBar(this);
-        darknessBar.setMax(90);
-
-        int saved = backgroundPreferences().getInt(
-                PREF_BG_DARKNESS, 57);
-
-        darknessBar.setProgress(saved);
-
-        valueLabel.setText("Darkness: " + saved + "%");
-
-        darknessBar.setOnSeekBarChangeListener(
-                new SeekBar.OnSeekBarChangeListener() {
-
-            @Override
-            public void onProgressChanged(
-                    SeekBar bar,
-                    int progress,
-                    boolean fromUser) {
-
-                valueLabel.setText(
-                        "Darkness: " + progress + "%");
-
-                backgroundPreferences()
-                        .edit()
-                        .putInt(PREF_BG_DARKNESS, progress)
-                        .apply();
-
-                applyBackgroundDarkness();
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar bar) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar bar) {
-            }
-        });
-
-        layout.addView(valueLabel);
-        layout.addView(darknessBar);
-
-        new AlertDialog.Builder(this)
-                .setTitle("BACKGROUND DARKNESS")
-                .setView(layout)
-                .setPositiveButton("DONE", null)
-                .setNegativeButton("RESET", (dialog, which) -> {
-                    backgroundPreferences()
-                            .edit()
-                            .putInt(PREF_BG_DARKNESS, 57)
-                            .apply();
-                    applyBackgroundDarkness();
-                })
-                .show();
-    }
-
-    private void showFitModeDialog() {
-
-        String[] modes = {
-                "Fill — cover screen, crop edges",
-                "Fit — show whole picture/video",
-                "Stretch — fill screen, may distort"
-        };
-
-        String current = backgroundPreferences().getString(
-                PREF_BG_FIT, FIT_FILL);
-
-        int selected = FIT_FILL.equals(current)
-                ? 0
-                : FIT.equals(current) ? 1 : 2;
-
-        new AlertDialog.Builder(this)
-                .setTitle("BACKGROUND DISPLAY MODE")
-                .setSingleChoiceItems(
-                        modes,
-                        selected,
-                        (dialog, which) -> {
-
-                            String mode = which == 0
-                                    ? FIT_FILL
-                                    : which == 1
-                                    ? FIT
-                                    : FIT_STRETCH;
-
-                            backgroundPreferences()
-                                    .edit()
-                                    .putString(PREF_BG_FIT, mode)
-                                    .apply();
-
-                            applyImageFitMode();
-                            applyVideoFitMode();
-
-                            dialog.dismiss();
-                        })
-                .setNegativeButton("CANCEL", null)
-                .show();
-    }
-
-    private void applyImageFitMode() {
-
-        if (backgroundImage == null) {
-            return;
-        }
-
-        String mode = backgroundPreferences().getString(
-                PREF_BG_FIT, FIT_FILL);
-
-        if (FIT.equals(mode)) {
-            backgroundImage.setScaleType(
-                    ImageView.ScaleType.FIT_CENTER);
-
-        } else if (FIT_STRETCH.equals(mode)) {
-            backgroundImage.setScaleType(
-                    ImageView.ScaleType.FIT_XY);
-
-        } else {
-            backgroundImage.setScaleType(
-                    ImageView.ScaleType.CENTER_CROP);
-        }
-    }
-
-    private void applyVideoFitMode() {
-
-        if (backgroundTexture == null) {
-            return;
-        }
-
-        VideoSize size = currentBackgroundVideoSize;
-
-        if (size == null
-                || size.width <= 0
-                || size.height <= 0) {
-            return;
-        }
-
-        int viewWidth = backgroundTexture.getWidth();
-        int viewHeight = backgroundTexture.getHeight();
-
-        if (viewWidth <= 0 || viewHeight <= 0) {
-            return;
-        }
-
-        String mode = backgroundPreferences().getString(
-                PREF_BG_FIT, FIT_FILL);
-
-        Matrix matrix = new Matrix();
-
-        if (FIT_STRETCH.equals(mode)) {
-            backgroundTexture.setTransform(matrix);
-            return;
-        }
-
-        float videoAspect =
-                (size.width * size.pixelWidthHeightRatio)
-                        / (float) size.height;
-
-        float viewAspect =
-                viewWidth / (float) viewHeight;
-
-        float scaleX = 1f;
-        float scaleY = 1f;
-
-        if (FIT.equals(mode)) {
-
-            if (videoAspect > viewAspect) {
-                scaleY = viewAspect / videoAspect;
-            } else {
-                scaleX = videoAspect / viewAspect;
-            }
-
-        } else {
-
-            if (videoAspect > viewAspect) {
-                scaleX = videoAspect / viewAspect;
-            } else {
-                scaleY = viewAspect / videoAspect;
-            }
-        }
-
-        matrix.setScale(
-                scaleX,
-                scaleY,
-                viewWidth / 2f,
-                viewHeight / 2f);
-
-        backgroundTexture.setTransform(matrix);
-    }
-
-    private void applySavedPersonalBackground() {
-
-        if (stage == null || backgroundTexture == null
-                || backgroundImage == null) {
-            return;
-        }
-
-        releaseBackgroundPlayer();
-
-        backgroundImage.setImageDrawable(null);
-        backgroundImage.setVisibility(View.GONE);
-
-        backgroundTexture.setVisibility(View.GONE);
-        currentBackgroundVideoSize = null;
-
-        stage.setBackgroundColor(DARK_GREEN);
-
-        applyBackgroundDarkness();
-
-        SharedPreferences preferences =
-                backgroundPreferences();
-
-        String type = preferences.getString(
-                PREF_BG_TYPE, BG_DEFAULT);
-
-        String savedUri = preferences.getString(
-                PREF_BG_URI, "");
-
-        if (BG_IMAGE.equals(type)) {
-
-            if (savedUri == null || savedUri.trim().isEmpty()) {
-                return;
-            }
-
-            try {
-                Uri uri = Uri.parse(savedUri);
-
-                backgroundImage.setImageURI(uri);
-                applyImageFitMode();
-
-                backgroundImage.setVisibility(View.VISIBLE);
-
-            } catch (Exception e) {
-
-                backgroundImage.setVisibility(View.GONE);
-
-                Toast.makeText(
-                        this,
-                        "Cannot open the saved background picture.",
-                        Toast.LENGTH_LONG).show();
-            }
-
-        } else if (BG_VIDEO.equals(type)) {
-
-            if (savedUri == null || savedUri.trim().isEmpty()) {
-                return;
-            }
-
-            startPersonalBackgroundVideo(savedUri);
-
-        } else {
-
-            backgroundImage.setVisibility(View.GONE);
-            backgroundTexture.setVisibility(View.GONE);
-            stage.setBackgroundColor(DARK_GREEN);
-        }
-    }
-
-    private void startPersonalBackgroundVideo(String uriString) {
-
-        try {
-            Uri uri = Uri.parse(uriString);
-
-            backgroundPlayer =
-                    new ExoPlayer.Builder(this).build();
-
-            backgroundPlayer.setVideoTextureView(
-                    backgroundTexture);
-
-            backgroundPlayer.setVolume(0f);
-
-            backgroundPlayer.setRepeatMode(
-                    Player.REPEAT_MODE_ONE);
-
-            backgroundPlayer.addListener(
-                    new Player.Listener() {
-
-                @Override
-                public void onVideoSizeChanged(VideoSize videoSize) {
-
-                    currentBackgroundVideoSize = videoSize;
-
-                    applyVideoFitMode();
-                }
-
-                @Override
-                public void onPlayerError(
-                        PlaybackException error) {
-
-                    backgroundAvailable = false;
-
-                    releaseBackgroundPlayer();
-
-                    Toast.makeText(
-                            Stage3PlayerActivity.this,
-                            "The selected background video cannot be played.",
-                            Toast.LENGTH_LONG).show();
-                }
-            });
-
-            backgroundTexture.setVisibility(View.VISIBLE);
-            backgroundAvailable = true;
-
-            backgroundPlayer.setMediaItem(
-                    MediaItem.fromUri(uri));
-
-            backgroundPlayer.prepare();
-
-            if (!midiMode || (midiReady
-                    && midiEngine != null
-                    && midiEngine.isPlaying())) {
-                backgroundPlayer.play();
-            } else {
-                backgroundPlayer.pause();
-            }
-
-        } catch (Exception e) {
-
-            backgroundAvailable = false;
-
-            releaseBackgroundPlayer();
-
-            Toast.makeText(
-                    this,
-                    "Cannot load the selected MP4 background.",
-                    Toast.LENGTH_LONG).show();
-        }
-    }
-
-    // ---------------------------------------------------------
-    // PLAYBACK
-    // ---------------------------------------------------------
-
-    private void playCurrentSong() {
-
-        if (released || returningToSongbook) {
-            return;
-        }
-
-        if (midiMode) {
-
-            if (!midiReady || midiEngine == null) {
-                Toast.makeText(
-                        this,
-                        "MIDI song is still loading.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            try {
-                midiEngine.resume();
-                midiPausedByLifecycle = false;
-
-                if (backgroundPlayer != null) {
-                    backgroundPlayer.play();
-                }
-
-            } catch (Exception e) {
-
-                Toast.makeText(
-                        this,
-                        "Cannot resume MIDI song.",
-                        Toast.LENGTH_SHORT).show();
-            }
-
-        } else if (player != null) {
-
-            player.play();
-        }
-    }
-
-    private void pauseCurrentSong() {
-
-        if (midiMode) {
-
-            if (!midiReady || midiEngine == null) {
-                Toast.makeText(
-                        this,
-                        "MIDI song is still loading.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            try {
-                midiEngine.pause();
-
-                if (backgroundPlayer != null) {
-                    backgroundPlayer.pause();
-                }
-
-            } catch (Exception e) {
-
-                Toast.makeText(
-                        this,
-                        "Cannot pause MIDI song.",
-                        Toast.LENGTH_SHORT).show();
-            }
-
-        } else if (player != null) {
-
-            player.pause();
-        }
-    }
-
-    private void stopCurrentSong() {
-
-        if (midiMode) {
-
-            if (!midiReady || midiEngine == null) {
-                Toast.makeText(
-                        this,
-                        "MIDI song is still loading.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            try {
-                midiEngine.pause();
-                midiEngine.seekTo(0L);
-
-                midiPausedByLifecycle = false;
-
-                if (backgroundPlayer != null) {
-                    backgroundPlayer.seekTo(0L);
-                    backgroundPlayer.pause();
-                }
-
-                lastScrolledLyricLine = Integer.MIN_VALUE;
-
-                updateMidiLyricsAtTick(0L);
-                updateMidiControls(0L);
-
-            } catch (Exception e) {
-
-                Toast.makeText(
-                        this,
-                        "Cannot stop MIDI song.",
-                        Toast.LENGTH_SHORT).show();
-            }
-
-        } else if (player != null) {
-
-            player.pause();
-            player.seekTo(0L);
-            updateMediaControls();
-        }
-    }
-
-    private String formatPlaybackTime(long millis) {
-
-        long safeMillis = Math.max(0L, millis);
-        long totalSeconds = safeMillis / 1000L;
-
-        long hours = totalSeconds / 3600L;
-        long minutes = (totalSeconds % 3600L) / 60L;
-        long seconds = totalSeconds % 60L;
-
-        if (hours > 0) {
-            return String.format(
-                    Locale.ROOT,
-                    "%d:%02d:%02d",
-                    hours, minutes, seconds);
-        }
-
-        return String.format(
-                Locale.ROOT,
-                "%02d:%02d",
-                minutes, seconds);
-    }
-
-    private void updatePlaybackTime(
-            long elapsedMillis,
-            long totalMillis) {
-
-        if (playbackTimeLabel == null) {
-            return;
-        }
-
-        playbackTimeLabel.setText(
-                formatPlaybackTime(elapsedMillis)
-                        + " / "
-                        + formatPlaybackTime(totalMillis));
-    }
-
-    private void startSelectedSong() {
-
-        currentSong = Stage3SongQueue.getNowPlaying();
-
-        if (currentSong == null) {
-            currentSong = Stage3SongQueue.playNext();
-        }
-
-        if (currentSong == null) {
-            lyricsLabel.setText(
-                    "No song selected.\n\n"
-                            + "Return to the Songbook.");
-            songTitleLabel.setText("Donut4U Karaoke");
-            updatePlaybackTime(0L, 0L);
-            setControlsEnabled(false);
-            return;
-        }
-
-        initializePlayer(currentSong);
-    }
-
-    private boolean isSongHubMidi(
-            Stage3SongQueue.QueuedSong song) {
-
-        if (song == null || song.uri == null) {
-            return false;
-        }
-
-        try {
-            return "songhub-midi".equalsIgnoreCase(
-                    Uri.parse(song.uri).getScheme());
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private boolean isMidiSong(
-            Stage3SongQueue.QueuedSong song) {
-
-        if (song == null) {
-            return false;
-        }
-
-        if (isSongHubMidi(song)) {
-            return true;
-        }
-
-        String type = song.type == null
-                ? ""
-                : song.type.toUpperCase(Locale.ROOT);
-
-        String segment = "";
-
-        try {
-            String last =
-                    Uri.parse(song.uri).getLastPathSegment();
-
-            if (last != null) {
-                segment = last.toLowerCase(Locale.ROOT);
-            }
-        } catch (Exception ignored) {
-        }
-
-        return type.contains("MIDI")
-                || type.contains("KAR")
-                || segment.endsWith(".mid")
-                || segment.endsWith(".midi")
-                || segment.endsWith(".kar");
-    }
+return event.spaceBefore
+|| (previous != null && previous.spaceAfter);
+}
 
-    private void initializePlayer(
-            Stage3SongQueue.QueuedSong song) {
+public String getMetadataText() {
 
-        releasePlayback();
+StringBuilder b = new StringBuilder();
 
-        currentMidiNoteReader = null;
-        karaokeScorer.reset();
+if (!singer.isEmpty()) {
+b.append("Singer: ").append(singer);
+}
 
-        latestMicLevel = 0;
-        latestMicNote = -1;
-        latestMicConfidence = 0.0;
+if (!composer.isEmpty()) {
 
-        if (scoreLabel != null) {
-            scoreLabel.setText(
-                    "SCORE: 0% | WAITING FOR SONG");
-        }
+if (b.length() > 0) b.append('\n');
 
-        currentSong = song;
+b.append("Composer: ").append(composer);
+}
 
-        String title = song.title == null
-                ? ""
-                : song.title.trim();
+return b.toString();
+}
 
-        songTitleLabel.setText(
-                title.isEmpty()
-                        ? "Donut4U Karaoke"
-                        : title);
+public long tickToMillis(long tick) {
 
-        updatePlaybackTime(0L, 0L);
+long target = Math.max(0, tick);
+long previousTick = 0;
+long tempo = DEFAULT_TEMPO;
+double micros = 0;
 
-        if (isMidiSong(song)) {
-            initializeMidiPlayer(song);
-        } else {
-            initializeMediaPlayer(song);
-        }
-    }
+for (TempoEvent e : tempos) {
 
-    private String findSoundFontUri() {
+if (e.tick > target) break;
 
-        SharedPreferences preferences =
-                getSharedPreferences(
-                        SONGBOOK_PREFS,
-                        MODE_PRIVATE);
+if (e.tick == 0) {
+tempo = e.micros;
+continue;
+}
 
-        String selected = preferences.getString(
-                "selected_soundfont_uri", "");
+micros +=
+((double) (e.tick - previousTick) * tempo) / ppq;
 
-        if (selected == null || selected.trim().isEmpty()) {
-            return DEFAULT_SOUNDFONT;
-        }
+previousTick = e.tick;
+tempo = e.micros;
+}
 
-        return selected.trim();
-    }
+micros +=
+((double) (target - previousTick) * tempo) / ppq;
 
-    private void initializeMidiPlayer(
-            Stage3SongQueue.QueuedSong song) {
+return Math.max(0, (long) (micros / 1000.0));
+}
 
-        midiMode = true;
-        midiReady = false;
-        midiDurationTicks = 0L;
-        currentMidiTiming = null;
-        currentMidiNoteReader = null;
+public String textAtTick(long tick) {
+return styledTextAtTick(tick).toString();
+}
 
-        currentMidiLyrics = Stage3MidiLyrics.empty();
+public CharSequence styledTextAtTick(long tick) {
+return build(tick, Long.MAX_VALUE).text;
+}
 
-        lyricsLabel.setText("");
-        countdownLabel.setVisibility(View.GONE);
-        singerLabel.setText("");
-        singerLabel.setVisibility(View.GONE);
+public CharSequence styledTextAtTick(
+long tick,
+long durationTicks) {
+return build(tick, durationTicks).text;
+}
 
-        resetLyricTracking();
+public CharSequence styledFullTextAtTick(long tick) {
+return build(tick, Long.MAX_VALUE).text;
+}
 
-        setControlsEnabled(true);
+public CharSequence styledFullTextAtTick(
+long tick,
+long durationTicks) {
+return build(tick, durationTicks).text;
+}
 
-        updatePlaybackTime(0L, 0L);
+public int activeLineStartOffsetAtTick(long tick) {
+return build(tick, Long.MAX_VALUE).activeLineStart;
+}
 
-        if (scoreLabel != null) {
-            scoreLabel.setText(
-                    "SCORE: 0% | LOAD MIDI MELODY");
-        }
-
-        applySavedPersonalBackground();
+public int activeEventIndexAtTick(long tick) {
+return activeIndex(tick);
+}
 
-        String soundFontUri = findSoundFontUri();
+public int activeLineNumberAtTick(long tick) {
 
-        if (soundFontUri == null
-                || soundFontUri.trim().isEmpty()) {
-            soundFontUri = DEFAULT_SOUNDFONT;
-        }
+int i = activeIndex(tick);
 
-        final String selectedSoundFont = soundFontUri;
+return i < 0 || events.get(i).section
+? -1 : events.get(i).line;
+}
 
-        new Thread(() -> {
+public String upcomingLineAtTick(long tick) {
 
-            String playableMidiUri;
+int active = activeIndex(tick);
 
-            try {
-                playableMidiUri = isSongHubMidi(song)
-                        ? extractSongHubRawMidi(song.uri)
-                                .toURI().toString()
-                        : song.uri;
-
-            } catch (Exception e) {
+if (active < 0 || events.get(active).section) return "";
 
-                String message = e.getMessage() == null
-                        ? "Could not read the indexed MIDI data."
-                        : e.getMessage();
+int line = events.get(active).line;
+int stanza = events.get(active).stanza;
 
-                runOnUiThread(() -> {
+StringBuilder b = new StringBuilder();
 
-                    if (!released && !returningToSongbook
-                            && midiMode) {
-
-                        lyricsLabel.setText(
-                                "Unable to load this MIDI/KAR song.");
+for (int i = active + 1; i < events.size(); i++) {
 
-                        if (scoreLabel != null) {
-                            scoreLabel.setText(
-                                    "SCORING UNAVAILABLE");
-                        }
+LyricEvent e = events.get(i);
 
-                        Toast.makeText(
-                                this,
-                                message,
-                                Toast.LENGTH_LONG).show();
-                    }
-                });
+if (e.section || e.stanza != stanza) break;
 
-                return;
-            }
+if (e.text.trim().isEmpty() || e.line == line) continue;
 
-            runOnUiThread(() -> {
+if (b.length() > 0) break;
 
-                if (released || returningToSongbook
-                        || !midiMode || midiEngine == null) {
-                    return;
-                }
+line = e.line;
+b.append(e.text);
+}
 
-                midiEngine.play(
-                        playableMidiUri,
-                        selectedSoundFont,
-                        new Stage3MidiEngine.Callback() {
+return b.toString().trim();
+}
 
-                    @Override
-                    public void onReady(long durationTicks) {
+public long nextLyricTickAfter(long tick) {
 
-                        if (released || returningToSongbook
-                                || !midiMode) {
-                            return;
-                        }
+for (LyricEvent e : events) {
 
-                        midiReady = true;
+if (!e.section
+&& !e.text.trim().isEmpty()
+&& e.tick > tick) {
+return e.tick;
+}
+}
 
-                        midiDurationTicks =
-                                Math.max(0L, durationTicks);
+return -1;
+}
 
-                        File midiFile = new File(
-                                getFilesDir(),
-                                "stage3_midi/song.mid");
+public boolean shouldShowDotsAtTick(long tick) {
 
-                        currentMidiLyrics =
-                                Stage3MidiLyrics.read(midiFile);
+int active = activeIndex(tick);
 
-                        // Read the melody notes for scoring.
-                        try {
-                            currentMidiNoteReader =
-                                    Stage3MidiNoteReader.read(midiFile);
+if (active < 0) {
 
-                            Log.i(
-                                    "Stage3Scoring",
-                                    "Melody loaded. Track="
-                                            + currentMidiNoteReader
-                                                    .getSelectedTrackIndex()
-                                            + ", notes="
-                                            + currentMidiNoteReader
-                                                    .getNoteCount());
+int first = firstLyricIndex();
 
-                            if (scoreLabel != null) {
-                                scoreLabel.setText(
-                                        "SCORE: 0% | SING TO START");
-                            }
+if (first < 0) return false;
 
-                        } catch (Exception noteError) {
+long remaining = events.get(first).tick - tick;
 
-                            currentMidiNoteReader = null;
+return remaining > 0 && remaining <= ppq * 5L;
+}
 
-                            Log.e(
-                                    "Stage3Scoring",
-                                    "Could not read MIDI melody for scoring.",
-                                    noteError);
+LyricEvent current = events.get(active);
 
-                            if (scoreLabel != null) {
-                                scoreLabel.setText(
-                                        "SCORING UNAVAILABLE — "
-                                                + "MELODY COULD NOT BE READ");
-                            }
-                        }
+if (current.section) return isInstrumental(current.text);
 
-                        try {
-                            currentMidiTiming =
-                                    Stage3MidiTiming.read(midiFile);
+int next = nextLyricIndex(active + 1);
 
-                        } catch (Exception timingError) {
+if (next < 0) return false;
 
-                            currentMidiTiming = null;
+long gap = events.get(next).tick - current.tick;
 
-                            Toast.makeText(
-                                    Stage3PlayerActivity.this,
-                                    "MIDI timer could not read timing: "
-                                            + timingError.getMessage(),
-                                    Toast.LENGTH_LONG).show();
-                        }
+return gap >= ppq * 3L
+&& tick >= current.tick + ppq / 2L
+&& tick < events.get(next).tick - ppq / 2L;
+}
 
-                        if (currentMidiTiming != null
-                                && midiDurationTicks <= 0L) {
+public int getCountdownNumberAtTick(long tick) {
 
-                            midiDurationTicks =
-                                    currentMidiTiming.getDurationTicks();
-                        }
+long now = Math.max(0L, tick);
+long beat = Math.max(1L, ppq);
+long window = beat * 5L;
 
-                        String singer =
-                                currentMidiLyrics.getSinger();
+int first = firstLyricIndex();
 
-                        if (singer != null
-                                && !singer.trim().isEmpty()) {
+if (first < 0) return 0;
 
-                            singerLabel.setText(singer.trim());
-                            singerLabel.setVisibility(View.VISIBLE);
+int second = secondCountdownLyricIndex(first);
 
-                        } else {
-                            singerLabel.setVisibility(View.GONE);
-                        }
+if (insideCountdown(first, now, window)) {
+return countdownValue(events.get(first).tick - now, beat);
+}
 
-                        setControlsEnabled(true);
+if (second >= 0 && insideCountdown(second, now, window)) {
+return countdownValue(events.get(second).tick - now, beat);
+}
 
-                        if (backgroundPlayer != null) {
-                            backgroundPlayer.play();
-                        }
+return 0;
+}
 
-                        updateMidiLyricsAtTick(
-                                midiEngine.getCurrentTick());
+private boolean insideCountdown(
+int index,
+long now,
+long window) {
 
-                        updateMidiControls(
-                                midiEngine.getCurrentTick());
+if (index < 0 || index >= events.size()) return false;
 
-                        // Apply an exact-name matching LRC when available.
-                        // If none exists, embedded MIDI/KAR lyrics remain.
-                        loadExternalLrcForSong(song);
-                    }
+long remaining = events.get(index).tick - now;
 
-                    @Override
-                    public void onError(String message) {
+return remaining > 0 && remaining <= window;
+}
 
-                        if (released || returningToSongbook
-                                || !midiMode) {
-                            return;
-                        }
+private int countdownValue(long remaining, long beat) {
 
-                        midiReady = false;
+return (int) Math.max(
+1L,
+Math.min(5L, (remaining + beat - 1L) / beat));
+}
 
-                        if (backgroundPlayer != null) {
-                            backgroundPlayer.pause();
-                        }
+private int secondCountdownLyricIndex(int first) {
 
-                        setControlsEnabled(false);
+int marked = -1;
 
-                        lyricsLabel.setText(
-                                "Unable to play this MIDI/KAR song.");
+for (int i = first + 1; i < events.size(); i++) {
 
-                        if (scoreLabel != null) {
-                            scoreLabel.setText(
-                                    "SCORING UNAVAILABLE");
-                        }
+LyricEvent e = events.get(i);
 
-                        countdownLabel.setVisibility(View.GONE);
+if (!e.section) continue;
 
-                        Toast.makeText(
-                                Stage3PlayerActivity.this,
-                                message,
-                                Toast.LENGTH_LONG).show();
-                    }
+String section = e.text.toUpperCase(Locale.ROOT);
 
-                    @Override
-                    public void onFinished() {
+if (section.contains("INTERLUDE")
+|| section.contains("CHORUS")) {
+marked = i;
+break;
+}
+}
 
-                        if (released || returningToSongbook
-                                || !midiMode) {
-                            return;
-                        }
+if (marked >= 0) return nextLyricIndex(marked + 1);
 
-                        finishCurrentSong();
-                    }
-                });
-            });
+int previous = first;
 
-        }, "Stage3MidiPrepare").start();
-    }
+for (int i = first + 1; i < events.size(); i++) {
 
-    private void setControlsEnabled(boolean enabled) {
+LyricEvent e = events.get(i);
 
-        if (playButton != null) {
-            playButton.setEnabled(enabled);
-            playButton.setAlpha(enabled ? 1f : 0.45f);
-        }
+if (e.section || e.text.trim().isEmpty()) continue;
 
-        if (pauseButton != null) {
-            pauseButton.setEnabled(enabled);
-            pauseButton.setAlpha(enabled ? 1f : 0.45f);
-        }
+if (e.tick - events.get(previous).tick >= ppq * 5L
+|| hasInstrumentalSectionBetween(previous, i)) {
+return i;
+}
 
-        if (stopButton != null) {
-            stopButton.setEnabled(enabled);
-            stopButton.setAlpha(enabled ? 1f : 0.45f);
-        }
+previous = i;
+}
 
-        if (seekBar != null) {
+return -1;
+}
 
-            boolean canSeek = enabled;
+private boolean hasInstrumentalSectionBetween(
+int start,
+int end) {
 
-            if (midiMode) {
-                canSeek = enabled
-                        && getEffectiveMidiDurationTicks() > 0L;
-            }
+for (int i = start + 1;
+i < end && i < events.size();
+i++) {
 
-            seekBar.setEnabled(canSeek);
-            seekBar.setAlpha(canSeek ? 1f : 0.55f);
-        }
-    }
+LyricEvent e = events.get(i);
 
-    private void returnToSongbook() {
+if (e.section && isInstrumental(e.text)) return true;
+}
 
-        if (returningToSongbook || released) {
-            return;
-        }
+return false;
+}
 
-        returningToSongbook = true;
+private int firstLyricIndex() {
 
-        markPlayerLaunchCheckpoint("RETURN_TO_SONGBOOK");
+for (int i = 0; i < events.size(); i++) {
 
-        handler.removeCallbacks(progressUpdater);
+LyricEvent e = events.get(i);
 
-        stopMicrophoneMonitoring();
+if (!e.section && !e.text.trim().isEmpty()) return i;
+}
 
-        if (backButton != null) {
-            backButton.setEnabled(false);
-            backButton.setAlpha(0.5f);
-        }
+return -1;
+}
 
-        releasePlayback();
+private int nextLyricIndex(int start) {
 
-        if (midiEngine != null) {
-            try {
-                midiEngine.release();
-            } catch (Exception ignored) {
-            }
-            midiEngine = null;
-        }
+for (int i = Math.max(0, start);
+i < events.size();
+i++) {
 
-        released = true;
+LyricEvent e = events.get(i);
 
-        finish();
-    }
+if (!e.section && !e.text.trim().isEmpty()) return i;
+}
 
-    private long getEffectiveMidiDurationTicks() {
+return -1;
+}
 
-        if (midiDurationTicks > 0L) {
-            return midiDurationTicks;
-        }
+private int activeIndex(long tick) {
 
-        if (currentMidiTiming != null) {
-            return currentMidiTiming.getDurationTicks();
-        }
+long target = Math.max(0, tick);
 
-        return 0L;
-    }
+int low = 0;
+int high = events.size() - 1;
+int result = -1;
 
-    private long progressToMidiTick(int progress) {
+while (low <= high) {
 
-        long duration = getEffectiveMidiDurationTicks();
+int mid = low + (high - low) / 2;
 
-        if (duration <= 0L) {
-            return 0L;
-        }
+if (events.get(mid).tick <= target) {
+result = mid;
+low = mid + 1;
+} else {
+high = mid - 1;
+}
+}
 
-        int safeProgress = Math.max(
-                0, Math.min(SEEK_MAX, progress));
+while (result >= 0) {
 
-        double fraction =
-                safeProgress / (double) SEEK_MAX;
+LyricEvent e = events.get(result);
 
-        long target = (long) (
-                duration * fraction);
+if (e.section) return result;
 
-        return Math.max(
-                0L,
-                Math.min(target, duration));
-    }
+if (!e.text.trim().isEmpty()) return result;
 
-    private void seekToProgress(int progress) {
+result--;
+}
 
-        int safeProgress = Math.max(
-                0, Math.min(SEEK_MAX, progress));
+return -1;
+}
 
-        if (midiMode) {
+private FullResult build(long tick, long durationTicks) {
 
-            long duration = getEffectiveMidiDurationTicks();
+SpannableStringBuilder output =
+new SpannableStringBuilder();
 
-            if (!midiReady
-                    || midiEngine == null
-                    || duration <= 0L) {
-                return;
-            }
+if (events.isEmpty()) {
 
-            long targetTick =
-                    progressToMidiTick(safeProgress);
+output.append(
+"No embedded lyrics found in this MIDI/KAR file.");
 
-            try {
-                boolean wasPlaying = midiEngine.isPlaying();
+return new FullResult(output, 0);
+}
 
-                midiEngine.seekTo(targetTick);
+int active = activeIndex(tick);
 
-                lastScrolledLyricLine = Integer.MIN_VALUE;
+if (active < 0) {
+active = firstLyricIndex();
+} else if (events.get(active).section) {
+active = nextLyricIndex(active + 1);
+}
 
-                updateMidiLyricsAtTick(targetTick);
+if (active < 0) return new FullResult(output, 0);
 
-                if (backgroundPlayer != null) {
-                    if (wasPlaying) {
-                        backgroundPlayer.play();
-                    } else {
-                        backgroundPlayer.pause();
-                    }
-                }
+LyricEvent activeEvent = events.get(active);
 
-                updateMidiControls(
-                        midiEngine.getCurrentTick());
+int stanza = activeEvent.stanza;
+int firstStanzaLine = Integer.MAX_VALUE;
+int lastStanzaLine = Integer.MIN_VALUE;
 
-            } catch (Exception e) {
+for (LyricEvent e : events) {
 
-                Toast.makeText(
-                        this,
-                        "Could not seek in this MIDI song.",
-                        Toast.LENGTH_SHORT).show();
-            }
+if (!e.section
+&& !e.text.trim().isEmpty()
+&& e.stanza == stanza) {
 
-            return;
-        }
+firstStanzaLine = Math.min(firstStanzaLine, e.line);
+lastStanzaLine = Math.max(lastStanzaLine, e.line);
+}
+}
 
-        if (player != null) {
+if (firstStanzaLine == Integer.MAX_VALUE) {
+return new FullResult(output, 0);
+}
 
-            long duration = player.getDuration();
+int firstLine = Math.max(
+firstStanzaLine,
+activeEvent.line - 2);
 
-            if (duration > 0L) {
+int lastLine = Math.min(
+lastStanzaLine,
+firstLine + MAX_VISIBLE_LINES - 1);
 
-                long target =
-                        (long) (duration
-                                * (safeProgress / (double) SEEK_MAX));
+firstLine = Math.max(
+firstStanzaLine,
+lastLine - MAX_VISIBLE_LINES + 1);
 
-                player.seekTo(Math.max(
-                        0L, Math.min(target, duration)));
+int[] starts = new int[events.size()];
+int[] ends = new int[events.size()];
 
-                updateMediaControls();
-            }
-        }
-    }
+for (int i = 0; i < events.size(); i++) {
+starts[i] = -1;
+ends[i] = -1;
+}
 
-    private void updateMidiControls(long tick) {
+int previousLine = Integer.MIN_VALUE;
+int previousEvent = -1;
+int activeLineStart = 0;
 
-        if (!midiReady) {
-            updatePlaybackTime(0L, 0L);
-            return;
-        }
+for (int i = 0; i < events.size(); i++) {
 
-        long durationTicks = getEffectiveMidiDurationTicks();
+LyricEvent e = events.get(i);
 
-        long safeTick = Math.max(0L, tick);
+if (e.section
+|| e.text.trim().isEmpty()
+|| e.stanza != stanza
+|| e.line < firstLine
+|| e.line > lastLine) {
+continue;
+}
 
-        if (durationTicks > 0L) {
-            safeTick = Math.min(safeTick, durationTicks);
-        }
+if (previousLine != e.line) {
 
-        if (durationTicks > 0L
-                && !userSeeking
-                && seekBar != null) {
+if (output.length() > 0) output.append('\n');
 
-            int progress = (int) Math.max(
-                    0,
-                    Math.min(
-                            SEEK_MAX,
-                            (long) (safeTick
-                                    * (double) SEEK_MAX
-                                    / durationTicks)));
+previousLine = e.line;
+previousEvent = -1;
+}
 
-            updatingSeekBar = true;
-            seekBar.setProgress(progress);
-            updatingSeekBar = false;
-        }
+if (previousEvent >= 0) {
 
-        long elapsedMillis = 0L;
-        long totalMillis = 0L;
+LyricEvent previous = events.get(previousEvent);
 
-        if (currentMidiTiming != null) {
+if (hasWordBoundaryBefore(e, previous)) {
+output.append(' ');
+}
+}
 
-            elapsedMillis =
-                    currentMidiTiming.tickToMillis(safeTick);
+int start = output.length();
 
-            totalMillis =
-                    currentMidiTiming.getDurationMillis();
-        }
+output.append(e.text);
 
-        updatePlaybackTime(
-                elapsedMillis,
-                Math.max(elapsedMillis, totalMillis));
-    }
+int end = output.length();
 
-    private void updateMediaControls() {
+starts[i] = start;
+ends[i] = end;
 
-        if (player == null) {
-            return;
-        }
+if (e.line == activeEvent.line
+&& activeLineStart == 0) {
+activeLineStart = start;
+}
 
-        long duration = player.getDuration();
-        long position = player.getCurrentPosition();
+previousEvent = i;
+}
 
-        if (duration > 0L && !userSeeking
-                && seekBar != null) {
+if (output.length() == 0) {
+return new FullResult(output, 0);
+}
 
-            int progress = (int) Math.max(
-                    0,
-                    Math.min(
-                            SEEK_MAX,
-                            position * SEEK_MAX / duration));
+boolean allowHighlight =
+durationTicks <= 0 || tick < durationTicks;
 
-            updatingSeekBar = true;
-            seekBar.setProgress(progress);
-            updatingSeekBar = false;
-        }
+if (allowHighlight) {
 
-        updatePlaybackTime(
-                Math.max(0L, position),
-                duration > 0L ? duration : 0L);
-    }
+int activeStart = -1;
+int activeEnd = -1;
 
-    private void updateMidiLyricsAtTick(long tick) {
+if (starts[active] >= 0
+&& ends[active] > starts[active]) {
 
-        if (lyricsLabel == null || currentMidiLyrics == null) {
-            return;
-        }
+int firstWord = active;
+int lastWord = active;
+long activeTick = events.get(active).tick;
 
-        if (!currentMidiLyrics.hasLyrics()) {
+while (firstWord > 0
+&& events.get(firstWord - 1).tick == activeTick
+&& starts[firstWord - 1] >= 0) {
+firstWord--;
+}
 
-            countdownLabel.setVisibility(View.GONE);
+while (lastWord + 1 < events.size()
+&& events.get(lastWord + 1).tick == activeTick
+&& starts[lastWord + 1] >= 0) {
+lastWord++;
+}
 
-            if (!"No embedded lyrics found."
-                    .contentEquals(lyricsLabel.getText())) {
+while (firstWord > 0) {
 
-                lyricsLabel.setText(
-                        "No embedded lyrics found.");
+int previousIndex = firstWord - 1;
 
-                resetLyricTracking();
-            }
+LyricEvent previous = events.get(previousIndex);
+LyricEvent current = events.get(firstWord);
 
-            return;
-        }
+if (previous.section
+|| current.section
+|| previous.stanza != current.stanza
+|| previous.line != current.line
+|| starts[previousIndex] < 0
+|| ends[previousIndex] <= starts[previousIndex]
+|| hasWordBoundaryBefore(current, previous)) {
+break;
+}
 
-        int countdown = currentMidiLyrics
-                .getCountdownNumberAtTick(tick);
+firstWord--;
+}
 
-        if (countdown >= 1 && countdown <= 5) {
+while (lastWord + 1 < events.size()) {
 
-            countdownLabel.setText(
-                    String.valueOf(countdown));
+int nextIndex = lastWord + 1;
 
-            countdownLabel.setVisibility(View.VISIBLE);
+LyricEvent current = events.get(lastWord);
+LyricEvent next = events.get(nextIndex);
 
-        } else {
+if (current.section
+|| next.section
+|| current.stanza != next.stanza
+|| current.line != next.line
+|| starts[nextIndex] < 0
+|| ends[nextIndex] <= starts[nextIndex]
+|| hasWordBoundaryBefore(next, current)) {
+break;
+}
 
-            countdownLabel.setVisibility(View.GONE);
-        }
+lastWord++;
+}
 
-        CharSequence candidate =
-                currentMidiLyrics.styledFullTextAtTick(
-                        tick, getEffectiveMidiDurationTicks());
+activeStart = starts[firstWord];
+activeEnd = ends[lastWord];
+}
 
-        int activeStart = -1;
-        int activeEnd = -1;
+if (activeStart >= 0 && activeEnd > activeStart) {
 
-        if (candidate instanceof Spanned) {
+output.setSpan(
+new ForegroundColorSpan(ACTIVE_GREEN),
+activeStart,
+activeEnd,
+Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+}
+}
 
-            Spanned spanned = (Spanned) candidate;
+return new FullResult(output, activeLineStart);
+}
 
-            ForegroundColorSpan[] spans =
-                    spanned.getSpans(
-                            0,
-                            spanned.length(),
-                            ForegroundColorSpan.class);
+public static Stage3MidiLyrics read(File file) {
 
-            for (ForegroundColorSpan span : spans) {
+if (file == null || !file.isFile() || file.length() < 14) {
+return empty();
+}
 
-                if (span.getForegroundColor() == ACTIVE_GREEN) {
+try {
 
-                    activeStart = spanned.getSpanStart(span);
-                    activeEnd = spanned.getSpanEnd(span);
-                    break;
-                }
-            }
-        }
+byte[] data = Files.readAllBytes(file.toPath());
 
-        String candidateText = candidate.toString();
+Reader r = new Reader(data);
 
-        boolean textChanged =
-                !candidateText.equals(lastRenderedLyricText);
+if (!"MThd".equals(r.ascii(4))) return empty();
 
-        boolean highlightChanged =
-                activeStart != lastRenderedLyricStart
-                || activeEnd != lastRenderedLyricEnd;
+long headerLength = r.u32();
 
-        if (textChanged || highlightChanged) {
+if (headerLength < 6
+|| headerLength > r.remaining()) {
+return empty();
+}
 
-            lyricsLabel.setText(candidate);
+r.u16();
 
-            lastRenderedLyricText = candidateText;
-            lastRenderedLyricStart = activeStart;
-            lastRenderedLyricEnd = activeEnd;
-        }
+int trackCount = r.u16();
+int division = r.u16();
 
-        final int activeLine =
-                currentMidiLyrics.activeLineNumberAtTick(tick);
+if ((division & 0x8000) != 0 || division == 0) {
+return empty();
+}
 
-        if (activeLine < 0) {
-            return;
-        }
+int ppq = division;
 
-        final int activeOffset = Math.max(
-                0,
-                currentMidiLyrics.activeLineStartOffsetAtTick(tick));
+r.skip((int) headerLength - 6);
 
-        if (activeLine == lastScrolledLyricLine) {
-            return;
-        }
+List<LyricEvent> textEvents = new ArrayList<>();
+List<LyricEvent> lyricEvents = new ArrayList<>();
+List<LyricEvent> sectionEvents = new ArrayList<>();
+List<TempoEvent> tempos = new ArrayList<>();
 
-        lastScrolledLyricLine = activeLine;
+tempos.add(new TempoEvent(0, DEFAULT_TEMPO));
 
-        lyricsLabel.post(() -> {
+String title = "";
+String singer = "";
+String composer = "";
 
-            if (released
-                    || returningToSongbook
-                    || lyricsLabel == null
-                    || lyricsScroll == null) {
-                return;
-            }
+int titleField = 0;
+int sequence = 0;
 
-            Layout layout = lyricsLabel.getLayout();
+boolean explicitStanzas = false;
 
-            if (layout == null || layout.getLineCount() == 0) {
-                return;
-            }
+for (int track = 0;
+track < trackCount && r.remaining() >= 8;
+track++) {
 
-            int offset = Math.min(
-                    activeOffset,
-                    lyricsLabel.length());
+String chunk = r.ascii(4);
+long length = r.u32();
 
-            int textLine = layout.getLineForOffset(offset);
+if (length > r.remaining()) break;
 
-            int lineTop = layout.getLineTop(textLine);
-            int lineBottom = layout.getLineBottom(textLine);
+int end = r.position + (int) length;
 
-            int viewportHeight =
-                    lyricsScroll.getHeight()
-                            - lyricsScroll.getPaddingTop()
-                            - lyricsScroll.getPaddingBottom();
+if (!"MTrk".equals(chunk)) {
+r.position = end;
+continue;
+}
 
-            if (viewportHeight <= 0) {
-                return;
-            }
+long tick = 0;
+int runningStatus = 0;
 
-            int lineHeight = lineBottom - lineTop;
+LyricBreakState textBreak = new LyricBreakState();
+LyricBreakState lyricBreak = new LyricBreakState();
 
-            int target = lineTop
-                    - (viewportHeight - lineHeight) / 2;
+while (r.position < end) {
 
-            int maxScroll = Math.max(
-                    0,
-                    lyricsLabel.getHeight()
-                            - viewportHeight);
+tick += r.vlq(end);
 
-            target = Math.max(
-                    0,
-                    Math.min(target, maxScroll));
+if (r.position >= end) break;
 
-            int currentScroll = lyricsScroll.getScrollY();
+int first = r.u8();
 
-            if (Math.abs(target - currentScroll) > dp(18)) {
-                lyricsScroll.smoothScrollTo(0, target);
-            }
-        });
-    }
+int status;
+int firstData = -1;
 
-    private void resetLyricTracking() {
+if (first < 0x80) {
 
-        lastRenderedLyricStart = -2;
-        lastRenderedLyricEnd = -2;
-        lastRenderedLyricText = null;
+if (runningStatus == 0) break;
 
-        lastScrolledLyricLine = Integer.MIN_VALUE;
+status = runningStatus;
+firstData = first;
 
-        if (countdownLabel != null) {
-            countdownLabel.setVisibility(View.GONE);
-        }
+} else {
 
-        if (lyricsScroll != null) {
-            lyricsScroll.stopNestedScroll();
-            lyricsScroll.smoothScrollTo(0, 0);
-        }
-    }
+status = first;
+}
 
-    private File extractSongHubRawMidi(
-            String songUri) throws IOException {
+if (status == 0xFF) {
 
-        Uri songHubUri = Uri.parse(songUri);
+runningStatus = 0;
 
-        String blobString =
-                songHubUri.getQueryParameter("blob");
+int type = r.u8();
+int size = r.vlq(end);
 
-        String offsetString =
-                songHubUri.getQueryParameter("offset");
+if (size > end - r.position) break;
 
-        String lengthString =
-                songHubUri.getQueryParameter("length");
+byte[] raw = r.bytes(size);
 
-        if (blobString == null
-                || offsetString == null
-                || lengthString == null) {
+if (type == 0x2F) break;
 
-            throw new IOException(
-                    "This catalog entry has no linked blob file. "
-                    + "Reconnect the SongHub library.");
-        }
+if (type == 0x51 && raw.length == 3) {
 
-        long sectorOffset;
-        long sectorLength;
+long tempo =
+((long) (raw[0] & 255) << 16)
+| ((long) (raw[1] & 255) << 8)
+| (raw[2] & 255);
 
-        try {
-            sectorOffset = Long.parseLong(offsetString);
-            sectorLength = Long.parseLong(lengthString);
+if (tempo > 0) {
+tempos.add(new TempoEvent(tick, tempo));
+}
 
-        } catch (NumberFormatException e) {
+continue;
+}
 
-            throw new IOException(
-                    "Invalid SongHub sector reference.");
-        }
+String value = decode(raw).replace("\u0000", "");
+String trimmed = value.trim();
 
-        if (sectorOffset < 0 || sectorLength <= 0) {
-            throw new IOException(
-                    "Invalid SongHub data range.");
-        }
+boolean separatorOnly =
+(type == 0x01 || type == 0x05)
+&& containsLyricSeparator(value)
+&& trimmed.isEmpty();
 
-        long byteOffset;
-        long byteLength;
+boolean whitespaceOnly =
+(type == 0x01 || type == 0x05)
+&& !value.isEmpty()
+&& trimmed.isEmpty();
 
-        try {
-            byteOffset = Math.multiplyExact(
-                    sectorOffset,
-                    (long) SONGHUB_SECTOR_SIZE);
+if (trimmed.isEmpty()
+&& !separatorOnly
+&& !whitespaceOnly) {
+continue;
+}
 
-            byteLength = Math.multiplyExact(
-                    sectorLength,
-                    (long) SONGHUB_SECTOR_SIZE);
+if (type == 0x03) {
 
-        } catch (ArithmeticException e) {
+String lower = trimmed.toLowerCase(Locale.ROOT);
 
-            throw new IOException(
-                    "SongHub data range is too large.");
-        }
+if (lower.startsWith("singer:")) {
+singer = removeLabel(trimmed, "singer:");
+} else if (lower.startsWith("composer:")) {
+composer = removeLabel(trimmed, "composer:");
+}
+}
 
-        if (byteLength > MAX_SONGHUB_SLICE_BYTES) {
-            throw new IOException(
-                    "SongHub data range exceeds the supported size.");
-        }
+if (type == 0x06) {
 
-        Uri blobUri = Uri.parse(blobString);
+String heading = extractHeading(trimmed);
 
-        File directory = new File(
-                getCacheDir(),
-                "stage3_songhub");
+if (heading != null) {
 
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw new IOException(
-                    "Cannot create the SongHub cache folder.");
-        }
+sectionEvents.add(new LyricEvent(
+tick,
+heading,
+sequence++,
+false,
+true,
+false,
+false,
+false));
+}
 
-        String safeNumber = currentSong == null
-                ? "song"
-                : currentSong.number.replaceAll(
-                        "[^A-Za-z0-9_-]", "_");
+continue;
+}
 
-        File destination =
-                new File(directory, safeNumber + ".mid");
+if (type != 0x01 && type != 0x05) continue;
 
-        File temporary =
-                new File(directory, safeNumber + ".tmp");
+if (trimmed.startsWith("@")) {
 
-        try (InputStream input =
-                     getContentResolver().openInputStream(blobUri)) {
+String lower = trimmed.toLowerCase(Locale.ROOT);
 
-            if (input == null) {
-                throw new IOException(
-                        "Cannot open the SongHub blob file.");
-            }
+if (lower.startsWith("@v")) {
 
-            skipFully(input, byteOffset);
+singer = trimmed.substring(2).trim();
 
-            try (FileOutputStream output =
-                         new FileOutputStream(temporary)) {
+} else if (lower.startsWith("@t")) {
 
-                byte[] buffer = new byte[8192];
-                long remaining = byteLength;
-                int read;
+String field = trimmed.substring(2).trim();
 
-                while (remaining > 0
-                        && (read = input.read(
-                                buffer,
-                                0,
-                                (int) Math.min(
-                                        buffer.length,
-                                        remaining))) != -1) {
+if (!field.isEmpty()) {
 
-                    output.write(buffer, 0, read);
-                    remaining -= read;
-                }
+titleField++;
 
-                if (remaining != 0) {
-                    throw new IOException(
-                            "The blob ended before the indexed song.");
-                }
-            }
+if (titleField == 1 && title.isEmpty()) {
+title = field;
+} else if (titleField == 2 && singer.isEmpty()) {
+singer = field;
+} else if (titleField >= 3 && composer.isEmpty()) {
 
-        } catch (Exception e) {
+String credit = field.toLowerCase(Locale.ROOT);
 
-            temporary.delete();
+if (credit.contains("music")
+|| credit.contains("word")
+|| credit.contains("copyright")) {
+composer = field;
+}
+}
+}
 
-            if (e instanceof IOException) {
-                throw (IOException) e;
-            }
+} else if (lower.startsWith("@i")) {
 
-            throw new IOException(
-                    "Could not read the SongHub blob range.", e);
-        }
+String info = trimmed.substring(2).trim();
+String lowerInfo = info.toLowerCase(Locale.ROOT);
 
-        if (temporary.length() < 14) {
+if (composer.isEmpty()
+&& (lowerInfo.contains("music")
+|| lowerInfo.contains("word"))) {
+composer = info;
+}
+}
 
-            temporary.delete();
+continue;
+}
 
-            throw new IOException(
-                    "The selected data is too short for MIDI.");
-        }
+String lower = trimmed.toLowerCase(Locale.ROOT);
 
-        byte[] header = new byte[4];
+if (lower.startsWith("title:")) {
 
-        try (InputStream check =
-                     new java.io.FileInputStream(temporary)) {
+if (title.isEmpty()) {
+title = removeLabel(trimmed, "title:");
+}
 
-            if (check.read(header) != 4
-                    || header[0] != 'M'
-                    || header[1] != 'T'
-                    || header[2] != 'h'
-                    || header[3] != 'd') {
+continue;
+}
 
-                temporary.delete();
+if (lower.startsWith("singer:")
+|| lower.startsWith("artist:")) {
 
-                throw new IOException(
-                        "This indexed data is not a standard "
-                        + "unencrypted MIDI file.");
-            }
-        }
+if (singer.isEmpty()) {
 
-        if (destination.exists() && !destination.delete()) {
+singer = lower.startsWith("singer:")
+? removeLabel(trimmed, "singer:")
+: removeLabel(trimmed, "artist:");
+}
 
-            temporary.delete();
+continue;
+}
 
-            throw new IOException(
-                    "Cannot replace the cached MIDI file.");
-        }
+if (lower.startsWith("composer:")) {
 
-        if (!temporary.renameTo(destination)) {
+composer = removeLabel(trimmed, "composer:");
+continue;
+}
 
-            temporary.delete();
+if (isCredit(trimmed) || isNonLyricTag(trimmed)) {
+continue;
+}
 
-            throw new IOException(
-                    "Cannot save the cached MIDI file.");
-        }
+if (!separatorOnly
+&& !whitespaceOnly
+&& !isLikelyLyricText(trimmed)) {
+continue;
+}
 
-        return destination;
-    }
+LyricBreakState state = type == 0x05
+? lyricBreak : textBreak;
 
-    private void skipFully(
-            InputStream input,
-            long bytes) throws IOException {
+List<LyricEvent> parsed = parseLyricEvents(
+value, tick, sequence, state);
 
-        long remaining = bytes;
+sequence += parsed.size();
 
-        while (remaining > 0) {
+for (LyricEvent e : parsed) {
 
-            long skipped = input.skip(remaining);
+if (e.stanzaBreak) explicitStanzas = true;
 
-            if (skipped > 0) {
-                remaining -= skipped;
+if (type == 0x01) {
+textEvents.add(e);
+} else {
+lyricEvents.add(e);
+}
+}
 
-            } else {
+} else if (status == 0xF0 || status == 0xF7) {
 
-                if (input.read() == -1) {
-                    throw new IOException(
-                            "Blob file ended before the song data.");
-                }
+runningStatus = 0;
 
-                remaining--;
-            }
-        }
-    }
+int size = r.vlq(end);
 
-    private void initializeMediaPlayer(
-            Stage3SongQueue.QueuedSong song) {
+if (size > end - r.position) break;
 
-        midiMode = false;
-        midiReady = false;
-        currentMidiTiming = null;
-        currentMidiNoteReader = null;
+r.skip(size);
 
-        currentMidiLyrics = Stage3MidiLyrics.empty();
+} else if (status >= 0x80 && status <= 0xEF) {
 
-        if (scoreLabel != null) {
-            scoreLabel.setText(
-                    "SCORING IS AVAILABLE FOR MIDI/KAR SONGS");
-        }
+runningStatus = status;
 
-        countdownLabel.setVisibility(View.GONE);
-        backgroundTexture.setVisibility(View.GONE);
-        backgroundImage.setVisibility(View.GONE);
-        stage.setBackgroundColor(DARK_GREEN);
+if (firstData < 0) r.u8();
 
-        lyricsLabel.setText(
-                "This file is not a MIDI/KAR karaoke song.");
+int command = status & 0xF0;
 
-        resetLyricTracking();
+if (command != 0xC0 && command != 0xD0) {
+r.u8();
+}
 
-        try {
-            player = new ExoPlayer.Builder(this).build();
+} else {
 
-            player.setVideoTextureView(backgroundTexture);
+runningStatus = 0;
+}
+}
 
-            player.addListener(new Player.Listener() {
+r.position = end;
+}
 
-                @Override
-                public void onPlaybackStateChanged(
-                        int playbackState) {
+int textCharacterCount = 0;
+int lyricCharacterCount = 0;
+int textEventCount = 0;
+int lyricEventCount = 0;
 
-                    if (player == null || midiMode) {
-                        return;
-                    }
+for (LyricEvent event : textEvents) {
 
-                    if (playbackState == Player.STATE_ENDED) {
-                        finishCurrentSong();
-                    }
-                }
+if (event == null || event.section || event.text == null) {
+continue;
+}
 
-                @Override
-                public void onPlayerError(
-                        PlaybackException error) {
+String value = event.text.trim();
 
-                    Toast.makeText(
-                            Stage3PlayerActivity.this,
-                            "Playback error: "
-                                    + error.getErrorCodeName(),
-                            Toast.LENGTH_LONG).show();
-                }
-            });
+if (!value.isEmpty()) {
+textCharacterCount += value.length();
+textEventCount++;
+}
+}
 
-            player.setMediaItem(
-                    MediaItem.fromUri(Uri.parse(song.uri)));
+for (LyricEvent event : lyricEvents) {
 
-            player.prepare();
-            player.play();
+if (event == null || event.section || event.text == null) {
+continue;
+}
 
-            setControlsEnabled(true);
+String value = event.text.trim();
 
-        } catch (Exception e) {
+if (!value.isEmpty()) {
+lyricCharacterCount += value.length();
+lyricEventCount++;
+}
+}
 
-            setControlsEnabled(false);
+List<LyricEvent> chosen;
 
-            Toast.makeText(
-                    this,
-                    "Could not play this file.",
-                    Toast.LENGTH_LONG).show();
-        }
-    }
+if (lyricCharacterCount > textCharacterCount) {
+chosen = lyricEvents;
+} else if (textCharacterCount > lyricCharacterCount) {
+chosen = textEvents;
+} else if (lyricEventCount > textEventCount) {
+chosen = lyricEvents;
+} else if (textEventCount > 0) {
+chosen = textEvents;
+} else {
+chosen = lyricEvents;
+}
 
-    private void finishCurrentSong() {
+chosen.addAll(sectionEvents);
 
-        if (released || returningToSongbook) {
-            return;
-        }
+Collections.sort(chosen, new Comparator<LyricEvent>() {
+@Override
+public int compare(LyricEvent a, LyricEvent b) {
 
-        String finalScoreText;
+int byTick = Long.compare(a.tick, b.tick);
 
-        if (karaokeScorer.hasScored()) {
+return byTick != 0
+? byTick
+: Integer.compare(a.sequence, b.sequence);
+}
+});
 
-            finalScoreText =
-                    "FINAL SCORE: "
-                            + karaokeScorer.getScorePercent()
-                            + "%\n"
-                            + karaokeScorer.getRating()
-                            + "  |  BEST STREAK: "
-                            + karaokeScorer.getBestStreak();
+inferWordBoundaries(chosen, ppq);
+applyAutomaticFormatting(chosen);
 
-        } else if (currentMidiNoteReader != null) {
+int line = 0;
+int stanza = 0;
 
-            finalScoreText =
-                    "NO SCORE RECORDED\n"
-                            + "Turn MIC ON and sing during playback "
-                            + "to receive a score.";
+for (LyricEvent e : chosen) {
 
-        } else {
+if (e.stanzaBreak) {
+stanza++;
+line++;
+} else if (e.lineBreak) {
+line++;
+}
 
-            finalScoreText =
-                    "SCORING NOT AVAILABLE FOR THIS SONG";
-        }
+if (e.section) {
+stanza++;
+line++;
+}
 
-        midiReady = false;
-        midiMode = false;
+e.line = line;
+e.stanza = stanza;
+}
 
-        Stage3SongQueue.stopAndClear();
+return new Stage3MidiLyrics(
+chosen,
+tempos,
+title,
+singer,
+composer,
+ppq,
+explicitStanzas);
 
-        currentSong = null;
+} catch (Exception ignored) {
 
-        releasePlayback();
+return empty();
+}
+}
 
-        songTitleLabel.setText("SONG FINISHED");
+/*
+ * Adds a word boundary between separate timed lyric events.
+ *
+ * Events at the same MIDI tick are kept together because they
+ * may be fragments belonging to one simultaneous lyric group.
+ *
+ * Existing explicit spaces and line/stanza separators are kept.
+ */
+private static void inferWordBoundaries(
+List<LyricEvent> list,
+int ppq) {
 
-        lyricsLabel.setText(
-                "SONG FINISHED\n\n"
-                + "Return to the Songbook "
-                + "to choose another song.");
+if (list == null || list.isEmpty()) {
+return;
+}
 
-        if (scoreLabel != null) {
-            scoreLabel.setText(finalScoreText);
-        }
+LyricEvent previous = null;
 
-        countdownLabel.setVisibility(View.GONE);
+for (LyricEvent current : list) {
 
-        updatePlaybackTime(0L, 0L);
+if (current == null
+|| current.section
+|| current.text == null
+|| current.text.trim().isEmpty()) {
 
-        setControlsEnabled(false);
-    }
+previous = null;
+continue;
+}
 
-    private void releaseBackgroundPlayer() {
+if (current.lineBreak || current.stanzaBreak) {
+previous = null;
+}
 
-        if (backgroundPlayer != null) {
+if (previous != null
+&& current.tick != previous.tick
+&& !current.spaceBefore
+&& !previous.spaceAfter) {
 
-            try {
-                backgroundPlayer.clearVideoTextureView(
-                        backgroundTexture);
+current.spaceBefore = true;
+}
 
-                backgroundPlayer.release();
+previous = current;
+}
+}
 
-            } catch (Exception ignored) {
-            }
+private static void applyAutomaticFormatting(
+List<LyricEvent> list) {
 
-            backgroundPlayer = null;
-        }
+if (list == null || list.isEmpty()) return;
 
-        backgroundAvailable = false;
-        currentBackgroundVideoSize = null;
+int characters = 0;
+int eventCount = 0;
+LyricEvent previous = null;
 
-        if (backgroundTexture != null) {
-            backgroundTexture.setVisibility(View.GONE);
-            backgroundTexture.setTransform(new Matrix());
-        }
-    }
+for (LyricEvent current : list) {
 
-    private void releasePlayback() {
+if (current.section) {
 
-        if (player != null) {
+previous = null;
+characters = 0;
+eventCount = 0;
+continue;
+}
 
-            try {
-                player.clearVideoTextureView(
-                        backgroundTexture);
+if (current.lineBreak || current.stanzaBreak) {
 
-                player.release();
+previous = null;
+characters = 0;
+eventCount = 0;
+}
 
-            } catch (Exception ignored) {
-            }
+int extraSpace =
+hasWordBoundaryBefore(current, previous) ? 1 : 0;
 
-            player = null;
-        }
+int nextLength =
+characters + extraSpace + current.text.length();
 
-        releaseBackgroundPlayer();
+if (previous != null
+&& !current.lineBreak
+&& !current.stanzaBreak
+&& hasWordBoundaryBefore(current, previous)
+&& (nextLength > MAX_LINE_CHARACTERS
+|| eventCount >= MAX_LINE_EVENTS)) {
 
-        if (midiEngine != null) {
+current.lineBreak = true;
+characters = 0;
+eventCount = 0;
+extraSpace = 0;
+}
 
-            try {
-                midiEngine.stop();
+characters += extraSpace + current.text.length();
+eventCount++;
+previous = current;
+}
+}
 
-            } catch (Exception ignored) {
-            }
-        }
+private static boolean containsLyricSeparator(String value) {
 
-        midiMode = false;
-        midiReady = false;
-        midiDurationTicks = 0L;
-        midiPausedByLifecycle = false;
+if (value == null) return false;
 
-        currentMidiLyrics = Stage3MidiLyrics.empty();
-        currentMidiTiming = null;
-        currentMidiNoteReader = null;
+for (int i = 0; i < value.length(); i++) {
 
-        resetLyricTracking();
+char c = value.charAt(i);
 
-        if (singerLabel != null) {
-            singerLabel.setText("");
-            singerLabel.setVisibility(View.GONE);
-        }
+if (c == '/' || c == '\\' || c == '\r' || c == '\n') {
+return true;
+}
+}
 
-        if (lyricsLabel != null) {
-            lyricsLabel.setText("");
-        }
+return false;
+}
 
-        if (backgroundImage != null) {
-            backgroundImage.setImageDrawable(null);
-            backgroundImage.setVisibility(View.GONE);
-        }
+private static boolean isLikelyLyricText(String value) {
 
-        if (backgroundTexture != null) {
-            backgroundTexture.setVisibility(View.GONE);
-        }
+if (value == null) return false;
 
-        setControlsEnabled(false);
+String s = value.trim();
 
-        updatePlaybackTime(0L, 0L);
+if (s.isEmpty()) return false;
 
-        if (seekBar != null) {
-            updatingSeekBar = true;
-            seekBar.setProgress(0);
-            updatingSeekBar = false;
-        }
+String lower = s.toLowerCase(Locale.ROOT);
 
-        if (stage != null) {
-            stage.setBackgroundColor(DARK_GREEN);
-        }
-    }
+if (isControlToken(s)
+|| isCredit(s)
+|| isNonLyricTag(s)
+|| extractHeading(s) != null) {
+return false;
+}
 
-    @Override
-    protected void onStop() {
-        markPlayerLaunchCheckpoint(
-                "LIFECYCLE_ON_STOP_finishing_" + isFinishing());
+if (lower.matches("^(track|channel|tempo|time signature|"
++ "key signature|program|instrument|copyright|"
++ "sequence|midi|karaoke|kar)\\s*[:=].*$")) {
+return false;
+}
 
-        super.onStop();
+if (lower.matches("^(gm|gs|xg)\\s*[:=].*$")) return false;
 
-        stopMicrophoneMonitoring();
+if (lower.matches(
+"^[0-9]+([.,][0-9]+)?\\s*(bpm|ms|hz)$")) {
+return false;
+}
 
-        if (returningToSongbook || released) {
-            return;
-        }
+if (lower.matches("^(ch\\.?\\s*)?[0-9]{1,2}$")) {
+return false;
+}
 
-        if (midiMode && midiEngine != null && midiReady) {
+if (lower.matches("^(\\d{1,3}\\s*){2,}$")) {
+return false;
+}
 
-            midiPausedByLifecycle =
-                    midiEngine.isPlaying();
+if (s.matches("^[#=<>\\[\\]{}|]+$")) return false;
 
-            if (midiPausedByLifecycle) {
-                midiEngine.pause();
-            }
+if (s.length() > 3
+&& s.matches("^[A-Fa-f0-9:/\\\\._-]+$")) {
+return false;
+}
 
-            if (backgroundPlayer != null) {
-                backgroundPlayer.pause();
-            }
+return s.matches("(?s).*[\\p{L}].*");
+}
 
-        } else if (player != null) {
+private static List<LyricEvent> parseLyricEvents(
+String value,
+long tick,
+int firstSequence,
+LyricBreakState state) {
 
-            player.pause();
-        }
-    }
+List<LyricEvent> result = new ArrayList<>();
 
-    @Override
-    protected void onResume() {
-        super.onResume();
+if (value == null || state == null) return result;
 
-        markPlayerLaunchCheckpoint("LIFECYCLE_ON_RESUME");
+String source = value.replace("\u0000", "");
 
-        if (!tvMode && stage3AdView != null) {
-            stage3AdView.resume();
-        }
+StringBuilder fragment = new StringBuilder();
 
-        if (returningToSongbook || released) {
-            return;
-        }
+boolean pendingLine = state.pendingLineBreak;
+boolean pendingStanza = state.pendingStanzaBreak;
+boolean pendingSpace = state.pendingSpace;
 
-        if (midiMode && midiEngine != null
-                && midiReady && midiPausedByLifecycle) {
+int sequence = firstSequence;
 
-            midiEngine.resume();
+for (int i = 0; i < source.length(); i++) {
 
-            midiPausedByLifecycle = false;
+char c = source.charAt(i);
 
-            if (backgroundPlayer != null) {
-                backgroundPlayer.play();
-            }
-        }
+if (c == '/' || c == '\\' || c == '\r' || c == '\n') {
 
-        handler.removeCallbacks(progressUpdater);
-        handler.post(progressUpdater);
-    }
+addFragment(
+result,
+fragment.toString(),
+tick,
+sequence++,
+pendingLine,
+pendingStanza,
+pendingSpace);
 
-    @Override
-    protected void onPause() {
+String clean = cleanLyricFragment(fragment.toString());
 
-        if (!tvMode && stage3AdView != null) {
-            stage3AdView.pause();
-        }
+if (!clean.isEmpty() && !isControlToken(clean)) {
 
-        super.onPause();
-    }
+pendingLine = false;
+pendingStanza = false;
+pendingSpace = false;
 
-    @Override
-    public void onBackPressed() {
-        markPlayerLaunchCheckpoint("ON_BACK_PRESSED");
-        returnToSongbook();
-    }
+} else if (!fragment.toString().isEmpty()
+&& fragment.toString().trim().isEmpty()) {
 
-    @Override
-    protected void onDestroy() {
+pendingSpace = true;
+}
 
-        markPlayerLaunchCheckpoint(
-                "LIFECYCLE_ON_DESTROY_finishing_" + isFinishing());
+fragment.setLength(0);
+pendingLine = true;
 
-        released = true;
+if (c == '\\' || c == '\n') {
+pendingStanza = true;
+}
 
-        stopMicrophoneMonitoring();
+if (c == '\r'
+&& i + 1 < source.length()
+&& source.charAt(i + 1) == '\n') {
 
-        handler.removeCallbacks(progressUpdater);
+i++;
+pendingStanza = true;
+}
 
-        if (player != null) {
+} else {
 
-            try {
-                player.release();
+fragment.append(c);
+}
+}
 
-            } catch (Exception ignored) {
-            }
+String raw = fragment.toString();
+String clean = cleanLyricFragment(raw);
 
-            player = null;
-        }
+if (!clean.isEmpty() && !isControlToken(clean)) {
 
-        releaseBackgroundPlayer();
+result.add(new LyricEvent(
+tick,
+clean,
+sequence,
+pendingLine,
+false,
+pendingStanza,
+pendingSpace || hasLeadingSpace(raw),
+hasTrailingSpace(raw)));
 
-        if (midiEngine != null) {
+pendingLine = false;
+pendingStanza = false;
+pendingSpace = false;
 
-            midiEngine.release();
-            midiEngine = null;
-        }
+} else if (!raw.isEmpty() && raw.trim().isEmpty()) {
 
-        if (stage3AdView != null) {
-            try {
-                stage3AdView.destroy();
-            } catch (Exception error) {
-                Log.w(
-                        "Stage3AdMob",
-                        "Could not destroy Stage 3 ad view.",
-                        error);
-            }
-            stage3AdView = null;
-        }
+pendingSpace = true;
+}
 
-        super.onDestroy();
-    }
+state.pendingLineBreak = pendingLine;
+state.pendingStanzaBreak = pendingStanza;
+state.pendingSpace = pendingSpace;
+
+return result;
+}
+
+private static void addFragment(
+List<LyricEvent> result,
+String raw,
+long tick,
+int sequence,
+boolean lineBreak,
+boolean stanzaBreak,
+boolean pendingSpace) {
+
+String clean = cleanLyricFragment(raw);
+
+if (clean.isEmpty() || isControlToken(clean)) return;
+
+result.add(new LyricEvent(
+tick,
+clean,
+sequence,
+lineBreak,
+false,
+stanzaBreak,
+pendingSpace || hasLeadingSpace(raw),
+hasTrailingSpace(raw)));
+}
+
+private static boolean hasLeadingSpace(String value) {
+
+return value != null
+&& !value.isEmpty()
+&& Character.isWhitespace(value.charAt(0));
+}
+
+private static boolean hasTrailingSpace(String value) {
+
+return value != null
+&& !value.isEmpty()
+&& Character.isWhitespace(value.charAt(value.length() - 1));
+}
+
+private static String cleanLyricFragment(String value) {
+
+if (value == null) return "";
+
+return value.replace("\u0000", "")
+.replaceAll("[\\p{Cntrl}&&[^\\t]]", "")
+.trim();
+}
+
+private static boolean isCredit(String value) {
+
+String s = value.trim().toLowerCase(Locale.ROOT);
+
+return s.matches("^(words?\\s*/\\s*music|music\\s*/\\s*words?|"
++ "words?\\s+and\\s+music|music\\s+and\\s+words?)\\s*:?$")
+|| s.startsWith("copyright:")
+|| s.startsWith("(c)")
+|| s.startsWith("©");
+}
+
+private static boolean isNonLyricTag(String value) {
+
+String s = value.trim().toLowerCase(Locale.ROOT);
+
+return s.startsWith("singer:")
+|| s.startsWith("composer:")
+|| s.startsWith("artist:")
+|| s.startsWith("title:")
+|| s.startsWith("author:")
+|| s.startsWith("copyright:")
+|| s.startsWith("words/music:")
+|| s.startsWith("words and music:");
+}
+
+private static String extractHeading(String value) {
+
+if (value == null) return null;
+
+String s = value.trim();
+
+if ((s.startsWith("[") && s.endsWith("]"))
+|| (s.startsWith("<") && s.endsWith(">"))
+|| (s.startsWith("*") && s.endsWith("*"))) {
+
+s = s.substring(1, s.length() - 1).trim();
+}
+
+String normalized = s.toLowerCase(Locale.ROOT)
+.replaceAll("[_\\-]+", " ")
+.replaceAll("\\s+", " ")
+.replaceAll("[.!:]+$", "")
+.trim();
+
+if (normalized.matches(
+"^(intro|instrumental|interlude|outro|"
++ "verse\\s*[0-9ivx]*|chorus\\s*[0-9ivx]*|"
++ "last chorus|final chorus|bridge|refrain|"
++ "solo|break|ending|pre chorus|post chorus|"
++ "repeat|coda)$")) {
+
+return normalized.toUpperCase(Locale.ROOT);
+}
+
+return null;
+}
+
+private static boolean isInstrumental(String s) {
+
+String v = s.toUpperCase(Locale.ROOT);
+
+return v.contains("INSTRUMENTAL")
+|| v.equals("INTRO")
+|| v.equals("INTERLUDE")
+|| v.equals("OUTRO")
+|| v.equals("SOLO")
+|| v.equals("BREAK")
+|| v.equals("ENDING")
+|| v.equals("CODA");
+}
+
+private static boolean isControlToken(String s) {
+
+if (s == null || s.trim().isEmpty()) return true;
+
+String v = s.trim().replaceAll("\\s+", "");
+
+return v.matches("(?i)0{2,}")
+|| v.matches("(?i)0x0{2,}")
+|| s.matches("[\\p{Cntrl}\\s]+");
+}
+
+private static String removeLabel(String value, String label) {
+
+if (value == null || value.length() < label.length()) {
+return "";
+}
+
+return value.substring(label.length()).trim();
+}
+
+private static String decode(byte[] bytes) {
+
+String value = new String(bytes, StandardCharsets.UTF_8);
+
+if (value.indexOf('\uFFFD') >= 0) {
+value = new String(bytes, Charset.forName("ISO-8859-1"));
+}
+
+return value;
+}
+
+private static String safe(String s) {
+return s == null ? "" : s.trim();
+}
+
+private static final class LyricBreakState {
+boolean pendingLineBreak;
+boolean pendingStanzaBreak;
+boolean pendingSpace;
+}
+
+private static final class LyricEvent {
+
+final long tick;
+String text;
+final int sequence;
+final boolean section;
+boolean stanzaBreak;
+boolean lineBreak;
+boolean spaceBefore;
+final boolean spaceAfter;
+int line;
+int stanza;
+
+LyricEvent(
+long tick,
+String text,
+int sequence,
+boolean lineBreak,
+boolean section,
+boolean stanzaBreak,
+boolean spaceBefore,
+boolean spaceAfter) {
+
+this.tick = tick;
+this.text = text;
+this.sequence = sequence;
+this.lineBreak = lineBreak;
+this.section = section;
+this.stanzaBreak = stanzaBreak;
+this.spaceBefore = spaceBefore;
+this.spaceAfter = spaceAfter;
+}
+}
+
+private static final class TempoEvent {
+
+final long tick;
+final long micros;
+
+TempoEvent(long tick, long micros) {
+
+this.tick = Math.max(0, tick);
+this.micros = Math.max(1, micros);
+}
+}
+
+private static final class FullResult {
+
+final SpannableStringBuilder text;
+final int activeLineStart;
+
+FullResult(
+SpannableStringBuilder text,
+int activeLineStart) {
+
+this.text = text;
+this.activeLineStart = activeLineStart;
+}
+}
+
+private static final class Reader {
+
+final byte[] data;
+int position;
+
+Reader(byte[] data) {
+this.data = data;
+}
+
+int remaining() {
+return data.length - position;
+}
+
+int u8() throws IOException {
+
+if (position >= data.length) {
+throw new IOException("Unexpected end of MIDI file");
+}
+
+return data[position++] & 255;
+}
+
+int u16() throws IOException {
+return (u8() << 8) | u8();
+}
+
+long u32() throws IOException {
+
+return ((long) u8() << 24)
+| ((long) u8() << 16)
+| ((long) u8() << 8)
+| u8();
+}
+
+String ascii(int count) throws IOException {
+
+if (count < 0 || count > remaining()) {
+throw new IOException("Invalid MIDI chunk");
+}
+
+String s = new String(
+data,
+position,
+count,
+StandardCharsets.US_ASCII);
+
+position += count;
+
+return s;
+}
+
+byte[] bytes(int count) throws IOException {
+
+if (count < 0 || count > remaining()) {
+throw new IOException("Invalid MIDI event");
+}
+
+byte[] b = new byte[count];
+
+System.arraycopy(
+data,
+position,
+b,
+0,
+count);
+
+position += count;
+
+return b;
+}
+
+void skip(int count) throws IOException {
+
+if (count < 0 || count > remaining()) {
+throw new IOException("Invalid MIDI length");
+}
+
+position += count;
+}
+
+int vlq(int end) throws IOException {
+
+int value = 0;
+int count = 0;
+int next;
+
+do {
+
+if (position >= end
+|| position >= data.length
+|| count++ >= 4) {
+
+throw new IOException("Invalid MIDI event length");
+}
+
+next = data[position++] & 255;
+
+value = (value << 7) | (next & 127);
+
+} while ((next & 128) != 0);
+
+return value;
+}
+}
 }
