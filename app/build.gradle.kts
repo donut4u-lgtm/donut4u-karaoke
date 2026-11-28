@@ -111,12 +111,17 @@ dependencies {
 
     implementation("com.google.android.gms:play-services-ads:25.5.0")
 
+    // Donut4U TV and Cast support.
+    implementation("com.google.android.gms:play-services-cast:22.0.0")
+    implementation("com.google.android.gms:play-services-cast-framework:22.0.0")
+    implementation("com.google.android.gms:play-services-cast-tv:21.1.1")
+
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-common:1.8.0")
 
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
 
-    // Stage 3: MIDI/KAR playback through FluidSynth.
+    // Preserve the current main branch FluidSynth dependency.
     implementation("dev.kotlinds:fluidsynth-kmp:1.1.1")
 
     // Required for Java API compatibility.
