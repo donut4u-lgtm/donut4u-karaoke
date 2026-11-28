@@ -44,10 +44,13 @@ import com.google.android.gms.ads.MobileAds;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.Locale;
 
@@ -57,6 +60,9 @@ public class Stage3PlayerActivity extends Activity {
             "donut4u_stage3_songbook";
 
     private static final String SONGS_KEY = "songs_json";
+
+    private static final String EXTRA_TV_MODE =
+            "com.donut4u.karaoke.EXTRA_TV_MODE";
 
     private static final String DEFAULT_SOUNDFONT =
             "builtin://default";
@@ -282,6 +288,8 @@ public class Stage3PlayerActivity extends Activity {
     private boolean updatingSeekBar;
     private boolean returningToSongbook;
 
+    private boolean tvMode;
+
     private long midiDurationTicks;
 
     private int lastRenderedLyricStart = -2;
@@ -328,6 +336,9 @@ public class Stage3PlayerActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        tvMode = getIntent().getBooleanExtra(
+                EXTRA_TV_MODE, false);
 
         markPlayerLaunchCheckpoint("01_ACTIVITY_CREATED");
 
@@ -410,7 +421,10 @@ public class Stage3PlayerActivity extends Activity {
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
         overlay.setPadding(
-                dp(14), dp(8), dp(14), dp(8));
+                dp(tvMode ? 30 : 14),
+                dp(tvMode ? 12 : 8),
+                dp(tvMode ? 30 : 14),
+                dp(tvMode ? 8 : 8));
 
         FrameLayout.LayoutParams overlayParams =
                 new FrameLayout.LayoutParams(
@@ -424,7 +438,7 @@ public class Stage3PlayerActivity extends Activity {
         songTitleLabel = new TextView(this);
         songTitleLabel.setText("");
         songTitleLabel.setTextColor(WHITE);
-        songTitleLabel.setTextSize(19);
+        songTitleLabel.setTextSize(tvMode ? 25 : 19);
         songTitleLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         songTitleLabel.setGravity(Gravity.CENTER);
@@ -441,7 +455,7 @@ public class Stage3PlayerActivity extends Activity {
         singerLabel = new TextView(this);
         singerLabel.setText("");
         singerLabel.setTextColor(WHITE);
-        singerLabel.setTextSize(15);
+        singerLabel.setTextSize(tvMode ? 19 : 15);
         singerLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         singerLabel.setGravity(Gravity.CENTER);
@@ -461,7 +475,7 @@ public class Stage3PlayerActivity extends Activity {
                 lyricsTopGap,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(22)));
+                        dp(tvMode ? 8 : 22)));
 
         FrameLayout lyricsContainer = new FrameLayout(this);
 
@@ -491,13 +505,14 @@ public class Stage3PlayerActivity extends Activity {
         lyricsLabel = new TextView(this);
         lyricsLabel.setText("");
         lyricsLabel.setTextColor(WHITE);
-        lyricsLabel.setTextSize(22);
+        lyricsLabel.setTextSize(tvMode ? 30 : 22);
         lyricsLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         lyricsLabel.setGravity(Gravity.CENTER);
         lyricsLabel.setPadding(
                 dp(10), dp(10), dp(10), dp(10));
-        lyricsLabel.setLineSpacing(dp(6), 1.05f);
+        lyricsLabel.setLineSpacing(
+                dp(tvMode ? 9 : 6), 1.05f);
         lyricsLabel.setIncludeFontPadding(true);
         lyricsLabel.setMaxLines(Integer.MAX_VALUE);
         lyricsLabel.setBreakStrategy(
@@ -513,7 +528,7 @@ public class Stage3PlayerActivity extends Activity {
 
         countdownLabel = new TextView(this);
         countdownLabel.setTextColor(ACTIVE_GREEN);
-        countdownLabel.setTextSize(76);
+        countdownLabel.setTextSize(tvMode ? 100 : 76);
         countdownLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         countdownLabel.setGravity(Gravity.CENTER);
@@ -532,30 +547,46 @@ public class Stage3PlayerActivity extends Activity {
 
         buildPlaybackControls();
 
-        // Put the existing player above a dedicated ad area.
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(DARK_GREEN);
 
-        root.addView(
-                stage,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        0,
-                        1f));
+        if (tvMode) {
 
-        FrameLayout adHolder = new FrameLayout(this);
-        adHolder.setBackgroundColor(DARK_GREEN);
+            // TV uses the complete screen for lyrics and controls.
+            // No reserved 250dp advertisement area.
+            root.addView(
+                    stage,
+                    new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.MATCH_PARENT));
 
-        root.addView(
-                adHolder,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(250)));
+        } else {
 
-        setContentView(root);
+            root.addView(
+                    stage,
+                    new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            0,
+                            1f));
 
-        loadStage3Ad(adHolder);
+            FrameLayout adHolder = new FrameLayout(this);
+            adHolder.setBackgroundColor(DARK_GREEN);
+
+            root.addView(
+                    adHolder,
+                    new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            dp(250)));
+
+            setContentView(root);
+
+            loadStage3Ad(adHolder);
+        }
+
+        if (tvMode) {
+            setContentView(root);
+        }
 
         getWindow().getDecorView().setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -571,6 +602,10 @@ public class Stage3PlayerActivity extends Activity {
     // ---------------------------------------------------------
 
     private void loadStage3Ad(FrameLayout adHolder) {
+
+        if (tvMode) {
+            return;
+        }
 
         try {
             stage3AdView = new AdView(this);
@@ -630,18 +665,21 @@ public class Stage3PlayerActivity extends Activity {
         controls.setOrientation(LinearLayout.VERTICAL);
         controls.setGravity(Gravity.CENTER);
         controls.setPadding(
-                dp(8), dp(4), dp(8), dp(2));
+                dp(tvMode ? 12 : 8),
+                dp(tvMode ? 2 : 4),
+                dp(tvMode ? 12 : 8),
+                dp(2));
         controls.setBackgroundColor(Color.TRANSPARENT);
 
         playbackTimeLabel = new TextView(this);
         playbackTimeLabel.setText("00:00 / 00:00");
         playbackTimeLabel.setTextColor(WHITE);
-        playbackTimeLabel.setTextSize(14);
+        playbackTimeLabel.setTextSize(tvMode ? 18 : 14);
         playbackTimeLabel.setGravity(Gravity.CENTER);
         playbackTimeLabel.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         playbackTimeLabel.setPadding(
-                dp(4), dp(3), dp(4), dp(3));
+                dp(4), dp(2), dp(4), dp(2));
 
         controls.addView(
                 playbackTimeLabel,
@@ -654,7 +692,7 @@ public class Stage3PlayerActivity extends Activity {
         seekBar.setProgress(0);
         seekBar.setEnabled(false);
         seekBar.setVisibility(View.VISIBLE);
-        seekBar.setMinimumHeight(dp(48));
+        seekBar.setMinimumHeight(dp(tvMode ? 42 : 48));
         seekBar.setPadding(dp(8), 0, dp(8), 0);
 
         if (android.os.Build.VERSION.SDK_INT >= 21) {
@@ -669,7 +707,7 @@ public class Stage3PlayerActivity extends Activity {
         LinearLayout.LayoutParams seekParams =
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(52));
+                        dp(tvMode ? 42 : 52));
 
         controls.addView(seekBar, seekParams);
 
@@ -698,23 +736,25 @@ public class Stage3PlayerActivity extends Activity {
         LinearLayout buttonRow = new LinearLayout(this);
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.CENTER);
-        buttonRow.setPadding(0, dp(3), 0, dp(3));
+        buttonRow.setPadding(0, dp(2), 0, dp(2));
 
         playButton = createControlButton("PLAY");
         pauseButton = createControlButton("PAUSE");
         stopButton = createControlButton("STOP");
 
+        int buttonHeight = dp(tvMode ? 58 : 50);
+
         buttonRow.addView(
                 playButton,
-                new LinearLayout.LayoutParams(0, dp(50), 1f));
+                new LinearLayout.LayoutParams(0, buttonHeight, 1f));
 
         buttonRow.addView(
                 pauseButton,
-                new LinearLayout.LayoutParams(0, dp(50), 1f));
+                new LinearLayout.LayoutParams(0, buttonHeight, 1f));
 
         buttonRow.addView(
                 stopButton,
-                new LinearLayout.LayoutParams(0, dp(50), 1f));
+                new LinearLayout.LayoutParams(0, buttonHeight, 1f));
 
         controls.addView(buttonRow);
 
@@ -723,7 +763,7 @@ public class Stage3PlayerActivity extends Activity {
         stopButton.setOnClickListener(v -> stopCurrentSong());
 
         // -----------------------------------------------------
-        // MICROPHONE MONITOR ROW
+        // PHONE-ONLY MICROPHONE MONITOR ROW
         // -----------------------------------------------------
 
         LinearLayout microphoneRow = new LinearLayout(this);
@@ -766,7 +806,7 @@ public class Stage3PlayerActivity extends Activity {
         controls.addView(microphoneRow);
 
         // -----------------------------------------------------
-        // KARAOKE SCORE DISPLAY
+        // PHONE-ONLY KARAOKE SCORE DISPLAY
         // -----------------------------------------------------
 
         scoreLabel = new TextView(this);
@@ -786,31 +826,37 @@ public class Stage3PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         dp(38)));
 
+        if (tvMode) {
+            microphoneRow.setVisibility(View.GONE);
+            scoreLabel.setVisibility(View.GONE);
+        }
+
         // -----------------------------------------------------
         // BACKGROUND AND SONGBOOK CONTROLS
         // -----------------------------------------------------
 
         backgroundButton = createControlButton("BACKGROUND");
-        backgroundButton.setTextSize(14);
+        backgroundButton.setTextSize(tvMode ? 16 : 14);
         backgroundButton.setOnClickListener(v -> showBackgroundMenu());
 
         controls.addView(
                 backgroundButton,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(46)));
+                        dp(tvMode ? 46 : 46)));
 
         backButton = new TextView(this);
         backButton.setText("←  BACK TO SONGBOOK");
         backButton.setTextColor(WHITE);
-        backButton.setTextSize(15);
+        backButton.setTextSize(tvMode ? 18 : 15);
         backButton.setTypeface(
                 Typeface.DEFAULT, Typeface.BOLD);
         backButton.setGravity(Gravity.CENTER);
         backButton.setPadding(
-                dp(20), dp(8), dp(20), dp(8));
+                dp(20), dp(6), dp(20), dp(6));
         backButton.setBackgroundColor(Color.TRANSPARENT);
         backButton.setContentDescription("Back to Songbook");
+        backButton.setFocusable(true);
 
         backButton.setOnClickListener(v -> returnToSongbook());
 
@@ -818,7 +864,7 @@ public class Stage3PlayerActivity extends Activity {
                 backButton,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
-                        dp(44)));
+                        dp(tvMode ? 42 : 44)));
 
         overlay.addView(
                 controls,
@@ -856,6 +902,334 @@ public class Stage3PlayerActivity extends Activity {
         button.setAlpha(1f);
 
         return button;
+    }
+
+    // ---------------------------------------------------------
+    // EXTERNAL LRC MATCHING
+    // ---------------------------------------------------------
+
+    private String normalizeLyricsMatchName(String value) {
+
+        if (value == null) {
+            return "";
+        }
+
+        String name = value.trim();
+
+        if (name.isEmpty()) {
+            return "";
+        }
+
+        try {
+            Uri uri = Uri.parse(name);
+
+            String path = uri.getLastPathSegment();
+
+            if (path != null && !path.trim().isEmpty()
+                    && (name.contains("://")
+                    || name.startsWith("content:"))) {
+                name = path;
+            }
+        } catch (Exception ignored) {
+        }
+
+        int slash = Math.max(
+                name.lastIndexOf('/'),
+                name.lastIndexOf('\\'));
+
+        if (slash >= 0 && slash < name.length() - 1) {
+            name = name.substring(slash + 1);
+        }
+
+        int dot = name.lastIndexOf('.');
+
+        if (dot > 0) {
+            name = name.substring(0, dot);
+        }
+
+        name = Normalizer.normalize(
+                name,
+                Normalizer.Form.NFD);
+
+        name = name.replaceAll("\\p{M}+", "");
+
+        name = name.toLowerCase(Locale.ROOT);
+
+        name = name.replace('_', ' ');
+        name = name.replace('-', ' ');
+
+        name = name.replaceAll("\\s+", " ").trim();
+
+        return name;
+    }
+
+    private String findMatchingLrcUri(
+            Stage3SongQueue.QueuedSong song) {
+
+        if (song == null) {
+            return null;
+        }
+
+        String songTitle = normalizeLyricsMatchName(
+                song.title);
+
+        String songUriName = "";
+
+        try {
+            Uri songUri = Uri.parse(song.uri);
+
+            String lastSegment = songUri.getLastPathSegment();
+
+            songUriName = normalizeLyricsMatchName(
+                    lastSegment);
+        } catch (Exception ignored) {
+        }
+
+        if (songTitle.isEmpty() && songUriName.isEmpty()) {
+            return null;
+        }
+
+        try {
+            SharedPreferences preferences =
+                    getSharedPreferences(
+                            SONGBOOK_PREFS,
+                            MODE_PRIVATE);
+
+            String savedSongs = preferences.getString(
+                    SONGS_KEY, "[]");
+
+            JSONArray array = new JSONArray(savedSongs);
+
+            for (int i = 0; i < array.length(); i++) {
+
+                JSONObject item = array.optJSONObject(i);
+
+                if (item == null) {
+                    continue;
+                }
+
+                String type = item.optString(
+                        "type", "");
+
+                String uri = item.optString(
+                        "uri", "");
+
+                String title = item.optString(
+                        "title", "");
+
+                if (uri.trim().isEmpty()) {
+                    continue;
+                }
+
+                boolean lyricsType =
+                        "LYRICS".equalsIgnoreCase(type);
+
+                boolean lrcUri = false;
+
+                try {
+                    String path =
+                            Uri.parse(uri).getLastPathSegment();
+
+                    lrcUri = path != null
+                            && path.toLowerCase(Locale.ROOT)
+                                    .endsWith(".lrc");
+                } catch (Exception ignored) {
+                }
+
+                if (!lyricsType && !lrcUri) {
+                    continue;
+                }
+
+                String lrcTitle =
+                        normalizeLyricsMatchName(title);
+
+                String lrcFileName = "";
+
+                try {
+                    lrcFileName =
+                            normalizeLyricsMatchName(
+                                    Uri.parse(uri).getLastPathSegment());
+                } catch (Exception ignored) {
+                }
+
+                boolean exactTitleMatch =
+                        !songTitle.isEmpty()
+                                && (songTitle.equals(lrcTitle)
+                                || songTitle.equals(lrcFileName));
+
+                boolean exactUriMatch =
+                        !songUriName.isEmpty()
+                                && (songUriName.equals(lrcTitle)
+                                || songUriName.equals(lrcFileName));
+
+                if (exactTitleMatch || exactUriMatch) {
+                    return uri;
+                }
+            }
+
+        } catch (Exception error) {
+
+            Log.e(
+                    "Stage3Lyrics",
+                    "Could not search the Stage 3 Songbook for LRC.",
+                    error);
+        }
+
+        return null;
+    }
+
+    private String readLrcText(String lrcUri) throws IOException {
+
+        if (lrcUri == null || lrcUri.trim().isEmpty()) {
+            return null;
+        }
+
+        Uri uri = Uri.parse(lrcUri);
+
+        try (InputStream input =
+                     getContentResolver().openInputStream(uri)) {
+
+            if (input == null) {
+                throw new IOException(
+                        "Cannot open the matching LRC file.");
+            }
+
+            StringBuilder result = new StringBuilder();
+
+            try (BufferedReader reader =
+                         new BufferedReader(
+                                 new InputStreamReader(
+                                         input,
+                                         StandardCharsets.UTF_8))) {
+
+                String line;
+
+                while ((line = reader.readLine()) != null) {
+                    result.append(line).append('\n');
+
+                    if (result.length() > 2_000_000) {
+                        throw new IOException(
+                                "The LRC file is too large.");
+                    }
+                }
+            }
+
+            return result.toString();
+        }
+    }
+
+    private void loadExternalLrcForSong(
+            Stage3SongQueue.QueuedSong song) {
+
+        if (song == null || !midiMode) {
+            return;
+        }
+
+        final String expectedSongNumber = song.number == null
+                ? ""
+                : song.number;
+
+        final String lrcUri = findMatchingLrcUri(song);
+
+        if (lrcUri == null) {
+            Log.i(
+                    "Stage3Lyrics",
+                    "No exact matching LRC found. "
+                            + "Keeping embedded MIDI/KAR lyrics.");
+            return;
+        }
+
+        new Thread(() -> {
+
+            String lrcText;
+
+            try {
+                lrcText = readLrcText(lrcUri);
+
+            } catch (Exception error) {
+
+                Log.w(
+                        "Stage3Lyrics",
+                        "Could not read matching LRC. "
+                                + "Embedded lyrics will remain active.",
+                        error);
+                return;
+            }
+
+            if (lrcText == null || lrcText.trim().isEmpty()) {
+                return;
+            }
+
+            runOnUiThread(() -> {
+
+                if (released
+                        || returningToSongbook
+                        || !midiMode
+                        || currentSong == null) {
+                    return;
+                }
+
+                String currentNumber =
+                        currentSong.number == null
+                                ? ""
+                                : currentSong.number;
+
+                if (!expectedSongNumber.equals(currentNumber)) {
+                    return;
+                }
+
+                try {
+                    Stage3MidiLyrics externalLyrics =
+                            currentMidiLyrics.withLrcText(lrcText);
+
+                    if (externalLyrics == null
+                            || !externalLyrics.hasLyrics()) {
+
+                        Log.w(
+                                "Stage3Lyrics",
+                                "Matching LRC did not contain usable "
+                                        + "timestamped lyrics. "
+                                        + "Keeping embedded lyrics.");
+                        return;
+                    }
+
+                    currentMidiLyrics = externalLyrics;
+
+                    String singer =
+                            currentMidiLyrics.getSinger();
+
+                    if (singer != null
+                            && !singer.trim().isEmpty()) {
+
+                        singerLabel.setText(singer.trim());
+                        singerLabel.setVisibility(View.VISIBLE);
+                    }
+
+                    resetLyricTracking();
+
+                    long currentTick =
+                            midiEngine != null && midiReady
+                                    ? midiEngine.getCurrentTick()
+                                    : 0L;
+
+                    updateMidiLyricsAtTick(currentTick);
+
+                    Log.i(
+                            "Stage3Lyrics",
+                            "Loaded exact matching external LRC: "
+                                    + lrcUri);
+
+                } catch (Exception error) {
+
+                    Log.e(
+                            "Stage3Lyrics",
+                            "Could not apply external LRC. "
+                                    + "Keeping the existing lyrics.",
+                            error);
+                }
+            });
+
+        }, "Stage3ExternalLrc").start();
     }
 
     // ---------------------------------------------------------
@@ -964,8 +1338,6 @@ public class Stage3PlayerActivity extends Activity {
                 microphoneStatusLabel.setText(
                         "MIC " + levelPercent + "%  |  " + pitch);
 
-                // Only score while a MIDI song is actually playing.
-                // This prevents scoring while paused or stopped.
                 if (midiMode
                         && midiReady
                         && midiEngine != null
@@ -1210,7 +1582,6 @@ public class Stage3PlayerActivity extends Activity {
                     flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
         } catch (Exception ignored) {
-            // Some document providers do not offer persistable access.
         }
 
         boolean video =
@@ -2079,6 +2450,10 @@ public class Stage3PlayerActivity extends Activity {
 
                         updateMidiControls(
                                 midiEngine.getCurrentTick());
+
+                        // Apply an exact-name matching LRC when available.
+                        // If none exists, embedded MIDI/KAR lyrics remain.
+                        loadExternalLrcForSong(song);
                     }
 
                     @Override
@@ -2832,7 +3207,6 @@ public class Stage3PlayerActivity extends Activity {
             return;
         }
 
-        // Save the result before releasing the MIDI player.
         String finalScoreText;
 
         if (karaokeScorer.hasScored()) {
@@ -2988,7 +3362,6 @@ public class Stage3PlayerActivity extends Activity {
 
         super.onStop();
 
-        // Stop microphone capture whenever Stage 3 leaves foreground.
         stopMicrophoneMonitoring();
 
         if (returningToSongbook || released) {
@@ -3020,8 +3393,7 @@ public class Stage3PlayerActivity extends Activity {
 
         markPlayerLaunchCheckpoint("LIFECYCLE_ON_RESUME");
 
-        // Resume the ad view before any early return.
-        if (stage3AdView != null) {
+        if (!tvMode && stage3AdView != null) {
             stage3AdView.resume();
         }
 
@@ -3048,7 +3420,7 @@ public class Stage3PlayerActivity extends Activity {
     @Override
     protected void onPause() {
 
-        if (stage3AdView != null) {
+        if (!tvMode && stage3AdView != null) {
             stage3AdView.pause();
         }
 
